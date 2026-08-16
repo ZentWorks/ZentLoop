@@ -250,3 +250,55 @@ func max64(a, b int64) int64 {
 	}
 	return b
 }
+
+type HTTPHostSweepSignals struct {
+	Detected      bool
+	DistinctHosts int
+	Requests      int
+	WindowSeconds int
+}
+
+// HTTPHostSweep detects rapid rotation through untrusted Host headers from one
+// source. Trusted domains are intentionally excluded so normal multi-site
+// traffic cannot pollute the signal.
+func (s *Store) HTTPHostSweep(ip, currentHost, currentUserAgent string, now time.Time) HTTPHostSweepSignals {
+	const window = 2 * time.Minute
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	hosts := map[string]struct{}{}
+	requests := 0
+	currentUserAgent = strings.ToLower(strings.TrimSpace(currentUserAgent))
+	for i := len(s.events) - 1; i >= 0; i-- {
+		e := s.events[i]
+		if now.Sub(e.At) > window {
+			break
+		}
+		if e.IP != ip {
+			continue
+		}
+		if currentUserAgent != "" && strings.ToLower(strings.TrimSpace(e.UserAgent)) != currentUserAgent {
+			continue
+		}
+		host := canonicalTrustedHost(e.RequestHost)
+		if host == "" {
+			host = canonicalTrustedHost(e.Target)
+		}
+		if host == "" {
+			continue
+		}
+		if ok, _ := s.trustedHostLocked(host); ok {
+			continue
+		}
+		hosts[host] = struct{}{}
+		requests++
+	}
+	if host := canonicalTrustedHost(currentHost); host != "" {
+		if ok, _ := s.trustedHostLocked(host); !ok {
+			hosts[host] = struct{}{}
+			requests++
+		}
+	}
+	out := HTTPHostSweepSignals{DistinctHosts: len(hosts), Requests: requests, WindowSeconds: int(window / time.Second)}
+	out.Detected = out.DistinctHosts >= 4 && out.Requests >= 4 && out.Requests <= out.DistinctHosts*2
+	return out
+}

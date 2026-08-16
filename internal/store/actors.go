@@ -130,6 +130,9 @@ func (s *Store) appendActorActivityLocked(a *model.ActorProfile, item model.Acto
 }
 
 func fingerprintHTTP(e model.Event) string {
+	if e.HostSweep {
+		return "web:host-header-sweep"
+	}
 	ua := strings.ToLower(e.UserAgent)
 	for _, p := range []struct{ needle, label string }{
 		{"infrawatch", "http:internet-measurement"}, {"nuclei", "http:nuclei"}, {"sqlmap", "http:sqlmap"}, {"nikto", "http:nikto"}, {"masscan", "http:masscan"},

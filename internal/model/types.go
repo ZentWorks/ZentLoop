@@ -33,6 +33,9 @@ type Session struct {
 	ReferrerHost     string         `json:"referrer_host,omitempty"`
 	RequestHost      string         `json:"request_host,omitempty"`
 	Target           string         `json:"target,omitempty"`
+	TargetTrust      string         `json:"target_trust,omitempty"`
+	HostSweep        bool           `json:"host_sweep,omitempty"`
+	HostSweepHosts   int            `json:"host_sweep_hosts,omitempty"`
 	Origin           string         `json:"origin,omitempty"`
 	AcceptLanguage   string         `json:"accept_language,omitempty"`
 	HTTPProtocol     string         `json:"http_protocol,omitempty"`
@@ -98,6 +101,9 @@ type Event struct {
 	ReferrerHost        string         `json:"referrer_host,omitempty"`
 	RequestHost         string         `json:"request_host,omitempty"`
 	Target              string         `json:"target,omitempty"`
+	TargetTrust         string         `json:"target_trust,omitempty"`
+	HostSweep           bool           `json:"host_sweep,omitempty"`
+	HostSweepHosts      int            `json:"host_sweep_hosts,omitempty"`
 	ProbeName           string         `json:"probe_name,omitempty"`
 	ProbeProduct        string         `json:"probe_product,omitempty"`
 	ProbeCVE            string         `json:"probe_cve,omitempty"`
@@ -158,6 +164,34 @@ type Overview struct {
 type Count struct {
 	Name  string `json:"name"`
 	Count int64  `json:"count"`
+}
+
+type TrustedDomain struct {
+	Domain      string    `json:"domain"`
+	Source      string    `json:"source"`
+	Integration string    `json:"integration,omitempty"`
+	AddedAt     time.Time `json:"added_at"`
+}
+
+type TrustedDomainSettings struct {
+	Manual []TrustedDomain `json:"manual"`
+	Proxy  []TrustedDomain `json:"proxy"`
+}
+
+type UntrustedHostStat struct {
+	Host          string    `json:"host"`
+	Requests      int64     `json:"requests"`
+	Sources       int       `json:"sources"`
+	SweepRequests int64     `json:"sweep_requests"`
+	FirstSeen     time.Time `json:"first_seen"`
+	LastSeen      time.Time `json:"last_seen"`
+}
+
+type UntrustedHostOverview struct {
+	RequestsTotal int64               `json:"requests_total"`
+	HostsTotal    int                 `json:"hosts_total"`
+	SweepRequests int64               `json:"sweep_requests"`
+	Hosts         []UntrustedHostStat `json:"hosts"`
 }
 
 type ProbeStat struct {

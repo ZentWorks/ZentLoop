@@ -78,10 +78,21 @@ func (s *TrapServer) handle(w http.ResponseWriter, r *http.Request) {
 		sourceIP := remoteIP(r.RemoteAddr)
 		s.store.RecordIntegrationFailure(integrationClaim, sourceIP, "integration verification failed", arrival, isPrivateOrLoopback(sourceIP))
 	}
-	target := canonicalTarget(r)
+	requestHost := s.originalRequestHost(r, integration)
+	target := requestHost
 	if integration.Valid && integration.Target != "" {
-		target = integration.Target
+		// Only the exact target covered by signed, non-catch-all integration
+		// metadata may create trust. A separate X-Forwarded-Host can recover
+		// display/routing context, but must never inherit trust from a signature
+		// that authenticated a different (for example internal upstream) target.
+		signedTarget := canonicalIntegrationTarget(integration.Target)
+		if !integration.CatchAll && integration.Trust == "signed" && signedTarget != "" && !internalUpstreamTarget(signedTarget) && strings.EqualFold(signedTarget, requestHost) {
+			if err := s.store.TrustProxyTarget(requestHost, integration.Name, arrival); err != nil {
+				log.Printf("trusted proxy target store: %v", err)
+			}
+		}
 	}
+	targetTrusted, targetTrust := s.store.IsTrustedHost(target)
 	client := s.clientMeta(r, target)
 	ip := client.IP
 	fp := fingerprint(ip+"|"+target, r.UserAgent())
@@ -89,7 +100,7 @@ func (s *TrapServer) handle(w http.ResponseWriter, r *http.Request) {
 	lock.Lock()
 	defer lock.Unlock()
 	ss, _ := s.sessionFor(r, fp, client, target)
-	requestMeta := extractRequestMeta(r, target, integration)
+	requestMeta := extractRequestMeta(r, requestHost, target, integration)
 	applyRequestMeta(ss, requestMeta)
 	probe, knownProbe := identifyProbe(r.URL.Path)
 	activityPubInbox := isActivityPubInboxRequest(r)
@@ -104,6 +115,12 @@ func (s *TrapServer) handle(w http.ResponseWriter, r *http.Request) {
 	s.recordHTTPIntelligence(ip, ss.ID, r.URL.RawQuery, bodySample)
 	ass := s.scorer.AssessAt(r, ss, bodySample, arrival)
 	behavior := s.store.HTTPBehavior(ip, r.UserAgent(), arrival)
+	hostSweep := s.store.HTTPHostSweep(ip, requestMeta.RequestHost, r.UserAgent(), arrival)
+	if hostSweep.Detected {
+		behavior.AutomationBoost += 40
+		behavior.RiskBoost += 18
+		behavior.Fingerprints = append(behavior.Fingerprints, "web:host-header-sweep")
+	}
 	ass.Automation = clampInt(ass.Automation+behavior.AutomationBoost, 0, 100)
 	ass.Risk = clampInt(ass.Risk+behavior.RiskBoost, 0, 100)
 	claim := s.bots.Verify(ip, r.UserAgent())
@@ -135,6 +152,14 @@ func (s *TrapServer) handle(w http.ResponseWriter, r *http.Request) {
 		ass.Category = "spoofed-bot"
 		behavior.Fingerprints = append(behavior.Fingerprints, "http:spoofed-bot:"+claim.Provider)
 	}
+	if hostSweep.Detected {
+		ass.Actor = model.ActorAutomated
+		ass.Confidence = "high"
+		ass.Category = "host-header-sweep"
+		if ass.Classification == model.ClassBenign {
+			ass.Classification = model.ClassSuspicious
+		}
+	}
 	if ass.Automation >= 65 {
 		ass.Actor = model.ActorAutomated
 		if ass.Automation >= 85 {
@@ -158,6 +183,15 @@ func (s *TrapServer) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	ss.Actor = ass.Actor
 	ss.Confidence = ass.Confidence
+	ss.TargetTrust = targetTrust
+	if !targetTrusted {
+		ss.TargetTrust = "untrusted"
+	}
+	if hostSweep.Detected {
+		ss.HostSweep = true
+		ss.HostSweepHosts = maxScoreInt(ss.HostSweepHosts, hostSweep.DistinctHosts)
+	}
+
 	if ass.Persona != "" {
 		ss.Persona = ass.Persona
 	}
@@ -203,6 +237,25 @@ func (s *TrapServer) handle(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/activity+json; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
 		w.WriteHeader(status)
+	} else if !targetTrusted && ss.HostSweep && r.URL.Path == "/" {
+		resp := hostSweepVHostResponse(target, ss.IP)
+		label = resp.Label
+		status = resp.Status
+		ss.LastStatus = status
+		ss.Depth = maxScoreInt(ss.Depth, resp.Depth)
+		for k, v := range resp.Headers {
+			w.Header().Set(k, v)
+		}
+		w.Header().Set("Content-Type", resp.ContentType)
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Content-Length", strconv.Itoa(len(resp.Body)))
+		w.WriteHeader(status)
+		if r.Method != http.MethodHead {
+			n, _ := w.Write(resp.Body)
+			bytesWritten = n
+		}
+		addJourney(ss, now, r.URL.Path, label)
 	} else if ss.Classification == model.ClassHostile || looksLikeBait(r.URL.Path) {
 		resp := s.deception.Build(r, ss)
 		if resp.Delay > 0 {
@@ -245,9 +298,26 @@ func (s *TrapServer) handle(w http.ResponseWriter, r *http.Request) {
 		bytesWritten = cw.bytes
 	}
 	s.store.UpsertSession(ss, fp)
-	e := model.Event{ID: newID(6), At: now, SessionID: ss.ID, SessionFirstSeen: ss.FirstSeen, SessionRequests: ss.RequestCount, SessionVisits: ss.VisitCount, SessionVisitStarted: ss.VisitStarted, IP: ss.IP, IPSource: ss.IPSource, Proxy: ss.Proxy, Country: ss.Country, CountrySource: ss.CountrySource, CloudflareRay: ss.CloudflareRay, CloudflareColo: ss.CloudflareColo, Referrer: requestMeta.Referrer, ReferrerHost: requestMeta.ReferrerHost, RequestHost: requestMeta.RequestHost, Target: ss.Target, ProbeName: probe.Name, ProbeProduct: probe.Product, ProbeCVE: probe.CVE, KnownProbe: knownProbe, Origin: requestMeta.Origin, AcceptLanguage: requestMeta.AcceptLanguage, HTTPProtocol: requestMeta.HTTPProtocol, Integration: requestMeta.Integration, IntegrationTrust: requestMeta.IntegrationTrust, CatchAll: requestMeta.CatchAll, Method: r.Method, Path: r.URL.Path, Status: status, Bytes: bytesWritten, RiskScore: ss.RiskScore, AutomationScore: ss.AutomationScore, Classification: ss.Classification, Actor: ss.Actor, Confidence: ss.Confidence, AvgIntervalMS: ss.AvgIntervalMS, IntervalVarMS: ss.IntervalVarMS, Persona: ss.Persona, Depth: ss.Depth, Loop: ss.Loop, Frustration: ss.Frustration, Category: ass.Category, Message: label, UserAgent: ss.UserAgent, BotProvider: ss.BotProvider, BotName: ss.BotName, BotClaimed: ss.BotClaimed, BotVerified: ss.BotVerified}
+	e := model.Event{ID: newID(6), At: now, SessionID: ss.ID, SessionFirstSeen: ss.FirstSeen, SessionRequests: ss.RequestCount, SessionVisits: ss.VisitCount, SessionVisitStarted: ss.VisitStarted, IP: ss.IP, IPSource: ss.IPSource, Proxy: ss.Proxy, Country: ss.Country, CountrySource: ss.CountrySource, CloudflareRay: ss.CloudflareRay, CloudflareColo: ss.CloudflareColo, Referrer: requestMeta.Referrer, ReferrerHost: requestMeta.ReferrerHost, RequestHost: requestMeta.RequestHost, Target: ss.Target, TargetTrust: ss.TargetTrust, HostSweep: ss.HostSweep, HostSweepHosts: ss.HostSweepHosts, ProbeName: probe.Name, ProbeProduct: probe.Product, ProbeCVE: probe.CVE, KnownProbe: knownProbe, Origin: requestMeta.Origin, AcceptLanguage: requestMeta.AcceptLanguage, HTTPProtocol: requestMeta.HTTPProtocol, Integration: requestMeta.Integration, IntegrationTrust: requestMeta.IntegrationTrust, CatchAll: requestMeta.CatchAll, Method: r.Method, Path: r.URL.Path, Status: status, Bytes: bytesWritten, RiskScore: ss.RiskScore, AutomationScore: ss.AutomationScore, Classification: ss.Classification, Actor: ss.Actor, Confidence: ss.Confidence, AvgIntervalMS: ss.AvgIntervalMS, IntervalVarMS: ss.IntervalVarMS, Persona: ss.Persona, Depth: ss.Depth, Loop: ss.Loop, Frustration: ss.Frustration, Category: ass.Category, Message: label, UserAgent: ss.UserAgent, BotProvider: ss.BotProvider, BotName: ss.BotName, BotClaimed: ss.BotClaimed, BotVerified: ss.BotVerified}
 	if err := s.store.AddEvent(e); err != nil {
 		log.Printf("event store: %v", err)
+	}
+}
+
+func hostSweepVHostResponse(host, actorKey string) engine.Response {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(strings.ToLower(host)))
+	_, _ = h.Write([]byte("|" + actorKey))
+	switch h.Sum32() % 3 {
+	case 0:
+		body := `<!doctype html><html><head><title>Welcome to nginx!</title></head><body><h1>Welcome to nginx!</h1><p>If you see this page, the web server is successfully installed and working.</p><!-- legacy-vhost: /admin/ --></body></html>`
+		return engine.Response{Status: http.StatusOK, ContentType: "text/html; charset=utf-8", Body: []byte(body), Headers: map[string]string{"Server": "nginx/1.24.0"}, Label: "host-sweep-default-vhost", Depth: 1}
+	case 1:
+		body := `<!doctype html><html><head><title>Service Console</title></head><body><h2>Service Console</h2><p>Local authentication is available.</p><a href="/login">Continue</a><br><a href="/manage/status/legacy">System status</a></body></html>`
+		return engine.Response{Status: http.StatusOK, ContentType: "text/html; charset=utf-8", Body: []byte(body), Headers: map[string]string{"Server": "Apache/2.4.58"}, Label: "host-sweep-legacy-vhost", Depth: 1}
+	default:
+		body := `{"service":"gateway","status":"degraded","admin":"/admin/legacy","diagnostics":"/diag/status/legacy","backup":"/backup/legacy/"}`
+		return engine.Response{Status: http.StatusOK, ContentType: "application/json", Body: []byte(body), Headers: map[string]string{"Server": "openresty"}, Label: "host-sweep-api-vhost", Depth: 1}
 	}
 }
 
@@ -264,12 +334,12 @@ type requestMeta struct {
 	CatchAll         bool
 }
 
-func extractRequestMeta(r *http.Request, target string, integration integrationMeta) requestMeta {
+func extractRequestMeta(r *http.Request, requestHost, target string, integration integrationMeta) requestMeta {
 	ref := cleanHeader(r.Referer(), 1024)
 	return requestMeta{
 		Referrer:         ref,
 		ReferrerHost:     referrerHost(ref),
-		RequestHost:      cleanHeader(r.Host, 255),
+		RequestHost:      requestHost,
 		Target:           target,
 		Origin:           cleanHeader(r.Header.Get("Origin"), 512),
 		AcceptLanguage:   cleanHeader(r.Header.Get("Accept-Language"), 256),
@@ -327,6 +397,91 @@ func canonicalTarget(r *http.Request) string {
 		return net.JoinHostPort(h, port)
 	}
 	return strings.TrimSuffix(host, ".")
+}
+
+// originalRequestHost resolves the host the external client actually requested.
+// The TCP/HTTP Host seen by ZentLoop may be an internal upstream address when a
+// reverse proxy rewrites Host (for example 192.168.x.x:8080). Forwarded host
+// metadata is therefore accepted only across the same trust boundary that
+// already allows ZentLoop to trust forwarded client IP metadata.
+func (s *TrapServer) originalRequestHost(r *http.Request, integration integrationMeta) string {
+	direct := canonicalTarget(r)
+
+	// A validated ZentLoop integration explicitly carries the original target.
+	// Prefer it over generic forwarding headers because it is either signed or
+	// arrived from the deliberately supported private integration peer path.
+	if integration.Valid {
+		if target := canonicalIntegrationTarget(integration.Target); target != "" && !internalUpstreamTarget(target) {
+			return target
+		}
+		if forwarded := canonicalForwardedHost(r.Header.Get("X-Forwarded-Host")); forwarded != "" && !internalUpstreamTarget(forwarded) {
+			return forwarded
+		}
+		// If a validated integration only exposes ZentLoop's private upstream
+		// address and did not preserve an original host, do not surface that
+		// infrastructure detail as a fake/public target.
+		if target := canonicalIntegrationTarget(integration.Target); target != "" && !internalUpstreamTarget(target) {
+			return target
+		}
+		return ""
+	}
+
+	forwarded := canonicalForwardedHost(r.Header.Get("X-Forwarded-Host"))
+	if forwarded != "" && !internalUpstreamTarget(forwarded) && s.forwardedHostTrusted(r) {
+		return forwarded
+	}
+
+	// Do not turn ZentLoop's own private reverse-proxy upstream address into a
+	// fake target. If no original host metadata was preserved, the honest value
+	// is unknown; retaining the internal IP would poison target/sweep statistics.
+	if internalUpstreamTarget(direct) && s.requestArrivedThroughTrustedProxy(r, direct) {
+		return ""
+	}
+	return direct
+}
+
+func canonicalForwardedHost(v string) string {
+	// RFC de-facto X-Forwarded-Host semantics use the first value as the
+	// original host when multiple proxies append values.
+	if i := strings.IndexByte(v, ','); i >= 0 {
+		v = v[:i]
+	}
+	return canonicalIntegrationTarget(strings.TrimSpace(v))
+}
+
+func internalUpstreamTarget(v string) bool {
+	host := targetHostOnly(v)
+	ip := net.ParseIP(host)
+	return ip != nil && (ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast())
+}
+
+func (s *TrapServer) forwardedHostTrusted(r *http.Request) bool {
+	remote := remoteIP(r.RemoteAddr)
+	// Explicit generic/cloudflare mode means the operator deliberately chose to
+	// trust proxy metadata for this listener.
+	if s.cfg.ProxyMode == config.ProxyGeneric || s.cfg.ProxyMode == config.ProxyCloudflare {
+		return true
+	}
+	if s.cfg.ProxyMode != config.ProxyAuto {
+		return false
+	}
+	// In auto mode keep the existing conservative boundary: forwarded metadata
+	// is accepted only from a private/loopback peer and only when there is also
+	// independent evidence of a real proxy hop. X-Forwarded-Host alone is never
+	// sufficient because a client can manufacture it.
+	if !isPrivateOrLoopback(remote) {
+		return false
+	}
+	if firstForwardedIP(r.Header.Get("X-Forwarded-For")) != "" || validIP(r.Header.Get("X-Real-IP")) != "" {
+		return true
+	}
+	return validIP(r.Header.Get("CF-Connecting-IP")) != "" && strings.TrimSpace(r.Header.Get("CF-Ray")) != ""
+}
+
+func (s *TrapServer) requestArrivedThroughTrustedProxy(r *http.Request, direct string) bool {
+	remote := remoteIP(r.RemoteAddr)
+	mode := s.proxyModeForRequest(r, remote, direct)
+	return mode == config.ProxyGeneric || mode == config.ProxyCloudflare
 }
 
 func referrerHost(ref string) string {

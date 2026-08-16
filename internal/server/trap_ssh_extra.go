@@ -76,7 +76,7 @@ func (w *virtualSSHWorld) executeExtraCommand(cmd string, args []string, raw, in
 		return w.executeOne(inner, input), true
 	case "lspci":
 		r := base("recon", 3, 82, "system-recon", "PCI device discovery")
-		r.Output = "00:00.0 Host bridge: Intel Corporation 440FX - 82441FX PMC [Natoma]\n00:01.0 ISA bridge: Intel Corporation 82371SB PIIX3 ISA [Natoma/Triton II]\n00:03.0 Ethernet controller: Red Hat, Inc. Virtio network device\n00:04.0 VGA compatible controller: Red Hat, Inc. Virtio GPU"
+		r.Output = "00:00.0 Host bridge: Intel Corporation 440FX - 82441FX PMC [Natoma]\n00:01.0 ISA bridge: Intel Corporation 82371SB PIIX3 ISA [Natoma/Triton II]\n00:03.0 Ethernet controller: Red Hat, Inc. Virtio network device\n00:04.0 VGA compatible controller: Red Hat, Inc. Virtio GPU\n00:05.0 3D controller: NVIDIA Corporation TU104GL [Tesla T4] (rev a1)"
 		return r, true
 	case "which", "whereis", "type":
 		r := base("recon", 3, 82, "tool-discovery", "binary/tool discovery")
@@ -222,10 +222,39 @@ func (w *virtualSSHWorld) executeExtraCommand(cmd string, args []string, raw, in
 		return r, true
 	case "nvidia-smi":
 		r := base("recon", 3, 82, "system-recon", "GPU discovery")
-		if containsArg(args, "--version") {
+		const gpuName = "NVIDIA Tesla T4"
+		switch {
+		case containsArg(args, "--version"):
 			r.Output = "NVIDIA-SMI 550.120"
-		} else {
-			r.Output = "==============NVSMI LOG==============\n\nTimestamp                                 : Sat Aug 15 20:26:04 2026\nDriver Version                            : 550.120\nCUDA Version                              : 12.4\nAttached GPUs                             : 0"
+		case containsArgPrefix(args, "--query-gpu="):
+			query := ""
+			for _, arg := range args {
+				if strings.HasPrefix(arg, "--query-gpu=") {
+					query = strings.TrimPrefix(arg, "--query-gpu=")
+					break
+				}
+			}
+			fields := strings.Split(query, ",")
+			values := make([]string, 0, len(fields))
+			for _, field := range fields {
+				switch strings.TrimSpace(field) {
+				case "name", "gpu_name":
+					values = append(values, gpuName)
+				case "driver_version":
+					values = append(values, "550.120")
+				case "memory.total":
+					values = append(values, "15360 MiB")
+				case "uuid":
+					values = append(values, "GPU-7c2d1e4f-91a6-4b72-a3d5-18e249cc7a31")
+				default:
+					values = append(values, "[Not Supported]")
+				}
+			}
+			r.Output = strings.Join(values, ", ")
+		case containsArg(args, "-q") || containsArg(args, "--query"):
+			r.Output = "==============NVSMI LOG==============\n\nTimestamp                                 : " + time.Now().UTC().Format("Mon Jan 2 15:04:05 2006") + "\nDriver Version                            : 550.120\nCUDA Version                              : 12.4\nAttached GPUs                             : 1\nGPU 00000000:00:05.0\n    Product Name                          : " + gpuName
+		default:
+			r.Output = time.Now().UTC().Format("Mon Jan 2 15:04:05 2006") + "\n+-----------------------------------------------------------------------------+\n| NVIDIA-SMI 550.120              Driver Version: 550.120      CUDA Version: 12.4 |\n|-------------------------------+----------------------+----------------------+\n|   0  Tesla T4             Off | 00000000:00:05.0 Off |                    0 |\n+-------------------------------+----------------------+----------------------+"
 		}
 		return r, true
 	case "lscpu":

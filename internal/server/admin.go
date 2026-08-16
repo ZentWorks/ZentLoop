@@ -6,6 +6,7 @@ import (
 	"embed"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"net/http"
@@ -35,12 +36,15 @@ func NewAdmin(cfg config.Config, st *store.Store) *AdminServer {
 func (s *AdminServer) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/overview", s.overview)
+	mux.HandleFunc("/api/available-days", s.availableDays)
 	mux.HandleFunc("/api/sessions", s.sessions)
 	mux.HandleFunc("/api/history", s.history)
 	mux.HandleFunc("/api/sessions/", s.session)
 	mux.HandleFunc("/api/events", s.events)
 	mux.HandleFunc("/api/live/events", s.live)
 	mux.HandleFunc("/api/info", s.info)
+	mux.HandleFunc("/api/settings/trusted-domains", s.trustedDomains)
+	mux.HandleFunc("/api/untrusted-hosts", s.untrustedHosts)
 	mux.HandleFunc("/api/known-probes", s.knownProbes)
 	mux.HandleFunc("/api/known-probes.csv", s.knownProbesCSV)
 	mux.HandleFunc("/api/unknown-paths", s.unknownPaths)
@@ -104,6 +108,11 @@ func (s *AdminServer) overview(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
+	tr := requestTimeRange(r)
+	if tr.Set {
+		writeJSON(w, s.store.OverviewRangeTarget(tr.From, tr.To, r.URL.Query().Get("target")))
+		return
+	}
 	writeJSON(w, s.store.OverviewTarget(time.Duration(s.cfg.LiveSessionMinutes)*time.Minute, r.URL.Query().Get("target")))
 }
 func (s *AdminServer) sessions(w http.ResponseWriter, r *http.Request) {
@@ -113,7 +122,16 @@ func (s *AdminServer) sessions(w http.ResponseWriter, r *http.Request) {
 	}
 	limit := queryInt(r, "limit", 100, 1, 500)
 	active := queryInt(r, "active_minutes", s.cfg.LiveSessionMinutes, 1, 10080)
-	writeJSON(w, s.store.Sessions(time.Duration(active)*time.Minute, limit, r.URL.Query().Get("target")))
+	tr := requestTimeRange(r)
+	if tr.Set {
+		if tr.All || !tr.To.IsZero() {
+			writeJSON(w, []model.Session{})
+			return
+		}
+		writeJSON(w, limitSessions(s.store.SessionsView(time.Duration(active)*time.Minute, 0, r.URL.Query().Get("target")), tr, limit))
+		return
+	}
+	writeJSON(w, s.store.SessionsView(time.Duration(active)*time.Minute, limit, r.URL.Query().Get("target")))
 }
 func (s *AdminServer) history(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -121,7 +139,16 @@ func (s *AdminServer) history(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit := queryInt(r, "limit", 300, 1, 1000)
-	writeJSON(w, s.store.History(time.Duration(s.cfg.LiveSessionMinutes)*time.Minute, limit, r.URL.Query().Get("target")))
+	tr := requestTimeRange(r)
+	if tr.Set {
+		base := s.store.HistoryView(0, 0, r.URL.Query().Get("target"))
+		if !tr.All && tr.To.IsZero() {
+			base = s.store.HistoryView(time.Duration(s.cfg.LiveSessionMinutes)*time.Minute, 0, r.URL.Query().Get("target"))
+		}
+		writeJSON(w, limitSessions(base, tr, limit))
+		return
+	}
+	writeJSON(w, s.store.HistoryView(time.Duration(s.cfg.LiveSessionMinutes)*time.Minute, limit, r.URL.Query().Get("target")))
 }
 func (s *AdminServer) session(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -134,7 +161,7 @@ func (s *AdminServer) session(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.URL.Query().Get("event_limit") == "" {
-		ss, ok := s.store.GetSession(id)
+		ss, ok := s.store.GetSessionView(id)
 		if !ok {
 			http.NotFound(w, r)
 			return
@@ -154,8 +181,63 @@ func (s *AdminServer) events(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
-	writeJSON(w, s.store.Events(queryInt(r, "limit", 200, 1, 1000), r.URL.Query().Get("target")))
+	limit := queryInt(r, "limit", 200, 1, 1000)
+	tr := requestTimeRange(r)
+	if tr.Set {
+		writeJSON(w, limitEvents(s.store.EventsView(0, r.URL.Query().Get("target")), tr, limit))
+		return
+	}
+	writeJSON(w, s.store.EventsView(limit, r.URL.Query().Get("target")))
 }
+func (s *AdminServer) trustedDomains(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, s.store.TrustedDomains())
+	case http.MethodPut:
+		var body struct {
+			Domains []string `json:"domains"`
+		}
+		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64*1024))
+		if err := dec.Decode(&body); err != nil {
+			http.Error(w, "invalid settings payload", http.StatusBadRequest)
+			return
+		}
+		if err := s.store.SetManualTrustedDomains(body.Domains, time.Now()); err != nil {
+			if errors.Is(err, store.ErrInvalidTrustedDomain) {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			http.Error(w, "failed to persist trusted domains", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, s.store.TrustedDomains())
+	default:
+		methodNotAllowed(w)
+	}
+}
+
+func (s *AdminServer) untrustedHosts(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	limit := queryInt(r, "limit", 50, 1, 500)
+	tr := requestTimeRange(r)
+	if tr.Set {
+		writeJSON(w, untrustedFromEvents(s.store.EventsView(0), tr, limit))
+		return
+	}
+	writeJSON(w, s.store.UntrustedHosts(limit))
+}
+
+func (s *AdminServer) availableDays(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	writeJSON(w, s.store.AvailableDays())
+}
+
 func (s *AdminServer) info(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		methodNotAllowed(w)
@@ -197,6 +279,7 @@ func (s *AdminServer) live(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return
 			}
+			e = s.store.EventView(e)
 			b, _ := json.Marshal(e)
 			fmt.Fprintf(w, "event: request\ndata: %s\n\n", b)
 			fl.Flush()
@@ -214,11 +297,22 @@ func (s *AdminServer) actorOverview(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
+	tr := requestTimeRange(r)
+	if tr.Set {
+		writeJSON(w, actorOverviewFromRows(limitActors(s.store.Actors(0), tr, 0)))
+		return
+	}
 	writeJSON(w, s.store.ActorOverview())
 }
 
 func (s *AdminServer) scanBursts(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, s.store.ScanBursts(queryInt(r, "limit", 50, 1, 200)))
+	limit := queryInt(r, "limit", 50, 1, 200)
+	tr := requestTimeRange(r)
+	if tr.Set {
+		writeJSON(w, limitBursts(s.store.ScanBursts(0), tr, limit))
+		return
+	}
+	writeJSON(w, s.store.ScanBursts(limit))
 }
 
 func (s *AdminServer) actors(w http.ResponseWriter, r *http.Request) {
@@ -226,7 +320,13 @@ func (s *AdminServer) actors(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
-	writeJSON(w, s.store.Actors(queryInt(r, "limit", 250, 1, 1000)))
+	limit := queryInt(r, "limit", 250, 1, 1000)
+	tr := requestTimeRange(r)
+	if tr.Set {
+		writeJSON(w, limitActors(s.store.Actors(0), tr, limit))
+		return
+	}
+	writeJSON(w, s.store.Actors(limit))
 }
 
 func (s *AdminServer) actor(w http.ResponseWriter, r *http.Request) {
@@ -252,7 +352,13 @@ func (s *AdminServer) intelligence(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
-	writeJSON(w, s.store.IntelEvents(queryInt(r, "limit", 250, 1, 1000)))
+	limit := queryInt(r, "limit", 250, 1, 1000)
+	tr := requestTimeRange(r)
+	if tr.Set {
+		writeJSON(w, limitIntel(s.store.IntelEvents(0), tr, limit))
+		return
+	}
+	writeJSON(w, s.store.IntelEvents(limit))
 }
 
 func (s *AdminServer) health(w http.ResponseWriter, r *http.Request) {
@@ -276,6 +382,11 @@ func (s *AdminServer) sshOverview(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
+	tr := requestTimeRange(r)
+	if tr.Set {
+		writeJSON(w, s.store.SSHOverviewRange(s.cfg.SSHEnabled, tr.From, tr.To))
+		return
+	}
 	writeJSON(w, s.store.SSHOverview(s.cfg.SSHEnabled, s.sshActiveWindow()))
 }
 
@@ -284,7 +395,17 @@ func (s *AdminServer) sshSessions(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
-	writeJSON(w, s.store.SSHSessions(s.sshActiveWindow(), queryInt(r, "limit", 100, 1, 500)))
+	limit := queryInt(r, "limit", 100, 1, 500)
+	tr := requestTimeRange(r)
+	if tr.Set {
+		if tr.All || !tr.To.IsZero() {
+			writeJSON(w, []model.SSHSession{})
+			return
+		}
+		writeJSON(w, limitSSHSessions(s.store.SSHSessions(s.sshActiveWindow(), 0), tr, limit))
+		return
+	}
+	writeJSON(w, s.store.SSHSessions(s.sshActiveWindow(), limit))
 }
 
 func (s *AdminServer) sshLiveSessions(w http.ResponseWriter, r *http.Request) {
@@ -330,7 +451,17 @@ func (s *AdminServer) sshHistory(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
-	writeJSON(w, s.store.SSHHistory(s.sshActiveWindow(), queryInt(r, "limit", 300, 1, 1000)))
+	limit := queryInt(r, "limit", 300, 1, 1000)
+	tr := requestTimeRange(r)
+	if tr.Set {
+		base := s.store.SSHHistory(0, 0)
+		if !tr.All && tr.To.IsZero() {
+			base = s.store.SSHHistory(s.sshActiveWindow(), 0)
+		}
+		writeJSON(w, limitSSHSessions(base, tr, limit))
+		return
+	}
+	writeJSON(w, s.store.SSHHistory(s.sshActiveWindow(), limit))
 }
 
 func (s *AdminServer) sshSession(w http.ResponseWriter, r *http.Request) {
@@ -442,7 +573,13 @@ func (s *AdminServer) sshEvents(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
-	writeJSON(w, s.store.SSHEvents(queryInt(r, "limit", 250, 1, 1000)))
+	limit := queryInt(r, "limit", 250, 1, 1000)
+	tr := requestTimeRange(r)
+	if tr.Set {
+		writeJSON(w, limitSSHEvents(s.store.SSHEvents(0), tr, limit))
+		return
+	}
+	writeJSON(w, s.store.SSHEvents(limit))
 }
 
 func (s *AdminServer) liveSSH(w http.ResponseWriter, r *http.Request) {
@@ -487,7 +624,13 @@ func (s *AdminServer) knownProbes(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
-	writeJSON(w, s.knownProbeRows(queryInt(r, "limit", 250, 1, 5000)))
+	limit := queryInt(r, "limit", 250, 1, 5000)
+	tr := requestTimeRange(r)
+	if tr.Set {
+		writeJSON(w, probesFromEvents(s.store.Events(0), tr, limit))
+		return
+	}
+	writeJSON(w, s.knownProbeRows(limit))
 }
 func (s *AdminServer) knownProbesCSV(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -509,7 +652,13 @@ func (s *AdminServer) unknownPaths(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
-	writeJSON(w, s.currentUnknownRows(queryInt(r, "limit", 500, 1, 5000)))
+	limit := queryInt(r, "limit", 500, 1, 5000)
+	tr := requestTimeRange(r)
+	if tr.Set {
+		writeJSON(w, unknownFromEvents(s.store.Events(0), tr, limit))
+		return
+	}
+	writeJSON(w, s.currentUnknownRows(limit))
 }
 func (s *AdminServer) unknownPathsCSV(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -533,7 +682,12 @@ func (s *AdminServer) recentPaths(w http.ResponseWriter, r *http.Request) {
 	}
 	limit := queryInt(r, "limit", 250, 1, 1000)
 	rows := make(map[string]*model.RecentPath)
-	for _, e := range s.store.Events(5000) {
+	tr := requestTimeRange(r)
+	events := s.store.Events(5000)
+	if tr.Set {
+		events = limitEvents(s.store.Events(0), tr, 0)
+	}
+	for _, e := range events {
 		path := strings.TrimSpace(e.Path)
 		if path == "" {
 			continue
@@ -649,7 +803,13 @@ func (s *AdminServer) catchAllHosts(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
-	writeJSON(w, s.store.CatchAllOverview(queryInt(r, "limit", 250, 1, 5000)))
+	limit := queryInt(r, "limit", 250, 1, 5000)
+	tr := requestTimeRange(r)
+	if tr.Set {
+		writeJSON(w, catchAllFromEvents(s.store.Events(0), tr, limit))
+		return
+	}
+	writeJSON(w, s.store.CatchAllOverview(limit))
 }
 
 func (s *AdminServer) catchAllHostsCSV(w http.ResponseWriter, r *http.Request) {

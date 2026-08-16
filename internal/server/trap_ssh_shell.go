@@ -1,6 +1,7 @@
 package server
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"path"
 	"sort"
@@ -91,6 +92,7 @@ type virtualSSHWorld struct {
 	fileAttrs          map[string]string
 	historyCleared     bool
 	stagingAttempts    map[string]int
+	stagingPayloadHash map[string][32]byte
 	installerSignals   map[string]bool
 	ttyMu              sync.RWMutex
 }
@@ -119,7 +121,7 @@ func newVirtualSSHWorldForSource(sessionID, username, sourceIP string, system *v
 		sourceIP: sourceIP, peerKey: sourceIP + "|" + user, canaries: lures.CanaryLabels(sourceIP), interests: make(map[string]int),
 		processes: make(map[int]*virtualSSHProcess), jobs: make(map[int]int), nextPID: 2841, nextJob: 1,
 		crontabExists: true, crontabContent: "0 2 * * * /usr/local/bin/backupctl sync --profile legacy >/var/log/backup.log 2>&1\n", fileAttrs: make(map[string]string),
-		stagingAttempts: make(map[string]int), installerSignals: make(map[string]bool),
+		stagingAttempts: make(map[string]int), stagingPayloadHash: make(map[string][32]byte), installerSignals: make(map[string]bool),
 	}
 	if peer := system.peerState(w.peerKey); peer.Initialized {
 		w.crontabExists = peer.CrontabExists
@@ -520,8 +522,16 @@ func (w *virtualSSHWorld) executePipeline(line string, initialInput ...string) v
 						w.stagingAttempts[resolvedOut]++
 						res.PayloadPath = resolvedOut
 						if stageInput != "" && stageInput != "\x00ZL_EMPTY_STDIN\x00" {
-							res.PayloadStage = "completed"
-							res.Family, res.Depth, res.Risk, res.Persona, res.Message = "execution", maxInt(6, res.Depth), maxInt(97, res.Risk), "payload-staging", "virtual payload staging completed"
+							sum := sha256.Sum256([]byte(stageInput))
+							if previous, ok := w.stagingPayloadHash[resolvedOut]; ok && previous == sum {
+								res.PayloadStage = "retry"
+								res.LoopInc++
+								res.Family, res.Depth, res.Risk, res.Persona, res.Message = "execution", maxInt(6, res.Depth), maxInt(98, res.Risk), "payload-staging", "identical virtual payload staging retry"
+							} else {
+								w.stagingPayloadHash[resolvedOut] = sum
+								res.PayloadStage = "completed"
+								res.Family, res.Depth, res.Risk, res.Persona, res.Message = "execution", maxInt(6, res.Depth), maxInt(97, res.Risk), "payload-staging", "virtual payload staging completed"
+							}
 						} else if w.stagingAttempts[resolvedOut] > 1 {
 							res.PayloadStage = "retry"
 							res.LoopInc++

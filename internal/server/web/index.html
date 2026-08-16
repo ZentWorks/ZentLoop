@@ -10,16 +10,21 @@
 <body>
   <header class="topbar">
     <div class="brand"><img class="brand-logo" src="/zentloop-logo.png" alt="ZentLoop"><span id="brand">ZentLoop</span><small>CONTROL</small></div>
+    <div class="target-control"><label for="dateFilter">DATE</label><select id="dateFilter"><option value="live">LIVE</option><option value="all">All dates</option></select></div>
     <div class="target-control"><label for="targetFilter">TARGET</label><select id="targetFilter"><option value="">All targets</option></select></div>
-    <div class="live"><span class="dot"></span> LIVE <span id="clock">--:--:--</span></div>
+    <div class="topbar-tools">
+      <button id="openSettings" class="settings-button" type="button" aria-label="ZentLoop settings" title="Settings">⚙</button>
+      <button id="openHelp" class="settings-button help-button" type="button" aria-label="ZentLoop help" title="Quick help">?</button>
+    </div>
+    <div class="live" id="viewStatus"><span class="dot"></span> <span id="viewMode">LIVE</span> <span id="clock">--:--:--</span></div>
   </header>
 
   <main>
     <section class="hero-grid">
-      <article class="metric danger"><span>HOSTILE</span><strong id="hostile">0</strong><small>active / <b class="liveWindow">5 min</b></small></article>
-      <article class="metric warn"><span>SUSPICIOUS</span><strong id="suspicious">0</strong><small>active / <b class="liveWindow">5 min</b></small></article>
-      <article class="metric ok"><span>BENIGN</span><strong id="benign">0</strong><small>active / <b class="liveWindow">5 min</b></small></article>
-      <article class="metric"><span>REQUESTS TODAY</span><strong id="requestsToday">0</strong><small><b id="rps">0.0</b> req/s now</small></article>
+      <article class="metric danger"><span>HOSTILE</span><strong id="hostile">0</strong><small><b class="rangeWindow">LIVE · 24h</b></small></article>
+      <article class="metric warn"><span>SUSPICIOUS</span><strong id="suspicious">0</strong><small><b class="rangeWindow">LIVE · 24h</b></small></article>
+      <article class="metric ok"><span>BENIGN</span><strong id="benign">0</strong><small><b class="rangeWindow">LIVE · 24h</b></small></article>
+      <article class="metric"><span>REQUESTS</span><strong id="requestsToday">0</strong><small><b id="rps">0.0</b> req/s now</small></article>
       <article class="metric"><span>AVG. DEPTH</span><strong id="avgDepth">0.0</strong><small><b id="loops">0</b> loops active</small></article>
     </section>
 
@@ -204,6 +209,13 @@
       </article>
     </section>
 
+    <section class="panel untrusted-panel">
+      <div class="panel-title"><div><h2>Untrusted / fake targets</h2><span id="untrustedSummary">0 requests · 0 hosts</span></div><span>excluded from trusted target stats · host sweeps stay visible here</span></div>
+      <div class="table-wrap compact-scroll"><table>
+        <thead><tr><th>REQ</th><th>REQUEST HOST</th><th>SOURCES</th><th>SWEEP HITS</th><th>FIRST</th><th>LAST</th></tr></thead>
+        <tbody id="untrustedHostsBody"></tbody>
+      </table></div>
+    </section>
 
     <section class="grid two lower">
       <article class="panel">
@@ -238,6 +250,44 @@
     <footer><span id="version">ZentLoop 0.2.13</span><span>Proxy: <b id="proxyMode">direct</b> · GeoIP: <b id="geoStatus">local</b> · Official bots: <b id="botStatus">waiting</b> · <a href="https://db-ip.com" target="_blank" rel="noopener noreferrer">IP Geolocation by DB-IP</a> · no telemetry</span></footer>
   </main>
 
+  <div id="settingsBackdrop" class="modal-backdrop settings-backdrop" aria-hidden="true"></div>
+  <section id="settingsModal" class="settings-modal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+    <div class="settings-modal-head"><div><small>ZENTLOOP SETTINGS</small><h2 id="settingsTitle">Trusted Domains</h2></div><button id="closeSettings" class="modal-close" type="button" aria-label="Close settings">×</button></div>
+    <div class="settings-modal-body">
+      <p>One root domain per line. A root automatically trusts all of its subdomains. Untrusted historical hosts disappear from fake-target statistics immediately after they become trusted.</p>
+      <label for="trustedDomainsInput">Manual trusted domains</label>
+      <textarea id="trustedDomainsInput" rows="9" spellcheck="false" placeholder="example.com
+example.net"></textarea>
+      <small class="settings-hint">Example: <b>example.com</b> trusts example.com, www.example.com, api.example.com, etc.</small>
+      <div class="settings-proxy-title"><b>Proxy-trusted targets</b><span>signed non-catch-all upstream routes · read only</span></div>
+      <div id="proxyTrustedDomains" class="trusted-domain-list"><small>No proxy-trusted targets yet.</small></div>
+      <div class="settings-actions"><span id="settingsStatus"></span><button id="saveSettings" type="button">Save trusted domains</button></div>
+    </div>
+  </section>
+
+  <div id="helpBackdrop" class="modal-backdrop help-backdrop" aria-hidden="true"></div>
+  <section id="helpModal" class="settings-modal help-modal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="helpTitle">
+    <div class="settings-modal-head"><div><small>ZENTLOOP HELP</small><h2 id="helpTitle">Quick guide</h2></div><button id="closeHelp" class="modal-close" type="button" aria-label="Close help">×</button></div>
+    <div class="settings-modal-body help-modal-body">
+      <div class="help-block"><h3>Trusted Domains</h3><p>Domains that belong to your own infrastructure. Adding a root domain also covers its subdomains. Trusted domains appear as normal targets and are included in the regular target statistics.</p></div>
+      <div class="help-block"><h3>Date &amp; Target filters</h3><p>LIVE is the rolling last 24 hours and keeps receiving new Web and SSH events. Selecting a day or All dates switches to a historical view: live streams are paused and lazy loading stays inside the selected time window. The Target filter can be combined with any time view and groups trusted subdomains under their configured root domain.</p></div>
+      <div class="help-block"><h3>Untrusted hosts</h3><p>Hosts shown in parentheses were requested by a visitor but are not trusted as one of your own domains. They are evaluated separately so they do not distort your normal target statistics. If you trust one later, its retained history is reclassified automatically.</p></div>
+      <div class="help-block"><h3>Host sweeps</h3><p>ZentLoop can recognize when one visitor rapidly tries many different host names. These attempts stay in the untrusted-host view and may be guided into a generic Web Trap instead of being treated as real targets.</p></div>
+      <div class="help-block"><h3>Integration / Proxy</h3><p>When ZentLoop is used behind a compatible proxy or upstream integration, the original public target and visitor information can be preserved. Verified, explicit proxy routes may also provide trusted targets automatically.</p></div>
+      <div class="help-block"><h3>Web Sessions</h3><p>Shows activity against the Web Traps, including the requested paths and how far a visitor follows the presented breadcrumbs.</p></div>
+      <div class="help-block"><h3>SSH Sessions</h3><p>Shows SSH login attempts, commands and movement through the virtual SSH environment and its deception paths.</p></div>
+      <div class="help-grid">
+        <div><b>Risk</b><span>How suspicious or aggressive the observed session currently appears.</span></div>
+        <div><b>Actor</b><span>ZentLoop's behavioral classification of the visitor, such as automated or human-like activity.</span></div>
+        <div><b>Auto</b><span>How strongly the behavior resembles automation or a bot.</span></div>
+        <div><b>Depth</b><span>How far the visitor has moved into the deception flow.</span></div>
+        <div><b>Loop</b><span>How often ZentLoop has successfully led the visitor onward through additional deception.</span></div>
+        <div><b>Frustration</b><span>Signals from repeated, unsuccessful or increasingly persistent attempts.</span></div>
+      </div>
+      <p class="help-note">ZentLoop reports observed behavior and behavioral assessments. These indicators support investigation, but they are not a definitive identification of a person or attacker.</p>
+    </div>
+  </section>
+
   <aside id="drawer" class="drawer" aria-hidden="true">
     <div class="drawer-head"><div><small>WEB SESSION</small><h3 id="dId">—</h3></div><button id="closeDrawer">×</button></div>
     <div class="drawer-body">
@@ -246,7 +296,8 @@
         <div><span>IP source</span><b id="dIpSource">—</b></div><div><span>Country</span><b id="dCountry">—</b></div>
         <div><span>Country source</span><b id="dCountrySource">—</b></div><div><span>Landing path</span><b id="dLanding">—</b></div>
         <div><span>Referrer</span><b id="dReferrer">—</b></div><div><span>Referrer host</span><b id="dReferrerHost">—</b></div>
-        <div><span>Target</span><b id="dTarget">—</b></div><div><span>Request host</span><b id="dRequestHost">—</b></div><div><span>Origin</span><b id="dOrigin">—</b></div>
+        <div><span>Target</span><b id="dTarget">—</b></div><div><span>Request host</span><b id="dRequestHost">—</b></div>
+        <div><span>Target trust</span><b id="dTargetTrust">—</b></div><div><span>Host sweep</span><b id="dHostSweep">no</b></div><div><span>Origin</span><b id="dOrigin">—</b></div>
         <div><span>Language</span><b id="dLanguage">—</b></div><div><span>HTTP</span><b id="dHTTP">—</b></div>
         <div><span>Integration</span><b id="dIntegration">—</b></div><div><span>Integration trust</span><b id="dIntegrationTrust">—</b></div>
         <div><span>Catch-all</span><b id="dCatchAll">—</b></div>

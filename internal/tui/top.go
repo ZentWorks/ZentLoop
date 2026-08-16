@@ -166,7 +166,14 @@ func draw(c *client, out io.Writer) error {
 		} else if s.RiskScore >= 30 {
 			risk = "\x1b[33m" + risk + "\x1b[0m"
 		}
-		_, _ = fmt.Fprintf(out, " %-8s %-22s %-22s %-4s %-8s %s  %-11s %3d%%  %-5d %2d %2d %2d %-45s\r\n", ago(s.LastSeen), clip(s.Target, 22), clip(s.IP, 22), clip(s.Country, 4), clip(networkLabel(s), 8), risk, clip(string(s.Actor), 11), s.AutomationScore, s.RequestCount, s.Depth, s.Loop, s.Frustration, clip(s.CurrentPath, 45))
+		target := s.Target
+		if target == "" && s.RequestHost != "" {
+			target = "(" + s.RequestHost + ")"
+		}
+		if target == "" {
+			target = "—"
+		}
+		_, _ = fmt.Fprintf(out, " %-8s %-22s %-22s %-4s %-8s %s  %-11s %3d%%  %-5d %2d %2d %2d %-45s\r\n", ago(s.LastSeen), clip(target, 22), clip(s.IP, 22), clip(s.Country, 4), clip(networkLabel(s), 8), risk, clip(string(s.Actor), 11), s.AutomationScore, s.RequestCount, s.Depth, s.Loop, s.Frustration, clip(s.CurrentPath, 45))
 	}
 	if len(sshSessions) > 0 {
 		_, _ = fmt.Fprint(out, "\r\n \x1b[1mSSH SESSIONS\x1b[0m\r\n")

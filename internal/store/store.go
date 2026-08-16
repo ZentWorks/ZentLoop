@@ -30,6 +30,7 @@ type Store struct {
 	pathCounts            map[string]int64
 	dayCounts             map[string]int64
 	targetCounts          map[string]int64
+	requestHostStats      map[string]*rawHostStat
 	unknownPaths          map[string]*model.UnknownPath
 	probeStats            map[string]*model.ProbeStat
 	catchAllHosts         map[string]*model.CatchAllHost
@@ -67,6 +68,8 @@ type Store struct {
 	health                model.HealthOverview
 	integrationPeers      map[string]*model.IntegrationPeer
 	integrationPersist    map[string]time.Time
+	trustedManual         map[string]model.TrustedDomain
+	trustedProxy          map[string]model.TrustedDomain
 	retentionDays         int
 	retentionStop         chan struct{}
 	retentionDone         chan struct{}
@@ -88,14 +91,18 @@ func NewWithRetention(dataDir string, retentionDays int) (*Store, error) {
 	}
 	s := &Store{
 		sessions: make(map[string]*model.Session), fingerprints: make(map[string]string),
-		subs: make(map[chan model.Event]struct{}), pathCounts: make(map[string]int64), dayCounts: make(map[string]int64), targetCounts: make(map[string]int64), unknownPaths: make(map[string]*model.UnknownPath), probeStats: make(map[string]*model.ProbeStat), catchAllHosts: make(map[string]*model.CatchAllHost), integrationCounts: make(map[string]int64),
+		subs: make(map[chan model.Event]struct{}), pathCounts: make(map[string]int64), dayCounts: make(map[string]int64), targetCounts: make(map[string]int64), requestHostStats: make(map[string]*rawHostStat), unknownPaths: make(map[string]*model.UnknownPath), probeStats: make(map[string]*model.ProbeStat), catchAllHosts: make(map[string]*model.CatchAllHost), integrationCounts: make(map[string]int64),
 		actors: make(map[string]*model.ActorProfile), actorTimeline: make(map[string][]model.ActorActivity), actorSessionLast: make(map[string]time.Time), actorFingerprints: make(map[string]int64), sshActorLastCommand: make(map[string]string), sshActorLastCommandAt: make(map[string]time.Time),
 		sshSessions: make(map[string]*model.SSHSession), sshSubs: make(map[chan model.SSHEvent]struct{}), sshUserCounts: make(map[string]int64), sshCommandCounts: make(map[string]int64), sshFamilyCounts: make(map[string]int64), sshCountryCounts: make(map[string]int64), sshClientCounts: make(map[string]int64), sshDayConnections: make(map[string]int64), sshDayAuth: make(map[string]int64), sshDayShells: make(map[string]int64), sshDayCommands: make(map[string]int64),
 		integrationPeers: make(map[string]*model.IntegrationPeer), integrationPersist: make(map[string]time.Time),
+		trustedManual: make(map[string]model.TrustedDomain), trustedProxy: make(map[string]model.TrustedDomain),
 		started: time.Now(), dataDir: dataDir, retentionDays: retentionDays,
 		retentionStop: make(chan struct{}), retentionDone: make(chan struct{}),
 	}
 	if err := s.loadIntegrationPeers(); err != nil {
+		return nil, err
+	}
+	if err := s.loadTrustedDomains(); err != nil {
 		return nil, err
 	}
 	if err := pruneJSONLPaths(dataDir, retentionDays, time.Now()); err != nil {
@@ -180,6 +187,7 @@ func (s *Store) load(path string) error {
 		s.countPath(e.Path)
 		s.dayCounts[dayKey(e.At)]++
 		s.countTarget(e.Target)
+		s.countRequestHost(e)
 		s.countUnknown(e)
 		s.countProbe(e)
 		s.countCatchAll(e)
@@ -240,6 +248,15 @@ func (s *Store) applyEvent(e model.Event) {
 	}
 	if e.Target != "" {
 		ss.Target = e.Target
+	}
+	if e.TargetTrust != "" {
+		ss.TargetTrust = e.TargetTrust
+	}
+	if e.HostSweep {
+		ss.HostSweep = true
+		if e.HostSweepHosts > ss.HostSweepHosts {
+			ss.HostSweepHosts = e.HostSweepHosts
+		}
 	}
 	if e.Origin != "" {
 		ss.Origin = e.Origin
@@ -312,6 +329,18 @@ func (s *Store) GetSession(id string) (*model.Session, bool) {
 	}
 	return cloneSession(ss), true
 }
+
+func (s *Store) GetSessionView(id string) (*model.Session, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	ss, ok := s.sessions[id]
+	if !ok {
+		return nil, false
+	}
+	cp := s.decorateSessionLocked(ss)
+	cp.RecentTimes = nil
+	return &cp, true
+}
 func (s *Store) SessionDetail(id string, limit int) (model.SessionDetail, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -331,8 +360,11 @@ func (s *Store) SessionDetail(id string, limit int) (model.SessionDetail, bool) 
 	for i, j := 0, len(events)-1; i < j; i, j = i+1, j-1 {
 		events[i], events[j] = events[j], events[i]
 	}
-	cp := *cloneSession(ss)
+	cp := s.decorateSessionLocked(ss)
 	cp.RecentTimes = nil
+	for i := range events {
+		events[i] = s.decorateEventLocked(events[i])
+	}
 	return model.SessionDetail{Session: cp, Events: events}, true
 }
 
@@ -405,6 +437,7 @@ func (s *Store) AddEvent(e model.Event) error {
 	s.countPath(e.Path)
 	s.dayCounts[dayKey(e.At)]++
 	s.countTarget(e.Target)
+	s.countRequestHost(e)
 	s.countUnknown(e)
 	s.countProbe(e)
 	s.countCatchAll(e)
@@ -639,12 +672,26 @@ func (s *Store) Events(limit int, target ...string) []model.Event {
 	out := make([]model.Event, 0, minInt(limit, len(s.events)))
 	for i := len(s.events) - 1; i >= 0 && len(out) < limit; i-- {
 		e := s.events[i]
-		if wantTarget != "" && !strings.EqualFold(e.Target, wantTarget) {
+		rawTarget := e.Target
+		if rawTarget == "" {
+			rawTarget = e.RequestHost
+		}
+		if wantTarget != "" && !s.targetFilterMatchesLocked(rawTarget, wantTarget) {
 			continue
 		}
 		out = append(out, e)
 	}
 	return out
+}
+
+func (s *Store) EventsView(limit int, target ...string) []model.Event {
+	rows := s.Events(limit, target...)
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for i := range rows {
+		rows[i] = s.decorateEventLocked(rows[i])
+	}
+	return rows
 }
 
 func minInt(a, b int) int {
@@ -659,7 +706,11 @@ func (s *Store) Sessions(activeWithin time.Duration, limit int, target ...string
 	now := time.Now()
 	out := make([]model.Session, 0, len(s.sessions))
 	for _, ss := range s.sessions {
-		if len(target) > 0 && target[0] != "" && !strings.EqualFold(ss.Target, target[0]) {
+		rawTarget := ss.Target
+		if rawTarget == "" {
+			rawTarget = ss.RequestHost
+		}
+		if len(target) > 0 && target[0] != "" && !s.targetFilterMatchesLocked(rawTarget, target[0]) {
 			continue
 		}
 		if activeWithin > 0 && now.Sub(ss.LastSeen) > activeWithin {
@@ -676,13 +727,29 @@ func (s *Store) Sessions(activeWithin time.Duration, limit int, target ...string
 	return out
 }
 
+func (s *Store) SessionsView(activeWithin time.Duration, limit int, target ...string) []model.Session {
+	rows := s.Sessions(activeWithin, limit, target...)
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for i := range rows {
+		view := s.decorateSessionLocked(&rows[i])
+		view.RecentTimes = nil
+		rows[i] = view
+	}
+	return rows
+}
+
 func (s *Store) History(inactiveFor time.Duration, limit int, target ...string) []model.Session {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	now := time.Now()
 	out := make([]model.Session, 0, len(s.sessions))
 	for _, ss := range s.sessions {
-		if len(target) > 0 && target[0] != "" && !strings.EqualFold(ss.Target, target[0]) {
+		rawTarget := ss.Target
+		if rawTarget == "" {
+			rawTarget = ss.RequestHost
+		}
+		if len(target) > 0 && target[0] != "" && !s.targetFilterMatchesLocked(rawTarget, target[0]) {
 			continue
 		}
 		if inactiveFor > 0 && now.Sub(ss.LastSeen) <= inactiveFor {
@@ -699,6 +766,18 @@ func (s *Store) History(inactiveFor time.Duration, limit int, target ...string) 
 	return out
 }
 
+func (s *Store) HistoryView(inactiveFor time.Duration, limit int, target ...string) []model.Session {
+	rows := s.History(inactiveFor, limit, target...)
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for i := range rows {
+		view := s.decorateSessionLocked(&rows[i])
+		view.RecentTimes = nil
+		rows[i] = view
+	}
+	return rows
+}
+
 func (s *Store) Subscribe() (<-chan model.Event, func()) {
 	ch := make(chan model.Event, 64)
 	s.mu.Lock()
@@ -713,6 +792,124 @@ func (s *Store) Subscribe() (<-chan model.Event, func()) {
 		s.mu.Unlock()
 	}
 	return ch, cancel
+}
+
+func inRange(t, from, to time.Time) bool {
+	if !from.IsZero() && t.Before(from) {
+		return false
+	}
+	if !to.IsZero() && !t.Before(to) {
+		return false
+	}
+	return true
+}
+
+func (s *Store) OverviewRangeTarget(from, to time.Time, target string) model.Overview {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	now := time.Now()
+	var benign, suspicious, hostile, human, auto, unknown int
+	var depth, depthN int
+	var loops int64
+	persona := map[string]int64{}
+	countries := map[string]int64{}
+	referrers := map[string]int64{}
+	paths := map[string]int64{}
+	targets := map[string]int64{}
+	var requests int64
+	var last10 int64
+	for _, ss := range s.sessions {
+		rawTarget := ss.Target
+		if rawTarget == "" {
+			rawTarget = ss.RequestHost
+		}
+		if target != "" && !s.targetFilterMatchesLocked(rawTarget, target) {
+			continue
+		}
+		if !inRange(ss.LastSeen, from, to) {
+			continue
+		}
+		switch ss.Classification {
+		case model.ClassBenign:
+			benign++
+		case model.ClassSuspicious:
+			suspicious++
+		case model.ClassHostile:
+			hostile++
+		}
+		switch ss.Actor {
+		case model.ActorHuman:
+			human++
+		case model.ActorAutomated:
+			auto++
+		default:
+			unknown++
+		}
+		if ss.Depth > 0 {
+			depth += ss.Depth
+			depthN++
+		}
+		loops += int64(ss.Loop)
+		if ss.Persona != "" {
+			persona[ss.Persona]++
+		}
+		if ss.Country != "" {
+			countries[ss.Country]++
+		}
+		ref := ss.ReferrerHost
+		if ref == "" && ss.FirstReferrer == "" {
+			ref = "(direct / none)"
+		}
+		if ref != "" {
+			referrers[ref]++
+		}
+	}
+	for _, e := range s.events {
+		rawTarget := e.Target
+		if rawTarget == "" {
+			rawTarget = e.RequestHost
+		}
+		if target != "" && !s.targetFilterMatchesLocked(rawTarget, target) {
+			continue
+		}
+		if !inRange(e.At, from, to) {
+			continue
+		}
+		requests++
+		paths[normalizePath(e.Path)]++
+		if root, _, ok := s.trustedTargetRootLocked(rawTarget); ok {
+			targets[root]++
+		}
+		if e.At.After(now.Add(-10 * time.Second)) {
+			last10++
+		}
+	}
+	avg := 0.0
+	if depthN > 0 {
+		avg = float64(depth) / float64(depthN)
+	}
+	return model.Overview{Now: now, UptimeSeconds: int64(now.Sub(s.started).Seconds()), ActiveSessions: benign + suspicious + hostile, Benign: benign, Suspicious: suspicious, Hostile: hostile, Human: human, Automated: auto, Unknown: unknown, RequestsTotal: requests, RequestsToday: requests, RequestsPerSec: float64(last10) / 10, AvgDepth: avg, LoopsTotal: loops, TopPaths: rankedCounts(paths, 8), PersonaCounts: rankedCounts(persona, 10), TopCountries: rankedCounts(countries, 8), TopReferrers: rankedCounts(referrers, 8), TopTargets: rankedCounts(targets, 50), RiskBuckets: []model.Count{{Name: "0-29", Count: int64(benign)}, {Name: "30-59", Count: int64(suspicious)}, {Name: "60-100", Count: int64(hostile)}}}
+}
+
+func (s *Store) AvailableDays() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	seen := map[string]struct{}{}
+	for _, e := range s.events {
+		seen[dayKey(e.At)] = struct{}{}
+	}
+	for _, e := range s.sshEvents {
+		seen[dayKey(e.At)] = struct{}{}
+	}
+	for _, e := range s.intelEvents {
+		seen[dayKey(e.At)] = struct{}{}
+	}
+	out := make([]string, 0, len(seen))
+	for d := range seen {
+		out = append(out, d)
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(out)))
+	return out
 }
 
 func (s *Store) Overview(activeWithin time.Duration) model.Overview {
@@ -733,7 +930,11 @@ func (s *Store) OverviewTarget(activeWithin time.Duration, target string) model.
 	countries := map[string]int64{}
 	referrers := map[string]int64{}
 	for _, ss := range s.sessions {
-		if target != "" && !strings.EqualFold(ss.Target, target) {
+		rawTarget := ss.Target
+		if rawTarget == "" {
+			rawTarget = ss.RequestHost
+		}
+		if target != "" && !s.targetFilterMatchesLocked(rawTarget, target) {
 			continue
 		}
 		if ss.Country != "" {
@@ -775,20 +976,28 @@ func (s *Store) OverviewTarget(activeWithin time.Duration, target string) model.
 		}
 	}
 	var last10 int64
-	for _, e := range s.events {
-		if target != "" && !strings.EqualFold(e.Target, target) {
+	for _, raw := range s.events {
+		rawTarget := raw.Target
+		if rawTarget == "" {
+			rawTarget = raw.RequestHost
+		}
+		if target != "" && !s.targetFilterMatchesLocked(rawTarget, target) {
 			continue
 		}
-		if e.At.After(now.Add(-10 * time.Second)) {
+		if raw.At.After(now.Add(-10 * time.Second)) {
 			last10++
 		}
 	}
 	pathSource := s.pathCounts
 	if target != "" {
 		pathSource = map[string]int64{}
-		for _, e := range s.events {
-			if strings.EqualFold(e.Target, target) {
-				pathSource[normalizePath(e.Path)]++
+		for _, raw := range s.events {
+			rawTarget := raw.Target
+			if rawTarget == "" {
+				rawTarget = raw.RequestHost
+			}
+			if s.targetFilterMatchesLocked(rawTarget, target) {
+				pathSource[normalizePath(raw.Path)]++
 			}
 		}
 	}
@@ -809,7 +1018,13 @@ func (s *Store) OverviewTarget(activeWithin time.Duration, target string) model.
 	if depthN > 0 {
 		avg = float64(depth) / float64(depthN)
 	}
-	return model.Overview{Now: now, UptimeSeconds: int64(now.Sub(s.started).Seconds()), ActiveSessions: benign + suspicious + hostile, Benign: benign, Suspicious: suspicious, Hostile: hostile, Human: human, Automated: auto, Unknown: unknown, RequestsTotal: s.requestsTotal, RequestsToday: s.dayCounts[dayKey(now)], RequestsPerSec: float64(last10) / 10, AvgDepth: avg, LoopsTotal: loops, TopPaths: top, PersonaCounts: pc, TopCountries: rankedCounts(countries, 8), TopReferrers: rankedCounts(referrers, 8), TopTargets: rankedCounts(s.targetCounts, 50), RiskBuckets: []model.Count{{Name: "0-29", Count: int64(benign)}, {Name: "30-59", Count: int64(suspicious)}, {Name: "60-100", Count: int64(hostile)}}}
+	trustedTargetCounts := map[string]int64{}
+	for raw, count := range s.targetCounts {
+		if root, _, ok := s.trustedTargetRootLocked(raw); ok {
+			trustedTargetCounts[root] += count
+		}
+	}
+	return model.Overview{Now: now, UptimeSeconds: int64(now.Sub(s.started).Seconds()), ActiveSessions: benign + suspicious + hostile, Benign: benign, Suspicious: suspicious, Hostile: hostile, Human: human, Automated: auto, Unknown: unknown, RequestsTotal: s.requestsTotal, RequestsToday: s.dayCounts[dayKey(now)], RequestsPerSec: float64(last10) / 10, AvgDepth: avg, LoopsTotal: loops, TopPaths: top, PersonaCounts: pc, TopCountries: rankedCounts(countries, 8), TopReferrers: rankedCounts(referrers, 8), TopTargets: rankedCounts(trustedTargetCounts, 50), RiskBuckets: []model.Count{{Name: "0-29", Count: int64(benign)}, {Name: "30-59", Count: int64(suspicious)}, {Name: "60-100", Count: int64(hostile)}}}
 }
 
 func rankedCounts(in map[string]int64, limit int) []model.Count {

@@ -44,6 +44,17 @@ func (d *Deception) Build(r *http.Request, ss *model.Session) Response {
 	delay := time.Duration(min(fr*180, d.cfg.MaxDelayMS)) * time.Millisecond
 	resp := Response{Status: 200, ContentType: "text/html; charset=utf-8", Depth: depth, Delay: delay}
 
+	// Scanner control paths deliberately designed to test whether arbitrary names
+	// suddenly exist must stay boring. Serving a lure here would reveal the deception
+	// layer instead of attracting the scanner through a realistic product surface.
+	if isSyntheticExistenceProbe(p) {
+		resp.Status = http.StatusNotFound
+		resp.Label = "plausible-404-control-probe"
+		resp.ContentType = "text/html; charset=utf-8"
+		resp.Body = []byte("<!doctype html><title>404 Not Found</title><h1>Not Found</h1><p>The requested resource was not found.</p>")
+		return resp
+	}
+
 	if family, ok := buildFamilyDeception(r, ss, a, b); ok {
 		family.Delay = delay
 		return family
@@ -284,6 +295,29 @@ func (d *Deception) Build(r *http.Request, ss *model.Session) Response {
 		resp.Label = "transient-upstream-error"
 	}
 	return resp
+}
+
+func isSyntheticExistenceProbe(p string) bool {
+	p = strings.ToLower(strings.TrimSpace(p))
+	if strings.Contains(p, "not_exist") || strings.Contains(p, "not-exist") || strings.Contains(p, "does-not-exist") || strings.Contains(p, "debug-trigger") {
+		return true
+	}
+	base := strings.Trim(strings.TrimSpace(p), "/")
+	if len(base) >= 18 && !strings.Contains(base, "/") {
+		digits, letters := 0, 0
+		for _, r := range base {
+			switch {
+			case r >= '0' && r <= '9':
+				digits++
+			case r >= 'a' && r <= 'z':
+				letters++
+			}
+		}
+		if digits >= 4 && letters >= 8 && (strings.Contains(base, "trigger") || strings.Contains(base, "probe")) {
+			return true
+		}
+	}
+	return false
 }
 
 func directoryHTML(base string, files []string) string {

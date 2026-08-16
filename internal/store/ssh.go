@@ -448,6 +448,67 @@ func (s *Store) SubscribeSSH() (<-chan model.SSHEvent, func()) {
 	return ch, cancel
 }
 
+func (s *Store) SSHOverviewRange(enabled bool, from, to time.Time) model.SSHOverview {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	users := map[string]int64{}
+	commands := map[string]int64{}
+	families := map[string]int64{}
+	countries := map[string]int64{}
+	clients := map[string]int64{}
+	var conn, auth, shells, cmds int64
+	depth, depthN := 0, 0
+	seenSessions := map[string]struct{}{}
+	for _, e := range s.sshEvents {
+		if !inRange(e.At, from, to) {
+			continue
+		}
+		switch e.Type {
+		case "connect":
+			conn++
+		case "auth":
+			auth++
+		case "shell":
+			shells++
+		case "exec":
+			cmds++
+		}
+		if e.Username != "" {
+			users[e.Username]++
+		}
+		if e.CommandName != "" {
+			commands[e.CommandName]++
+		}
+		if e.CommandFamily != "" {
+			families[e.CommandFamily]++
+		}
+		if e.Country != "" {
+			countries[e.Country]++
+		}
+		if e.ClientVersion != "" {
+			clients[e.ClientVersion]++
+		}
+		seenSessions[e.SessionID] = struct{}{}
+	}
+	active := 0
+	for id := range seenSessions {
+		if ss := s.sshSessions[id]; ss != nil {
+			if ss.Depth > 0 {
+				depth += ss.Depth
+				depthN++
+			}
+			if ss.Active {
+				active++
+			}
+		}
+	}
+	avg := 0.0
+	if depthN > 0 {
+		avg = float64(depth) / float64(depthN)
+	}
+	return model.SSHOverview{Enabled: enabled, ActiveSessions: active, ConnectionsTotal: conn, ConnectionsToday: conn, AuthAttemptsTotal: auth, AuthAttemptsToday: auth, ShellsTotal: shells, ShellsToday: shells, CommandsTotal: cmds, CommandsToday: cmds, AvgDepth: avg, TopUsers: rankedCounts(users, 10), TopCommands: rankedCounts(commands, 12), TopFamilies: rankedCounts(families, 10), TopCountries: rankedCounts(countries, 10), TopClients: rankedCounts(clients, 10)}
+}
+
 func (s *Store) SSHOverview(enabled bool, activeWithin time.Duration) model.SSHOverview {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

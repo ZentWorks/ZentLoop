@@ -18,6 +18,7 @@ Preserve the original `Host`, validated client forwarding chain and original sch
 
 - `X-ZentLoop-Integration`: stable provider/tool identifier, e.g. `zentproxy`, `nginx`, `traefik`, `caddy`, `haproxy`, `edge-gateway`.
 - `X-ZentLoop-Target`: original requested host/IP. Optional when the normal `Host` header is preserved.
+- For ordinary trusted reverse-proxy paths that rewrite `Host` to ZentLoop's private upstream address, ZentLoop can recover the original host from `X-Forwarded-Host`. In auto mode this is accepted only from a private/loopback proxy peer with independent forwarding evidence (`X-Forwarded-For`, `X-Real-IP`, or valid Cloudflare metadata). `X-Forwarded-Host` alone never establishes trust, and signed target auto-trust remains bound to the exact signed `X-ZentLoop-Target`.
 - `X-ZentLoop-Catch-All`: use `1` for catch-all traffic. The standardized examples also use `1` for health checks; the value used is part of the signed canonical payload and must match the header.
 - `X-ZentLoop-Timestamp`: Unix timestamp in seconds, required in signed mode.
 - `X-ZentLoop-Signature`: `sha256=<hex HMAC>`, required in signed mode.
@@ -63,6 +64,16 @@ X-ZentLoop-Signature: sha256=<hex>
 ```
 
 The timestamp must be within `ZENTLOOP_INTEGRATION_MAX_SKEW_SECONDS` of ZentLoop's clock. The default is 300 seconds.
+
+### Target auto-trust
+
+Signed integrations may also establish an **exact** trusted target for normal, explicitly routed requests. ZentLoop only auto-trusts `X-ZentLoop-Target` when all of the following are true:
+
+- integration metadata passes HMAC verification;
+- `X-ZentLoop-Catch-All` is false/absent;
+- the target is a valid domain/IP value.
+
+Private-peer mode never auto-trusts targets, even though its metadata may be accepted for attribution. Catch-all targets also never auto-trust. This is intentional: Docker/NAT boundaries can make external traffic appear to originate from one private peer, and catch-all hosts are commonly attacker-controlled. Auto-trusted proxy targets are visible read-only in the Admin WebUI Trusted Domains settings.
 
 ## Health check and integration verification
 

@@ -33,6 +33,22 @@ func buildFamilyDeception(r *http.Request, ss *model.Session, a, b string) (Resp
 		return buildSSRFFamily(r, ss, a, b, canaries), true
 	}
 
+	if isDockerAPIFamily(p) {
+		return buildDockerAPIFamily(p, ss, a), true
+	}
+
+	if isPHPUnitEvalFamily(p) {
+		return buildPHPUnitEvalFamily(r, ss, a), true
+	}
+
+	if isJoomlaFingerprintFamily(p) {
+		return buildJoomlaFingerprintFamily(p, ss, a), true
+	}
+
+	if isNextFingerprintFamily(p) {
+		return buildNextFingerprintFamily(p, ss), true
+	}
+
 	if isVirtualFileReadFamily(p) {
 		return buildVirtualFileReadFamily(p, ss, a, canaries), true
 	}
@@ -146,6 +162,81 @@ func buildFamilyDeception(r *http.Request, ss *model.Session, a, b string) (Resp
 	return Response{}, false
 }
 
+func isDockerAPIFamily(p string) bool {
+	switch p {
+	case "/containers/json", "/images/json", "/version", "/info":
+		return true
+	}
+	return strings.HasPrefix(p, "/containers/") && (strings.HasSuffix(p, "/json") || strings.HasSuffix(p, "/logs"))
+}
+
+func buildDockerAPIFamily(p string, ss *model.Session, a string) Response {
+	depth := max(ss.Depth, 3)
+	containerID := "8d4b0c7e1a2f" + a[:4]
+	switch {
+	case p == "/containers/json":
+		return Response{Status: 200, ContentType: "application/json", Label: "fake-docker-api-containers", Depth: depth, Body: mustJSON([]map[string]any{{"Id": containerID, "Names": []string{"/platform-web"}, "Image": "registry.internal/platform/web:2026.08", "State": "running", "Status": "Up 18 days", "Ports": []map[string]any{{"PrivatePort": 8081, "Type": "tcp"}}}, {"Id": "4aa2319c62b1" + a[:4], "Names": []string{"/backup-agent"}, "Image": "registry.internal/ops/backup-agent:2.4.1", "State": "running", "Status": "Up 18 days"}})}
+	case p == "/images/json":
+		return Response{Status: 200, ContentType: "application/json", Label: "fake-docker-api-images", Depth: max(depth, 4), Body: mustJSON([]map[string]any{{"RepoTags": []string{"registry.internal/platform/web:2026.08"}, "Size": 318767104}, {"RepoTags": []string{"registry.internal/ops/backup-agent:2.4.1"}, "Size": 73400320}})}
+	case p == "/version":
+		return Response{Status: 200, ContentType: "application/json", Label: "fake-docker-api-version", Depth: depth, Body: mustJSON(map[string]any{"Version": "27.1.1", "ApiVersion": "1.46", "MinAPIVersion": "1.24", "GitCommit": "6312585", "GoVersion": "go1.22.5", "Os": "linux", "Arch": "amd64"})}
+	case p == "/info":
+		return Response{Status: 200, ContentType: "application/json", Label: "fake-docker-api-info", Depth: max(depth, 4), Body: mustJSON(map[string]any{"Containers": 2, "ContainersRunning": 2, "Images": 7, "Driver": "overlay2", "Name": "prod-app-02", "ServerVersion": "27.1.1", "OperatingSystem": "Ubuntu 24.04.3 LTS", "Architecture": "x86_64", "NCPU": 4})}
+	case strings.HasSuffix(p, "/logs"):
+		return Response{Status: 200, ContentType: "text/plain; charset=utf-8", Label: "fake-docker-api-logs", Depth: max(depth, 5), Body: []byte("2026-08-16T02:00:01Z backup sync started profile=legacy\n2026-08-16T02:00:04Z archive target=backup-01 status=ok\n")}
+	default:
+		return Response{Status: 200, ContentType: "application/json", Label: "fake-docker-api-inspect", Depth: max(depth, 5), Body: mustJSON(map[string]any{"Id": containerID, "Name": "/platform-web", "State": map[string]any{"Status": "running", "Running": true, "Pid": 844}, "Config": map[string]any{"Image": "registry.internal/platform/web:2026.08", "Env": []string{"APP_ENV=production", "BACKUP_HOST=backup-01"}}, "NetworkSettings": map[string]any{"IPAddress": "10.10.30.21"}})}
+	}
+}
+
+func isPHPUnitEvalFamily(p string) bool {
+	p = strings.ToLower(p)
+	return strings.HasSuffix(p, "/phpunit/util/php/eval-stdin.php") || strings.HasSuffix(p, "/phpunit/src/util/php/eval-stdin.php")
+}
+
+func buildPHPUnitEvalFamily(r *http.Request, ss *model.Session, a string) Response {
+	depth := max(ss.Depth, 3)
+	if r.Method == http.MethodPost {
+		return Response{Status: 200, ContentType: "text/plain; charset=utf-8", Label: "fake-phpunit-eval-post", Depth: max(depth, 5), Body: []byte("PHPUnit 5.6.2 by Sebastian Bergmann and contributors.\n\nRuntime notice: bootstrap completed\n")}
+	}
+	return Response{Status: 200, ContentType: "text/plain; charset=utf-8", Label: "fake-phpunit-eval", Depth: depth, Headers: map[string]string{"X-Powered-By": "PHP/7.1.33"}, Body: []byte("PHPUnit 5.6.2\nref=" + a + "\n")}
+}
+
+func isJoomlaFingerprintFamily(p string) bool {
+	switch p {
+	case "/administrator/", "/administrator/manifests/files/joomla.xml", "/language/en-gb/en-gb.xml", "/media/system/js/core.js":
+		return true
+	}
+	return false
+}
+
+func buildJoomlaFingerprintFamily(p string, ss *model.Session, a string) Response {
+	depth := max(ss.Depth, 2)
+	switch p {
+	case "/administrator/manifests/files/joomla.xml":
+		body := `<?xml version="1.0" encoding="utf-8"?><extension version="3.10" type="file" method="upgrade"><name>files_joomla</name><version>3.10.12</version><creationDate>July 2023</creationDate><author>Joomla! Project</author></extension>`
+		return Response{Status: 200, ContentType: "application/xml; charset=utf-8", Label: "fake-joomla-manifest", Depth: depth, Body: []byte(body)}
+	case "/language/en-gb/en-gb.xml":
+		body := `<?xml version="1.0" encoding="utf-8"?><metafile version="3.10" client="site"><name>English (en-GB)</name><version>3.10.12.1</version><creationDate>July 2023</creationDate></metafile>`
+		return Response{Status: 200, ContentType: "application/xml; charset=utf-8", Label: "fake-joomla-language", Depth: depth, Body: []byte(body)}
+	case "/media/system/js/core.js":
+		return Response{Status: 200, ContentType: "application/javascript; charset=utf-8", Label: "fake-joomla-core-js", Depth: depth, Body: []byte("window.Joomla=window.Joomla||{};Joomla.getOptions=function(k,d){return d||null};\n")}
+	default:
+		body := `<!doctype html><html><head><meta name="robots" content="noindex,nofollow"><title>Administration - Control Panel</title></head><body><form method="post" action="/administrator/index.php"><h1>Administration Login</h1><input name="username"><input name="passwd" type="password"><input type="hidden" name="return" value="` + html.EscapeString(a) + `"><button>Log in</button></form></body></html>`
+		return Response{Status: 200, ContentType: "text/html; charset=utf-8", Label: "fake-joomla-admin", Depth: max(depth, 3), Body: []byte(body)}
+	}
+}
+
+func isNextFingerprintFamily(p string) bool {
+	return p == "/_next/webpack-hmr" || p == "/_next/static/"
+}
+
+func buildNextFingerprintFamily(p string, ss *model.Session) Response {
+	// These are commonly used existence checks. Classify them, but keep production-like
+	// behavior instead of turning the check itself into an obvious jackpot.
+	return Response{Status: http.StatusNotFound, ContentType: "text/plain; charset=utf-8", Label: "nextjs-fingerprint-miss", Depth: max(ss.Depth, 1), Headers: map[string]string{"X-Powered-By": "Next.js"}, Body: []byte("Not Found\n")}
+}
+
 func isEnvFamily(p string) bool {
 	base := path.Base(p)
 	return base == ".env" || strings.HasPrefix(base, ".env.") || strings.HasSuffix(base, ".env") || base == "env" || base == "env.txt" || strings.HasSuffix(base, ".env.txt")
@@ -159,7 +250,7 @@ func isPHPInfoFamily(p string) bool {
 func isFrontendConfigFamily(p string) bool {
 	base := path.Base(p)
 	switch base {
-	case "env.js", "env.prod.js", "env.production.js", "env.dev.js", "env.development.js", "environment.js", "config.js", "configuration.js", "runtime-config.js", "__env.js", "aws-exports.js", "google-services.json", "firebase-config.json", "service-worker.js", "sw.js", "runtime.js", "ngsw.json", "manifest.webmanifest":
+	case "env.js", "env.prod.js", "env.production.js", "env.dev.js", "env.development.js", "environment.js", "config.js", "configuration.js", "runtime-config.js", "__env.js", "settings.js", "config.json.js", "credentials.js", "aws-exports.js", "google-services.json", "firebase-config.json", "service-worker.js", "sw.js", "runtime.js", "ngsw.json", "manifest.webmanifest":
 		return true
 	}
 	return p == "/main.js" || strings.HasSuffix(p, "/scripts/main.js") || strings.HasSuffix(p, "/static/js/main.js") || strings.HasSuffix(p, "/static/js/main.chunk.js") || strings.HasSuffix(p, "/static/js/bundle.js")
