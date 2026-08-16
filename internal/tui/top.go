@@ -153,7 +153,7 @@ func draw(c *client, out io.Writer) error {
 	sshShed := health.SSHRejectedGlobal + health.SSHRejectedPerIP
 	storage := health.EventsBytes + health.SSHEventsBytes + health.IntelEventsBytes
 	_, _ = fmt.Fprintf(out, " GUARD http shed %-5d ssh shed %-5d guard hits %-5d storage %-9s mem events %-7d\r\n", health.HTTPRejected, sshShed, guardHits, fmtBytes(storage), health.HTTPEventsInMemory+health.SSHEventsInMemory+health.IntelEventsInMemory)
-	_, _ = fmt.Fprint(out, "\r\n \x1b[1mSESSIONS\x1b[0m\r\n")
+	_, _ = fmt.Fprint(out, "\r\n \x1b[1mWEB SESSIONS\x1b[0m\r\n")
 	_, _ = fmt.Fprint(out, " LAST     TARGET                 IP                     CC   VIA      RISK  ACTOR       AUTO  REQ    D  L  F  CURRENT\r\n")
 	_, _ = fmt.Fprint(out, " ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\r\n")
 	for i, s := range sessions {

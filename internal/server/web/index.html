@@ -43,7 +43,7 @@
     </section>
 
     <section class="panel sessions-panel">
-      <div class="panel-title"><h2>Live sessions</h2><span id="sessionCount">0 active</span></div>
+      <div class="panel-title"><h2>Live Web sessions</h2><span id="sessionCount">0 active</span></div>
       <div class="table-wrap"><table>
         <thead><tr><th>LAST</th><th>TARGET</th><th>IP</th><th>CC</th><th>VIA</th><th>RISK</th><th>ACTOR</th><th>AUTO</th><th>REQ</th><th>DEPTH</th><th>LOOP</th><th>CURRENT</th></tr></thead>
         <tbody id="sessionsBody"></tbody>
@@ -52,7 +52,7 @@
 
     <section class="panel history-panel">
       <div class="panel-title history-title">
-        <div><h2>Session history</h2><span id="historyCount">0 inactive</span></div>
+        <div><h2>Web session history</h2><span id="historyCount">0 inactive</span></div>
         <input id="historySearch" type="search" placeholder="Search IP, path, actor…" autocomplete="off">
       </div>
       <div class="table-wrap"><table>
@@ -239,7 +239,7 @@
   </main>
 
   <aside id="drawer" class="drawer" aria-hidden="true">
-    <div class="drawer-head"><div><small>SESSION</small><h3 id="dId">—</h3></div><button id="closeDrawer">×</button></div>
+    <div class="drawer-head"><div><small>WEB SESSION</small><h3 id="dId">—</h3></div><button id="closeDrawer">×</button></div>
     <div class="drawer-body">
       <div class="detail-grid">
         <div><span>IP</span><b id="dIp">—</b></div><div><span>Network via</span><b id="dProxy">—</b></div>
@@ -260,7 +260,7 @@
         <div><span>Depth</span><b id="dDepth">—</b></div><div><span>Frustration</span><b id="dFrustration">—</b></div>
       </div>
       <h4>Behavior signal</h4><div class="score-track"><span id="dAutoBar"></span></div>
-      <h4>Journey</h4><div id="journey" class="journey"></div>
+      <div class="transcript-title"><h4>HTTP timeline</h4><button id="httpNewEvents" class="new-events" type="button" hidden>New live events ↓</button></div><div id="httpTimeline" class="ssh-transcript"></div>
       <h4>User agent</h4><pre id="dUa"></pre>
     </div>
   </aside>

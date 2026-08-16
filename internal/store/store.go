@@ -312,6 +312,30 @@ func (s *Store) GetSession(id string) (*model.Session, bool) {
 	}
 	return cloneSession(ss), true
 }
+func (s *Store) SessionDetail(id string, limit int) (model.SessionDetail, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	ss, ok := s.sessions[id]
+	if !ok {
+		return model.SessionDetail{}, false
+	}
+	if limit <= 0 {
+		limit = len(s.events)
+	}
+	events := make([]model.Event, 0, minInt(limit, len(s.events)))
+	for i := len(s.events) - 1; i >= 0 && len(events) < limit; i-- {
+		if s.events[i].SessionID == id {
+			events = append(events, s.events[i])
+		}
+	}
+	for i, j := 0, len(events)-1; i < j; i, j = i+1, j-1 {
+		events[i], events[j] = events[j], events[i]
+	}
+	cp := *cloneSession(ss)
+	cp.RecentTimes = nil
+	return model.SessionDetail{Session: cp, Events: events}, true
+}
+
 func (s *Store) GetSessionByFingerprint(fp string) (*model.Session, bool) {
 	s.mu.RLock()
 	id, ok := s.fingerprints[fp]

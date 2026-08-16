@@ -133,12 +133,21 @@ func (s *AdminServer) session(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	ss, ok := s.store.GetSession(id)
+	if r.URL.Query().Get("event_limit") == "" {
+		ss, ok := s.store.GetSession(id)
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		writeJSON(w, ss)
+		return
+	}
+	detail, ok := s.store.SessionDetail(id, queryInt(r, "event_limit", 500, 1, 5000))
 	if !ok {
 		http.NotFound(w, r)
 		return
 	}
-	writeJSON(w, ss)
+	writeJSON(w, detail)
 }
 func (s *AdminServer) events(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {

@@ -74,6 +74,11 @@ type JourneyStep struct {
 	Label string    `json:"label"`
 }
 
+type SessionDetail struct {
+	Session Session `json:"session"`
+	Events  []Event `json:"events"`
+}
+
 type Event struct {
 	ID                  string         `json:"id"`
 	At                  time.Time      `json:"at"`
