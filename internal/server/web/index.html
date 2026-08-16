@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ZentLoop Admin</title>
+  <link rel="icon" type="image/png" href="/favicon.png">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><img class="brand-logo" src="/zentloop-logo.png" alt="ZentLoop"><span id="brand">ZentLoop</span><small>CONTROL</small></div>
+    <div class="target-control"><label for="targetFilter">TARGET</label><select id="targetFilter"><option value="">All targets</option></select></div>
+    <div class="live"><span class="dot"></span> LIVE <span id="clock">--:--:--</span></div>
+  </header>
+
+  <main>
+    <section class="hero-grid">
+      <article class="metric danger"><span>HOSTILE</span><strong id="hostile">0</strong><small>active / <b class="liveWindow">5 min</b></small></article>
+      <article class="metric warn"><span>SUSPICIOUS</span><strong id="suspicious">0</strong><small>active / <b class="liveWindow">5 min</b></small></article>
+      <article class="metric ok"><span>BENIGN</span><strong id="benign">0</strong><small>active / <b class="liveWindow">5 min</b></small></article>
+      <article class="metric"><span>REQUESTS TODAY</span><strong id="requestsToday">0</strong><small><b id="rps">0.0</b> req/s now</small></article>
+      <article class="metric"><span>AVG. DEPTH</span><strong id="avgDepth">0.0</strong><small><b id="loops">0</b> loops active</small></article>
+    </section>
+
+    <section class="grid two">
+      <article class="panel">
+        <div class="panel-title"><h2>Behavior classification</h2><span>active sessions</span></div>
+        <div class="behavior">
+          <div class="ring" id="actorRing"><div><strong id="actorTotal">0</strong><small>actors</small></div></div>
+          <div class="legend">
+            <div><i class="auto"></i><span>Automated</span><b id="automated">0</b></div>
+            <div><i class="human"></i><span>Human-like</span><b id="human">0</b></div>
+            <div><i class="unknown"></i><span>Unknown</span><b id="unknown">0</b></div>
+          </div>
+        </div>
+      </article>
+      <article class="panel">
+        <div class="panel-title"><h2>Request activity</h2><span>recent events</span></div>
+        <svg id="activityChart" viewBox="0 0 600 150" preserveAspectRatio="none" aria-label="Request activity chart"></svg>
+        <div class="chart-footer"><span>older</span><span>now</span></div>
+      </article>
+    </section>
+
+    <section class="panel sessions-panel">
+      <div class="panel-title"><h2>Live sessions</h2><span id="sessionCount">0 active</span></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>LAST</th><th>TARGET</th><th>IP</th><th>CC</th><th>VIA</th><th>RISK</th><th>ACTOR</th><th>AUTO</th><th>REQ</th><th>DEPTH</th><th>LOOP</th><th>CURRENT</th></tr></thead>
+        <tbody id="sessionsBody"></tbody>
+      </table></div>
+    </section>
+
+    <section class="panel history-panel">
+      <div class="panel-title history-title">
+        <div><h2>Session history</h2><span id="historyCount">0 inactive</span></div>
+        <input id="historySearch" type="search" placeholder="Search IP, path, actor…" autocomplete="off">
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>LAST</th><th>TARGET</th><th>IP</th><th>CC</th><th>CLASS</th><th>ACTOR</th><th>VISITS</th><th>REQ</th><th>DEPTH</th><th>LOOP</th><th>LAST PATH</th></tr></thead>
+        <tbody id="historyBody"></tbody>
+      </table></div>
+    </section>
+
+    <section class="actor-zone">
+      <div class="section-heading"><div><span class="hex">⬡</span><h2>Actor Intelligence</h2><small>HTTP + SSH correlation</small></div><span>same source · one timeline · decoy reuse tracking</span></div>
+      <section class="hero-grid actor-metrics">
+        <article class="metric"><span>OBSERVED ACTORS</span><strong id="actorActors">0</strong><small>correlated source identities</small></article>
+        <article class="metric warn"><span>CROSS-PROTOCOL</span><strong id="actorCross">0</strong><small>seen on HTTP + SSH</small></article>
+        <article class="metric ok"><span>ENGAGEMENT</span><strong id="actorEngagement">0s</strong><small>active attacker time</small></article>
+        <article class="metric danger"><span>CANARY TOUCHES</span><strong id="actorCanaries">0</strong><small>decoy credentials reused</small></article>
+        <article class="metric"><span>PAYLOAD SIGNALS</span><strong id="actorPayloads">0</strong><small>URLs / transfer chains</small></article>
+      </section>
+
+      <section class="panel sessions-panel">
+        <div class="panel-title"><h2>Correlated actors</h2><span id="actorListCount">0 actors</span></div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>LAST</th><th>IP</th><th>CC</th><th>PROTOCOLS</th><th>HTTP</th><th>SSH CONN</th><th>SSH CMD</th><th>ENGAGED</th><th>DEPTH</th><th>CANARY</th><th>FINGERPRINTS</th></tr></thead>
+          <tbody id="actorsBody"></tbody>
+        </table></div>
+      </section>
+
+      <section class="panel sessions-panel">
+        <div class="panel-title"><h2>Coordinated scan bursts</h2><span>same target + user agent + source network · actors stay separate</span></div>
+        <div class="table-wrap compact-scroll"><table>
+          <thead><tr><th>LAST</th><th>SOURCES</th><th>REQ</th><th>NETWORK</th><th>FINGERPRINT</th><th>PATHS</th></tr></thead>
+          <tbody id="burstsBody"></tbody>
+        </table></div>
+      </section>
+
+      <section class="grid two lower">
+        <article class="panel"><div class="panel-title"><h2>Tool / bot fingerprints</h2><span>unique actor fingerprints</span></div><div id="actorFingerprints" class="bars"></div></article>
+        <article class="panel">
+          <div class="panel-title"><h2>Payload & canary intelligence</h2><span>passive extraction only</span></div>
+          <div class="table-wrap"><table><thead><tr><th>WHEN</th><th>PROTO</th><th>KIND</th><th>TOOL</th><th>INDICATOR</th></tr></thead><tbody id="intelBody"></tbody></table></div>
+        </article>
+      </section>
+    </section>
+
+    <section class="health-zone">
+      <div class="section-heading"><div><span class="hex">⬡</span><h2>Self Protection</h2><small>ZentLoop health</small></div><span>limits should hurt the visitor, not the trap</span></div>
+      <section class="hero-grid health-metrics">
+        <article class="metric warn"><span>HTTP SHED</span><strong id="healthHTTPRejected">0</strong><small>concurrency rejects</small></article>
+        <article class="metric warn"><span>SSH SHED</span><strong id="healthSSHRejected">0</strong><small>global + per-IP rejects</small></article>
+        <article class="metric"><span>GUARD HITS</span><strong id="healthGuardHits">0</strong><small>budget / recursion / VFS</small></article>
+        <article class="metric ok"><span>EVENT STORAGE</span><strong id="healthStorage">0 B</strong><small>HTTP + SSH + intel</small></article>
+        <article class="metric"><span>IN-MEMORY EVENTS</span><strong id="healthMemoryEvents">0</strong><small>bounded rings</small></article>
+      </section>
+    </section>
+
+    <section class="ssh-zone">
+      <div class="section-heading"><div><span class="hex">⬡</span><h2>SSH Rabbit Hole</h2><small id="sshState">optional trap · disabled</small></div><span>fully virtual · no OS shell · no outbound network</span></div>
+      <section class="hero-grid ssh-metrics">
+        <article class="metric"><span>SSH CONNECTIONS TODAY</span><strong id="sshConnections">0</strong><small>all TCP/SSH arrivals</small></article>
+        <article class="metric warn"><span>AUTH ATTEMPTS TODAY</span><strong id="sshAuth">0</strong><small>passwords never stored</small></article>
+        <article class="metric danger"><span>SHELLS TODAY</span><strong id="sshShells">0</strong><small>virtual shells opened</small></article>
+        <article class="metric"><span>COMMANDS TODAY</span><strong id="sshCommands">0</strong><small>simulated only</small></article>
+        <article class="metric ok"><span>ACTIVE SSH</span><strong id="sshActive">0</strong><small>current trap sessions</small></article>
+      </section>
+
+      <section class="panel sessions-panel">
+        <div class="panel-title"><h2>Live SSH sessions</h2><div class="ssh-session-tools"><span id="sshSessionCount">0 active</span><button id="openSSHLiveFeed" class="compact-action" type="button">Open SSH Live Feed <small id="sshLiveFeedLauncherSummary">0 live</small></button></div></div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>LAST</th><th>IP</th><th>CC</th><th>USER</th><th>CLIENT</th><th>AUTH</th><th>CMD</th><th>DEPTH</th><th>LOOP</th><th>CWD</th><th>CURRENT</th></tr></thead>
+          <tbody id="sshSessionsBody"></tbody>
+        </table></div>
+      </section>
+
+
+      <section class="grid two lower">
+        <article class="panel"><div class="panel-title"><h2>SSH usernames</h2><span>attempted accounts</span></div><div id="sshTopUsers" class="bars"></div></article>
+        <article class="panel"><div class="panel-title"><h2>SSH commands</h2><span>command names</span></div><div id="sshTopCommands" class="bars"></div></article>
+      </section>
+      <section class="grid two lower">
+        <article class="panel"><div class="panel-title"><h2>SSH intent</h2><span>command families</span></div><div id="sshTopFamilies" class="bars"></div></article>
+        <article class="panel"><div class="panel-title"><h2>SSH clients</h2><span>observed banners</span></div><div id="sshTopClients" class="bars"></div></article>
+      </section>
+
+      <section class="panel ssh-highlights-panel">
+        <div class="panel-title ssh-highlights-title">
+          <div><h2>SSH Highlights</h2><span id="sshHighlightsCount">curated authenticated sessions</span></div>
+          <div id="sshHighlightFilters" class="feed-filters" role="group" aria-label="SSH highlight rating filter">
+            <button type="button" class="active" data-highlight-filter="all">All</button>
+            <button type="button" data-highlight-filter="critical">Critical</button>
+            <button type="button" data-highlight-filter="high">High</button>
+            <button type="button" data-highlight-filter="notable">Notable</button>
+          </div>
+        </div>
+        <div id="sshHighlightsScroll" class="table-wrap ssh-highlights-scroll">
+          <table class="ssh-highlights-table"><thead><tr><th>DATE / TIME</th><th>IP</th><th>CC</th><th>RATING</th><th>SCORE</th><th>HIGHLIGHT</th><th>COMMANDS</th><th>DURATION</th><th>DEPTH</th></tr></thead><tbody id="sshHighlightsBody"></tbody></table>
+          <div id="sshHighlightsLoading" class="lazy-status" hidden>Loading more highlights…</div>
+        </div>
+      </section>
+
+      <section class="grid two lower">
+        <article class="panel history-panel ssh-history">
+          <div class="panel-title"><div><h2>SSH session history</h2><span id="sshHistoryCount">0 sessions</span></div></div>
+          <div class="table-wrap"><table>
+            <thead><tr><th>LAST</th><th>IP</th><th>CC</th><th>USER</th><th>CLIENT</th><th>AUTH</th><th>CMD</th><th>DEPTH</th><th>DURATION</th></tr></thead>
+            <tbody id="sshHistoryBody"></tbody>
+          </table></div>
+        </article>
+        <article class="panel live-events ssh-events-panel">
+          <div class="panel-title"><h2>Live SSH activity</h2><span><span class="dot"></span> streaming</span></div>
+          <div id="sshEvents" class="ssh-events"></div>
+        </article>
+      </section>
+    </section>
+
+    <section class="grid two lower">
+      <article class="panel">
+        <div class="panel-title"><h2>Countries</h2><span>known sessions</span></div>
+        <div id="topCountries" class="bars"></div>
+      </article>
+      <article class="panel">
+        <div class="panel-title"><h2>Referrers</h2><span>entry sources</span></div>
+        <div id="topReferrers" class="bars"></div>
+      </article>
+    </section>
+
+    <section class="panel">
+      <div class="panel-title"><div><h2>Recent paths</h2><span>latest observed paths · known, benign-known and unmapped</span></div></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>LAST</th><th>COUNT</th><th>METHOD</th><th>PATH</th><th>KIND</th><th>STATUS</th><th>SIGNATURE</th></tr></thead>
+        <tbody id="recentPathsBody"></tbody>
+      </table></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-title"><div><h2>Known probes</h2><span id="knownProbeSummary">recognized discovery, exploit and lure signatures · all targets</span></div><a class="export-link" href="/api/known-probes.csv">Export CSV</a></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>COUNT</th><th>PROBE</th><th>PRODUCT / FAMILY</th><th>CVE</th><th>HOSTILE</th><th>SUSP.</th><th>LAST</th></tr></thead>
+        <tbody id="knownProbeBody"></tbody>
+      </table></div>
+    </section>
+
+    <section class="grid two lower">
+      <article class="panel">
+        <div class="panel-title"><h2>Targets</h2><span>domains & IPs</span></div>
+        <div id="topTargets" class="bars"></div>
+      </article>
+      <article class="panel">
+        <div class="panel-title"><div><h2>Unmapped paths</h2><span>not yet covered by a known probe signature</span></div><a id="unknownExport" class="export-link" href="/api/unknown-paths.csv">Export CSV</a></div>
+        <div class="table-wrap"><table><thead><tr><th>COUNT</th><th>METHOD</th><th>PATH</th><th>LAST</th></tr></thead><tbody id="unknownBody"></tbody></table></div>
+      </article>
+    </section>
+
+
+    <section class="grid two lower">
+      <article class="panel">
+        <div class="panel-title"><div><h2>Catch-all / unknown hosts</h2><span id="catchAllSummary">0 requests · 0 hosts</span></div><a class="export-link" href="/api/catchall-hosts.csv">Export CSV</a></div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>REQ</th><th>HOST</th><th>HOSTILE</th><th>SUSP.</th><th>FIRST</th><th>LAST</th><th>INGRESS</th></tr></thead>
+          <tbody id="catchAllBody"></tbody>
+        </table></div>
+      </article>
+      <article class="panel integration-peers-panel">
+        <div class="panel-title"><div><h2>Connected integrations</h2><span id="integrationPeerSummary">0 peers</span></div><span>protocol v1 health verification</span></div>
+        <div class="table-wrap compact-scroll"><table>
+          <thead><tr><th>NAME</th><th>SOURCE</th><th>TRUST</th><th>STATUS</th><th>LAST CHECK</th><th>CHECKS</th><th>FAIL</th></tr></thead>
+          <tbody id="integrationPeersBody"></tbody>
+        </table></div>
+        <div class="integration-note">Verified health checks stay outside deception logs. Invalid or spoofed checks remain visible as normal security traffic.</div>
+        <div class="integration-traffic"><small>Trusted catch-all traffic</small><div id="topIntegrations" class="bars"></div></div>
+      </article>
+    </section>
+
+    <section class="grid two lower">
+      <article class="panel">
+        <div class="panel-title"><h2>Top targeted paths</h2><span>all retained</span></div>
+        <div id="topPaths" class="bars"></div>
+      </article>
+      <article class="panel live-events">
+        <div class="panel-title"><h2>Live event stream</h2><span><span class="dot"></span> streaming</span></div>
+        <div id="events"></div>
+      </article>
+    </section>
+
+    <footer><span id="version">ZentLoop 0.2.13</span><span>Proxy: <b id="proxyMode">direct</b> · GeoIP: <b id="geoStatus">local</b> · Official bots: <b id="botStatus">waiting</b> · <a href="https://db-ip.com" target="_blank" rel="noopener noreferrer">IP Geolocation by DB-IP</a> · no telemetry</span></footer>
+  </main>
+
+  <aside id="drawer" class="drawer" aria-hidden="true">
+    <div class="drawer-head"><div><small>SESSION</small><h3 id="dId">—</h3></div><button id="closeDrawer">×</button></div>
+    <div class="drawer-body">
+      <div class="detail-grid">
+        <div><span>IP</span><b id="dIp">—</b></div><div><span>Network via</span><b id="dProxy">—</b></div>
+        <div><span>IP source</span><b id="dIpSource">—</b></div><div><span>Country</span><b id="dCountry">—</b></div>
+        <div><span>Country source</span><b id="dCountrySource">—</b></div><div><span>Landing path</span><b id="dLanding">—</b></div>
+        <div><span>Referrer</span><b id="dReferrer">—</b></div><div><span>Referrer host</span><b id="dReferrerHost">—</b></div>
+        <div><span>Target</span><b id="dTarget">—</b></div><div><span>Request host</span><b id="dRequestHost">—</b></div><div><span>Origin</span><b id="dOrigin">—</b></div>
+        <div><span>Language</span><b id="dLanguage">—</b></div><div><span>HTTP</span><b id="dHTTP">—</b></div>
+        <div><span>Integration</span><b id="dIntegration">—</b></div><div><span>Integration trust</span><b id="dIntegrationTrust">—</b></div>
+        <div><span>Catch-all</span><b id="dCatchAll">—</b></div>
+        <div><span>CF-Ray</span><b id="dRay">—</b></div><div><span>Classification</span><b id="dClass">—</b></div>
+        <div><span>Risk</span><b id="dRisk">—</b></div><div><span>Actor</span><b id="dActor">—</b></div>
+        <div><span>Bot claim</span><b id="dBot">—</b></div><div><span>Bot verification</span><b id="dBotVerified">—</b></div>
+        <div><span>Automation</span><b id="dAuto">—</b></div><div><span>Confidence</span><b id="dConfidence">—</b></div>
+        <div><span>Avg. interval</span><b id="dInterval">—</b></div><div><span>Interval variance</span><b id="dVariance">—</b></div>
+        <div><span>Requests</span><b id="dReq">—</b></div><div><span>Visits</span><b id="dVisits">—</b></div>
+        <div><span>First seen</span><b id="dFirst">—</b></div><div><span>Last seen</span><b id="dLast">—</b></div>
+        <div><span>Depth</span><b id="dDepth">—</b></div><div><span>Frustration</span><b id="dFrustration">—</b></div>
+      </div>
+      <h4>Behavior signal</h4><div class="score-track"><span id="dAutoBar"></span></div>
+      <h4>Journey</h4><div id="journey" class="journey"></div>
+      <h4>User agent</h4><pre id="dUa"></pre>
+    </div>
+  </aside>
+
+  <div id="sshLiveFeedBackdrop" class="modal-backdrop" aria-hidden="true"></div>
+  <section id="sshLiveFeedModal" class="live-feed-modal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="sshLiveFeedTitle">
+    <div class="live-feed-modal-head">
+      <div><small>REALTIME OBSERVATORY</small><h2 id="sshLiveFeedTitle">SSH Live Feed</h2><span id="sshLiveFeedSummary">0 live</span></div>
+      <div class="live-feed-modal-actions">
+        <div id="sshLiveFeedFilters" class="feed-filters" role="group" aria-label="SSH live feed filter">
+          <button type="button" data-feed-filter="all" class="active">All</button>
+          <button type="button" data-feed-filter="live">Live</button>
+          <button type="button" data-feed-filter="left">Recently left</button>
+        </div>
+        <button id="sshLiveFollow" class="feed-follow active" type="button" aria-pressed="true">● Live follow</button>
+        <button id="closeSSHLiveFeed" class="modal-close" type="button" aria-label="Close SSH live feed">×</button>
+      </div>
+    </div>
+    <div class="live-feed-modal-body">
+      <div class="feed-statusline"><span><span class="dot"></span> realtime · active + 10s recently left</span><span>View session opens above this feed</span></div>
+      <div id="sshLiveFeed" class="ssh-live-feed ssh-live-feed-modal-grid"></div>
+    </div>
+  </section>
+
+  <aside id="sshDrawer" class="drawer" aria-hidden="true">
+    <div class="drawer-head ssh-drawer-head"><div><small>SSH SESSION <span id="sdLiveState" class="ssh-live-state ended">ENDED</span></small><h3 id="sdId">—</h3></div><div class="drawer-actions"><a id="sshExportJSON" class="export-link" href="#">JSON</a><a id="sshExportTXT" class="export-link" href="#">TXT</a><button id="closeSSHDrawer">×</button></div></div>
+    <div class="drawer-body">
+      <div class="detail-grid">
+        <div><span>IP</span><b id="sdIp">—</b></div><div><span>Country</span><b id="sdCountry">—</b></div>
+        <div><span>Username</span><b id="sdUser">—</b></div><div><span>Client</span><b id="sdClient">—</b></div>
+        <div><span>Auth attempts</span><b id="sdAuth">—</b></div><div><span>Accepted</span><b id="sdAccepted">—</b></div>
+        <div><span>Shell</span><b id="sdShell">—</b></div><div><span>Exec requests</span><b id="sdExec">—</b></div>
+        <div><span>Commands</span><b id="sdCommands">—</b></div><div><span>Current dir</span><b id="sdCwd">—</b></div>
+        <div><span>Depth</span><b id="sdDepth">—</b></div><div><span>Loop / frustration</span><b id="sdLoop">—</b></div>
+        <div><span>First seen</span><b id="sdFirst">—</b></div><div><span>Last seen</span><b id="sdLast">—</b></div>
+        <div><span>Duration</span><b id="sdDuration">—</b></div><div><span>Risk</span><b id="sdRisk">—</b></div>
+      </div>
+      <div class="transcript-title"><h4>Virtual transcript</h4><button id="sshNewEvents" class="new-events" type="button" hidden>0 new live events ↓</button></div><div id="sshTranscript" class="ssh-transcript"></div>
+    </div>
+  </aside>
+  <aside id="actorDrawer" class="drawer" aria-hidden="true">
+    <div class="drawer-head"><div><small>CROSS-PROTOCOL ACTOR</small><h3 id="adId">—</h3></div><button id="closeActorDrawer">×</button></div>
+    <div class="drawer-body">
+      <div class="detail-grid">
+        <div><span>IP</span><b id="adIp">—</b></div><div><span>Country</span><b id="adCountry">—</b></div>
+        <div><span>Protocols</span><b id="adProtocols">—</b></div><div><span>Classification</span><b id="adClass">—</b></div>
+        <div><span>HTTP requests</span><b id="adHTTP">—</b></div><div><span>SSH connections</span><b id="adSSHConn">—</b></div>
+        <div><span>SSH revisit median</span><b id="adSSHMedian">—</b></div><div><span>SSH revisit jitter</span><b id="adSSHJitter">—</b></div>
+        <div><span>SSH commands</span><b id="adSSHCmd">—</b></div><div><span>Engagement</span><b id="adEngagement">—</b></div>
+        <div><span>Depth</span><b id="adDepth">—</b></div><div><span>Risk</span><b id="adRisk">—</b></div>
+        <div><span>Canary touches</span><b id="adCanaries">—</b></div><div><span>Payload signals</span><b id="adPayloads">—</b></div>
+        <div><span>First seen</span><b id="adFirst">—</b></div><div><span>Last seen</span><b id="adLast">—</b></div>
+      </div>
+      <h4>Fingerprints</h4><pre id="adFingerprints">—</pre>
+      <h4>HTTP + SSH timeline</h4><div id="actorTimeline" class="ssh-transcript"></div>
+    </div>
+  </aside>
+  <div id="shade" class="shade"></div>
+  <script src="/app.js"></script>
+</body>
+</html>

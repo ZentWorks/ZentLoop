@@ -1,0 +1,199 @@
+package store
+
+import (
+	"sort"
+	"strings"
+	"time"
+
+	"zentloop/internal/model"
+)
+
+const sshHighlightMinScore = 50
+
+type sshHighlightBuild struct {
+	session model.SSHSession
+	events  []model.SSHEvent
+}
+
+func (s *Store) SSHHighlights(limit int, before time.Time, beforeID, rating string) model.SSHHighlightPage {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	rating = strings.ToLower(strings.TrimSpace(rating))
+
+	grouped := make(map[string][]model.SSHEvent)
+	for _, e := range s.sshEvents {
+		grouped[e.SessionID] = append(grouped[e.SessionID], e)
+	}
+	rows := make([]model.SSHHighlight, 0, 64)
+	for id, ss := range s.sshSessions {
+		if !ss.AuthAccepted {
+			continue
+		}
+		h, ok := scoreSSHHighlight(cloneSSHSession(ss), grouped[id])
+		if !ok {
+			continue
+		}
+		if !before.IsZero() {
+			if h.At.After(before) || (h.At.Equal(before) && (beforeID == "" || h.SessionID >= beforeID)) {
+				continue
+			}
+		}
+		if rating != "" && rating != "all" && h.Rating != rating {
+			continue
+		}
+		rows = append(rows, h)
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].At.Equal(rows[j].At) {
+			return rows[i].SessionID > rows[j].SessionID
+		}
+		return rows[i].At.After(rows[j].At)
+	})
+	page := model.SSHHighlightPage{}
+	if len(rows) > limit {
+		rows = rows[:limit]
+	}
+	page.Items = rows
+	if len(rows) == limit {
+		last := rows[len(rows)-1]
+		page.NextBefore = last.At.Format(time.RFC3339Nano) + "|" + last.SessionID
+	}
+	return page
+}
+
+func scoreSSHHighlight(ss model.SSHSession, events []model.SSHEvent) (model.SSHHighlight, bool) {
+	if !ss.AuthAccepted {
+		return model.SSHHighlight{}, false
+	}
+	families := map[string]bool{}
+	signals := map[string]bool{}
+	commandEvents := 0
+	acceptedAt := time.Time{}
+	for _, e := range events {
+		if e.Type == "auth" && e.AuthAccepted && acceptedAt.IsZero() {
+			acceptedAt = e.At
+		}
+		if !acceptedAt.IsZero() && e.At.Before(acceptedAt) {
+			continue
+		}
+		if e.Type == "command" || e.Type == "exec" {
+			commandEvents++
+			if e.CommandFamily != "" {
+				families[e.CommandFamily] = true
+			}
+		}
+		fp := strings.ToLower(e.Fingerprint)
+		cmd := strings.ToLower(e.Command)
+		fam := strings.ToLower(e.CommandFamily)
+		if strings.Contains(fp, "privilege") || fam == "privilege" || strings.Contains(cmd, "sudo -l") {
+			signals["privilege"] = true
+		}
+		if strings.Contains(fp, "persistence") || fam == "persistence" || strings.Contains(cmd, "crontab") {
+			signals["persistence"] = true
+		}
+		if e.StdinBytes > 0 || strings.Contains(fp, "staged-payload") || strings.Contains(cmd, "cat >") || strings.Contains(cmd, "cat  >") {
+			signals["payload-staging"] = true
+		}
+		if strings.Contains(fp, "process-killer") || strings.HasPrefix(strings.TrimSpace(cmd), "kill ") || strings.Contains(cmd, "pkill ") || strings.Contains(cmd, "killall ") {
+			signals["process-control"] = true
+		}
+		if strings.Contains(fp, "shell-control-flow") || strings.Contains(cmd, "if ") || strings.Contains(cmd, "for ") {
+			signals["control-flow"] = true
+		}
+		if fam == "credentials" || strings.Contains(e.Persona, "credential") || len(e.CanaryTouches) > 0 {
+			signals["credentials"] = true
+		}
+		if len(e.CanaryTouches) > 0 {
+			signals["canary"] = true
+		}
+		if strings.Contains(fp, "cryptominer") || strings.Contains(cmd, "xmrig") || strings.Contains(cmd, "cnrig") {
+			signals["miner"] = true
+		}
+	}
+	if commandEvents < 2 {
+		return model.SSHHighlight{}, false
+	}
+	highSignal := signals["privilege"] || signals["persistence"] || signals["payload-staging"] || signals["canary"] || signals["miner"]
+	if !highSignal && !(commandEvents >= 4 && len(families) >= 2) {
+		return model.SSHHighlight{}, false
+	}
+
+	score := 20
+	if commandEvents > 10 {
+		score += 18
+	} else {
+		score += commandEvents * 2
+	}
+	if ss.Depth > 5 {
+		score += 15
+	} else {
+		score += ss.Depth * 2
+	}
+	if signals["privilege"] {
+		score += 14
+	}
+	if signals["persistence"] {
+		score += 18
+	}
+	if signals["payload-staging"] {
+		score += 20
+	}
+	if signals["process-control"] {
+		score += 10
+	}
+	if signals["control-flow"] {
+		score += 7
+	}
+	if signals["credentials"] {
+		score += 10
+	}
+	if signals["canary"] {
+		score += 20
+	}
+	if signals["miner"] {
+		score += 18
+	}
+	if len(families) >= 3 {
+		score += 7
+	}
+	if score > 100 {
+		score = 100
+	}
+	if score < sshHighlightMinScore {
+		return model.SSHHighlight{}, false
+	}
+
+	order := []string{"canary", "payload-staging", "persistence", "privilege", "miner", "process-control", "credentials", "control-flow"}
+	labels := map[string]string{"canary": "Canary touch", "payload-staging": "Payload staging", "persistence": "Persistence", "privilege": "Privilege discovery", "miner": "Miner behavior", "process-control": "Process control", "credentials": "Credential hunting", "control-flow": "Shell control flow"}
+	outSignals := make([]string, 0, len(signals))
+	for _, k := range order {
+		if signals[k] {
+			outSignals = append(outSignals, labels[k])
+		}
+	}
+	if len(outSignals) == 0 {
+		outSignals = append(outSignals, "Multi-stage command activity")
+	}
+	title := outSignals[0]
+	if len(outSignals) > 1 {
+		title += " + " + outSignals[1]
+	}
+	reason := strings.Join(outSignals, " · ")
+	rating := "notable"
+	if score >= 90 {
+		rating = "critical"
+	} else if score >= 70 {
+		rating = "high"
+	}
+	at := ss.LastSeen
+	if !ss.DisconnectedAt.IsZero() {
+		at = ss.DisconnectedAt
+	}
+	return model.SSHHighlight{SessionID: ss.ID, At: at, LastSeen: ss.LastSeen, IP: ss.IP, Country: ss.Country, Username: ss.Username, Score: score, Rating: rating, Title: title, Reason: reason, Commands: ss.CommandCount, DurationSeconds: ss.DurationSeconds, Depth: ss.Depth, Signals: outSignals}, true
+}
