@@ -3,6 +3,7 @@ package server
 import (
 	"sort"
 	"strings"
+	"time"
 
 	"zentloop/internal/lures"
 )
@@ -38,6 +39,9 @@ func (w *virtualSSHWorld) adaptToBehavior(family, command string) {
 	}
 	if w.interests["execution"] >= 2 || strings.Contains(low, "| bash") || strings.Contains(low, "| sh") {
 		w.seedExecutionLures()
+	}
+	if w.interests["credentials"]+w.interests["network"]+w.interests["containers"]+w.interests["execution"] >= 5 {
+		w.seedOperatorLures()
 	}
 	if looksLikeMinerCleanupSequence(low) {
 		w.seedMinerCleanupLures()
@@ -78,6 +82,29 @@ func (w *virtualSSHWorld) seedPersistenceLures() {
 func (w *virtualSSHWorld) seedExecutionLures() {
 	_ = w.setVirtualDir("/opt/app/current/scripts")
 	_ = w.setVirtualFile("/opt/app/current/scripts/deploy-worker.sh", "#!/bin/sh\nset -e\nREGISTRY=${REGISTRY_HOST:-registry.internal}\necho logging into $REGISTRY\necho \"$REGISTRY_TOKEN\" | docker login $REGISTRY --username deploy --password-stdin\ndocker pull $REGISTRY/platform/worker:2026.08\n")
+}
+
+func (w *virtualSSHWorld) seedOperatorLures() {
+	_ = w.setVirtualDir("/opt/app/current/ops")
+	_ = w.setVirtualFile("/opt/app/current/ops/README.md", `Operations notes
+
+- production deploys normally pass through ops-gw-01
+- legacy backup migration still depends on svc-backup@backup-01
+- registry.internal is required for worker rollouts
+- old archive credentials are scheduled for rotation after migration validation
+`)
+	_ = w.setVirtualDir("/home/admin/.ssh")
+	_ = w.setVirtualFile("/home/admin/.ssh/config", `Host ops-gw-01
+    HostName 10.10.30.30
+    User deployer
+
+Host backup-01
+    HostName 10.10.30.12
+    User svc-backup
+`)
+	_ = w.setVirtualDir("/var/log/backup-agent")
+	stamp := w.system.snapshot().Now.Add(-38 * time.Minute).Format("2006-01-02T15:04:05Z07:00")
+	_ = w.setVirtualFile("/var/log/backup-agent/last-run.log", stamp+" profile=legacy target=backup-01 result=warning message=remote manifest differs; retry queued\n")
 }
 
 func (w *virtualSSHWorld) CanaryTouches(command string) []string {

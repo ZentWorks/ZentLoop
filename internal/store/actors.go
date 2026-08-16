@@ -434,10 +434,24 @@ func (s *Store) HealthOverview() model.HealthOverview {
 	o.HTTPSessionsInMemory = len(s.sessions)
 	o.SSHSessionsInMemory = len(s.sshSessions)
 	o.ActorsInMemory = len(s.actors)
+	o.LiveSubscribers = len(s.subs)
+	o.SSHLiveSubscribers = len(s.sshSubs)
+	o.LiveSubscriberLimit = maxLiveSubscribers
 	dataDir := s.dataDir
 	s.mu.RUnlock()
 	o.EventsBytes = fileSize(filepath.Join(dataDir, "events.jsonl"))
 	o.SSHEventsBytes = fileSize(filepath.Join(dataDir, "ssh-events.jsonl"))
 	o.IntelEventsBytes = fileSize(filepath.Join(dataDir, "intel-events.jsonl"))
+	o.StorageTotalBytes = o.EventsBytes + o.SSHEventsBytes + o.IntelEventsBytes
+	o.StorageWarnBytes = storagePressureWarnBytes
+	o.StorageCriticalBytes = storagePressureCritBytes
+	switch {
+	case o.StorageTotalBytes >= storagePressureCritBytes:
+		o.StoragePressure = "critical"
+	case o.StorageTotalBytes >= storagePressureWarnBytes:
+		o.StoragePressure = "warning"
+	default:
+		o.StoragePressure = "normal"
+	}
 	return o
 }

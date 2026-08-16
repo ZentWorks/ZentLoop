@@ -26,6 +26,7 @@ let sshHighlightExhausted=false;
 let historyRows=[];
 let selectedTarget="";
 let selectedDateMode="live";
+let trustedSaveFeedbackTimer=0;
 let availableDays=[];
 let knownTargets=[];
 let actorRows=[];
@@ -96,7 +97,20 @@ function renderActors(rows){rows=rows||[];actorRows=rows.slice();$('actorListCou
 
 function renderBursts(rows){const b=$("burstsBody");if(!b)return;b.innerHTML=(rows||[]).map(x=>`<tr><td>${since(x.last_seen)}</td><td>${x.sources||0}</td><td>${x.requests||0}</td><td>${esc(x.source_group||'—')}</td><td>${esc(x.fingerprint||'—')}</td><td class="path" title="${esc((x.paths||[]).join(', '))}">${esc(short((x.paths||[]).join(', ')||'—',64))}</td></tr>`).join('')||'<tr class="empty-row"><td colspan="6">No coordinated multi-source bursts retained.</td></tr>';}
 function renderIntel(rows){const b=$('intelBody');if(!b)return;b.innerHTML=(rows||[]).map(i=>{const indicator=i.canary?`canary:${i.canary}`:(i.url||i.host||i.filename||i.summary);return `<tr><td>${since(i.at)}</td><td>${esc(i.protocol)}</td><td>${esc(i.kind)}</td><td>${esc(i.tool||i.technique||'—')}</td><td class="path" title="${esc(indicator)}">${esc(short(indicator,48))}</td></tr>`}).join('')||'<tr class="empty-row"><td colspan="5">No payload or canary intelligence yet.</td></tr>';}
-function renderHealth(h){if(!$('healthHTTPRejected'))return;$('healthHTTPRejected').textContent=(h.http_rejected||0).toLocaleString();$('healthSSHRejected').textContent=((h.ssh_rejected_global||0)+(h.ssh_rejected_per_ip||0)).toLocaleString();$('healthGuardHits').textContent=((h.ssh_command_budget_hits||0)+(h.ssh_virtual_storage_hits||0)+(h.ssh_recursion_guard_hits||0)).toLocaleString();$('healthStorage').textContent=bytes((h.events_bytes||0)+(h.ssh_events_bytes||0)+(h.intel_events_bytes||0));$('healthMemoryEvents').textContent=((h.http_events_in_memory||0)+(h.ssh_events_in_memory||0)+(h.intel_events_in_memory||0)).toLocaleString();}
+function renderHealth(h){
+  if(!$('healthHTTPRejected'))return;
+  const totalStorage=(h.storage_total_bytes||0)||((h.events_bytes||0)+(h.ssh_events_bytes||0)+(h.intel_events_bytes||0));
+  $('healthHTTPRejected').textContent=(h.http_rejected||0).toLocaleString();
+  $('healthSSHRejected').textContent=((h.ssh_rejected_global||0)+(h.ssh_rejected_per_ip||0)).toLocaleString();
+  $('healthGuardHits').textContent=((h.ssh_command_budget_hits||0)+(h.ssh_virtual_storage_hits||0)+(h.ssh_recursion_guard_hits||0)).toLocaleString();
+  $('healthStorage').textContent=bytes(totalStorage);
+  $('healthMemoryEvents').textContent=((h.http_events_in_memory||0)+(h.ssh_events_in_memory||0)+(h.intel_events_in_memory||0)).toLocaleString();
+  if($('healthStoragePressure'))$('healthStoragePressure').textContent=String(h.storage_pressure||'normal').toUpperCase();
+  if($('healthStorageBudget'))$('healthStorageBudget').textContent=`warn ${bytes(h.storage_warn_bytes||0)} · critical ${bytes(h.storage_critical_bytes||0)} · compactions ${(h.storage_compactions||0).toLocaleString()}`;
+  if($('healthLiveSubscribers'))$('healthLiveSubscribers').textContent=`${(h.live_subscribers||0)+(h.ssh_live_subscribers||0)} / ${(h.live_subscriber_limit||0)*2}`;
+  if($('healthLiveSubscribersNote'))$('healthLiveSubscribersNote').textContent=`web ${h.live_subscribers||0}/${h.live_subscriber_limit||0} · ssh ${h.ssh_live_subscribers||0}/${h.live_subscriber_limit||0}`;
+  if($('healthLiveRejected'))$('healthLiveRejected').textContent=(h.live_subscriber_rejected||0).toLocaleString();
+}
 async function openActor(id){try{const d=await api('/api/actors/'+encodeURIComponent(id)+'?event_limit=240'),a=d.actor;$('adId').textContent=a.id;$('adIp').textContent=a.ip;$('adCountry').textContent=countryLabel(a.country);$('adProtocols').textContent=(a.protocols||[]).join(' + ')||'—';$('adClass').textContent=a.classification||'—';$('adHTTP').textContent=a.http_requests||0;$('adSSHConn').textContent=a.ssh_connections||0;$('adSSHMedian').textContent=a.ssh_median_revisit_seconds?duration(a.ssh_median_revisit_seconds*1000):'—';$('adSSHJitter').textContent=a.ssh_revisit_jitter_seconds?duration(a.ssh_revisit_jitter_seconds*1000):'—';$('adSSHCmd').textContent=a.ssh_commands||0;$('adEngagement').textContent=duration((a.engagement_seconds||0)*1000);$('adDepth').textContent=a.depth||0;$('adRisk').textContent=(a.risk_score||0)+'/100';$('adCanaries').textContent=a.canary_touches||0;$('adPayloads').textContent=a.payload_attempts||0;$('adFirst').textContent=dt(a.first_seen);$('adLast').textContent=dt(a.last_seen);$('adFingerprints').textContent=(a.fingerprints||[]).join('\n')||'—';$('actorTimeline').innerHTML=(d.timeline||[]).map(x=>`<div class="transcript-step"><small>${new Date(x.at).toLocaleString()} · ${esc((x.protocol||'').toUpperCase())} · ${esc(x.kind||'event')}${x.canary?` · CANARY ${esc(x.canary)}`:''}</small><b>${esc(x.summary||x.path||x.command||'event')}</b>${x.fingerprint?`<span>${esc(x.fingerprint)}</span>`:''}</div>`).join('')||'<small>No timeline retained.</small>';closeAllDrawers();$('actorDrawer').classList.add('open');$('shade').classList.add('open');$('actorDrawer').setAttribute('aria-hidden','false');syncOverlayBodyLock();}catch(e){console.error(e)}}
 function renderSSHOverview(o){
   if(!$('sshConnections'))return;
@@ -131,7 +145,7 @@ function renderSSHLiveFeed(){const now=Date.now(),all=[...sshLiveFeedState.value
 
 function renderSSHHighlights(){
   const body=$('sshHighlightsBody');if(!body)return;
-  body.innerHTML=sshHighlights.map(h=>`<tr data-ssh-highlight-id="${esc(h.session_id)}"><td>${esc(dt(h.at))}</td><td>${esc(h.ip||'—')}</td><td>${esc(h.country||'—')}</td><td><span class="highlight-rating ${esc(h.rating)}">${esc(h.rating)}</span></td><td><span class="ssh-highlight-score ${esc(h.rating)}">${h.score}/100</span></td><td><span class="ssh-highlight-title" title="${esc(h.title)}">${esc(h.title)}</span><span class="ssh-highlight-reason" title="${esc(h.reason)}">${esc(h.reason)}</span></td><td>${h.commands||0}</td><td>${esc(duration((h.duration_seconds||0)*1000))}</td><td>${h.depth||0}</td></tr>`).join('')||'<tr><td colspan="9"><small>No SSH highlights match this rating yet.</small></td></tr>';
+  body.innerHTML=sshHighlights.map(h=>{const tags=(h.tags||[]).map(t=>`<span class="ssh-highlight-tag">${esc(t)}</span>`).join('');return `<tr data-ssh-highlight-id="${esc(h.session_id)}"><td>${esc(dt(h.at))}</td><td>${esc(h.ip||'—')}</td><td>${esc(h.country||'—')}</td><td><span class="highlight-rating ${esc(h.rating)}">${esc(h.rating)}</span></td><td><span class="ssh-highlight-score ${esc(h.rating)}">${h.score}/100</span></td><td><span class="ssh-highlight-title" title="${esc(h.title)}">${esc(h.title)}</span>${tags?`<span class="ssh-highlight-tags">${tags}</span>`:''}<span class="ssh-highlight-reason" title="${esc(h.reason)}">${esc(h.reason)}</span></td><td>${h.commands||0}</td><td>${esc(duration((h.duration_seconds||0)*1000))}</td><td>${h.depth||0}</td></tr>`;}).join('')||'<tr><td colspan="9"><small>No SSH highlights match this rating yet.</small></td></tr>';
   $('sshHighlightsCount').textContent=`${sshHighlights.length} loaded · authenticated + noteworthy`;
   document.querySelectorAll('#sshHighlightsBody [data-ssh-highlight-id]').forEach(tr=>tr.onclick=()=>openSSHSession(tr.dataset.sshHighlightId));
 }
@@ -150,7 +164,18 @@ async function openSettings(){await loadTrustedSettings();$('settingsModal').cla
 function closeSettings(){$('settingsModal').classList.remove('open');$('settingsBackdrop').classList.remove('open');$('settingsModal').setAttribute('aria-hidden','true');$('settingsBackdrop').setAttribute('aria-hidden','true');syncOverlayBodyLock();}
 function openHelp(){$('helpModal').classList.add('open');$('helpBackdrop').classList.add('open');$('helpModal').setAttribute('aria-hidden','false');$('helpBackdrop').setAttribute('aria-hidden','false');syncOverlayBodyLock();}
 function closeHelp(){$('helpModal').classList.remove('open');$('helpBackdrop').classList.remove('open');$('helpModal').setAttribute('aria-hidden','true');$('helpBackdrop').setAttribute('aria-hidden','true');syncOverlayBodyLock();}
-async function saveTrustedSettings(){const domains=$('trustedDomainsInput').value.split(/\r?\n|,/).map(x=>x.trim()).filter(Boolean);$('settingsStatus').textContent='saving…';try{const r=await fetch('/api/settings/trusted-domains',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({domains})});if(!r.ok){const msg=(await r.text()).trim();throw new Error(msg||String(r.status));}trustedSettings=await r.json();renderTrustedSettings();$('settingsStatus').textContent='saved';selectedTarget='';await refresh();setTimeout(()=>{$('settingsStatus').textContent='';},1800);}catch(e){$('settingsStatus').textContent=e.message||'save failed';console.error(e)}}
+async function saveTrustedSettings(){
+  const domains=$('trustedDomainsInput').value.split(/\r?\n|,/).map(x=>x.trim()).filter(Boolean),button=$('saveSettings'),original='Save trusted domains';
+  clearTimeout(trustedSaveFeedbackTimer);trustedSaveFeedbackTimer=0;
+  button.disabled=true;button.classList.remove('saved');button.classList.add('saving');button.textContent='Saving…';$('settingsStatus').textContent='';
+  try{
+    const r=await fetch('/api/settings/trusted-domains',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({domains})});
+    if(!r.ok){const msg=(await r.text()).trim();throw new Error(msg||String(r.status));}
+    trustedSettings=await r.json();renderTrustedSettings();selectedTarget='';await refresh();
+    button.classList.remove('saving');button.classList.add('saved');button.textContent='Gespeichert ✓';button.disabled=false;
+    trustedSaveFeedbackTimer=setTimeout(()=>{button.classList.remove('saved');button.textContent=original;trustedSaveFeedbackTimer=0;},5000);
+  }catch(e){button.classList.remove('saving','saved');button.textContent=original;button.disabled=false;$('settingsStatus').textContent=e.message||'save failed';console.error(e)}
+}
 
 function openSSHLiveFeed(){const modal=$('sshLiveFeedModal'),backdrop=$('sshLiveFeedBackdrop');if(!modal||!backdrop)return;modal.classList.add('open');backdrop.classList.add('open');modal.setAttribute('aria-hidden','false');backdrop.setAttribute('aria-hidden','false');document.body.classList.add('modal-open');syncOverlayBodyLock();renderSSHLiveFeed();}
 function closeSSHLiveFeed(){const modal=$('sshLiveFeedModal'),backdrop=$('sshLiveFeedBackdrop');if(!modal||!backdrop)return;modal.classList.remove('open');backdrop.classList.remove('open');modal.setAttribute('aria-hidden','true');backdrop.setAttribute('aria-hidden','true');document.body.classList.remove('modal-open');syncOverlayBodyLock();}

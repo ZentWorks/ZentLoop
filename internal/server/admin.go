@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"zentloop/internal/config"
@@ -24,13 +25,21 @@ import (
 //go:embed web/*
 var webFS embed.FS
 
+type adminAuthFailure struct {
+	Count int
+	Last  time.Time
+}
+
 type AdminServer struct {
 	cfg   config.Config
 	store *store.Store
+
+	authMu       sync.Mutex
+	authFailures map[string]adminAuthFailure
 }
 
 func NewAdmin(cfg config.Config, st *store.Store) *AdminServer {
-	return &AdminServer{cfg: cfg, store: st}
+	return &AdminServer{cfg: cfg, store: st, authFailures: make(map[string]adminAuthFailure)}
 }
 
 func (s *AdminServer) Handler() http.Handler {
@@ -78,13 +87,73 @@ func (s *AdminServer) Handler() http.Handler {
 func (s *AdminServer) basicAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		u, p, ok := r.BasicAuth()
-		if !ok || subtleStringMismatch(u, s.cfg.AdminUser) || subtleStringMismatch(p, s.cfg.AdminPassword) {
+		valid := ok && !subtleStringMismatch(u, s.cfg.AdminUser) && !subtleStringMismatch(p, s.cfg.AdminPassword)
+		ip := remoteIP(r.RemoteAddr)
+		if !valid {
+			delay := s.recordAdminAuthFailure(ip, time.Now())
+			if delay > 0 {
+				timer := time.NewTimer(delay)
+				defer timer.Stop()
+				select {
+				case <-timer.C:
+				case <-r.Context().Done():
+					return
+				}
+			}
 			w.Header().Set("WWW-Authenticate", `Basic realm="ZentLoop Admin", charset="UTF-8"`)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
+		s.clearAdminAuthFailures(ip)
 		next.ServeHTTP(w, r)
 	})
+}
+
+func (s *AdminServer) recordAdminAuthFailure(ip string, now time.Time) time.Duration {
+	if ip == "" {
+		ip = "unknown"
+	}
+	s.authMu.Lock()
+	defer s.authMu.Unlock()
+	state := s.authFailures[ip]
+	if !state.Last.IsZero() && now.Sub(state.Last) > 10*time.Minute {
+		state.Count = 0
+	}
+	state.Count++
+	state.Last = now
+	s.authFailures[ip] = state
+	if len(s.authFailures) > 2048 {
+		for key, entry := range s.authFailures {
+			if now.Sub(entry.Last) > 10*time.Minute {
+				delete(s.authFailures, key)
+			}
+		}
+		for len(s.authFailures) > 2048 {
+			for key := range s.authFailures {
+				if key != ip {
+					delete(s.authFailures, key)
+					break
+				}
+			}
+		}
+	}
+	if state.Count <= 1 {
+		return 0
+	}
+	shift := state.Count - 2
+	if shift > 4 {
+		shift = 4
+	}
+	return time.Duration(150*(1<<shift)) * time.Millisecond
+}
+
+func (s *AdminServer) clearAdminAuthFailures(ip string) {
+	if ip == "" {
+		ip = "unknown"
+	}
+	s.authMu.Lock()
+	delete(s.authFailures, ip)
+	s.authMu.Unlock()
 }
 
 func (s *AdminServer) securityHeaders(next http.Handler) http.Handler {
@@ -267,7 +336,11 @@ func (s *AdminServer) live(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
-	ch, cancel := s.store.Subscribe()
+	ch, cancel, ok := s.store.Subscribe()
+	if !ok {
+		http.Error(w, "too many live subscribers", http.StatusTooManyRequests)
+		return
+	}
 	defer cancel()
 	fmt.Fprint(w, ": connected\n\n")
 	fl.Flush()
@@ -595,7 +668,11 @@ func (s *AdminServer) liveSSH(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
-	ch, cancel := s.store.SubscribeSSH()
+	ch, cancel, ok := s.store.SubscribeSSH()
+	if !ok {
+		http.Error(w, "too many live subscribers", http.StatusTooManyRequests)
+		return
+	}
 	defer cancel()
 	fmt.Fprint(w, ": connected\n\n")
 	fl.Flush()

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -184,7 +185,22 @@ func scoreSSHHighlight(ss model.SSHSession, events []model.SSHEvent) (model.SSHH
 	if len(outSignals) > 1 {
 		title += " + " + outSignals[1]
 	}
-	reason := strings.Join(outSignals, " · ")
+	tagLabels := map[string]string{
+		"Canary touch": "CANARY", "Payload staging": "PAYLOAD", "Persistence": "PERSISTENCE",
+		"Privilege discovery": "PRIVILEGE", "Miner behavior": "MINER", "Process control": "PROCESS",
+		"Credential hunting": "CREDENTIALS", "Shell control flow": "CONTROL-FLOW", "Multi-stage command activity": "MULTI-STAGE",
+	}
+	tags := make([]string, 0, len(outSignals))
+	for _, label := range outSignals {
+		if tag := tagLabels[label]; tag != "" {
+			tags = append(tags, tag)
+		}
+	}
+	reasonParts := []string{fmt.Sprintf("authenticated session executed %d commands and reached depth %d", ss.CommandCount, ss.Depth)}
+	if len(outSignals) > 0 {
+		reasonParts = append(reasonParts, "signals: "+strings.Join(outSignals, ", "))
+	}
+	reason := strings.Join(reasonParts, "; ")
 	rating := "notable"
 	if score >= 90 {
 		rating = "critical"
@@ -195,5 +211,5 @@ func scoreSSHHighlight(ss model.SSHSession, events []model.SSHEvent) (model.SSHH
 	if !ss.DisconnectedAt.IsZero() {
 		at = ss.DisconnectedAt
 	}
-	return model.SSHHighlight{SessionID: ss.ID, At: at, LastSeen: ss.LastSeen, IP: ss.IP, Country: ss.Country, Username: ss.Username, Score: score, Rating: rating, Title: title, Reason: reason, Commands: ss.CommandCount, DurationSeconds: ss.DurationSeconds, Depth: ss.Depth, Signals: outSignals}, true
+	return model.SSHHighlight{SessionID: ss.ID, At: at, LastSeen: ss.LastSeen, IP: ss.IP, Country: ss.Country, Username: ss.Username, Score: score, Rating: rating, Title: title, Reason: reason, Tags: tags, Commands: ss.CommandCount, DurationSeconds: ss.DurationSeconds, Depth: ss.Depth, Signals: outSignals}, true
 }

@@ -50,7 +50,7 @@ HTTP events record source IP addresses, request paths, methods, user agents and 
 
 Cross-protocol actor correlation uses the observed source IP as a correlation key. Treat it as operational attribution, not proof of a person: NAT, reverse proxies and address rotation can affect the mapping. Deterministic decoy tokens are synthetic values derived only for deception/correlation and must never be accepted by a real service.
 
-Persistent `events.jsonl`, `ssh-events.jsonl` and `intel-events.jsonl` use `ZENTLOOP_RETENTION_DAYS` with a default of 30 days and a hard 30-day maximum. Values above 30 are clamped to 30. ZentLoop compacts these logs at startup and periodically while running. Operators remain responsible for selecting any shorter retention period and for meeting the legal/privacy requirements that apply to their own deployment.
+Persistent `events.jsonl`, `ssh-events.jsonl` and `intel-events.jsonl` use `ZENTLOOP_RETENTION_DAYS` with a default of 30 days and a hard 30-day maximum. Values above 30 are clamped to 30. ZentLoop compacts these logs at startup and periodically while running. Critical aggregate storage pressure also triggers bounded tail compaction that preserves the newest complete JSONL records instead of allowing retained event files to grow indefinitely. Operators remain responsible for selecting any shorter retention period and for meeting the legal/privacy requirements that apply to their own deployment.
 
 ## Reverse-proxy integration headers
 

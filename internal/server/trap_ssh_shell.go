@@ -14,10 +14,11 @@ import (
 )
 
 const (
-	maxVirtualFiles     = 512
-	maxVirtualDirs      = 256
-	maxVirtualFileBytes = 16 * 1024
-	maxVirtualOps       = 750
+	maxVirtualFiles      = 512
+	maxVirtualDirs       = 256
+	maxVirtualFileBytes  = 16 * 1024
+	maxVirtualTotalBytes = 512 * 1024
+	maxVirtualOps        = 750
 )
 
 type virtualSSHResult struct {
@@ -1804,6 +1805,9 @@ func (w *virtualSSHWorld) setVirtualFile(target, content string) bool {
 		return false
 	}
 	stored := limitVirtualContent(content)
+	if !w.canStoreVirtualContent(target, stored) {
+		return false
+	}
 	w.files[target] = stored
 	now := w.system.snapshot().Now
 	w.fileMeta[target] = virtualFileMeta{Size: int64(len(content)), ModTime: now, Kind: inferVirtualFileKind(target, stored)}
@@ -1817,10 +1821,27 @@ func (w *virtualSSHWorld) appendVirtualFile(target, content string) bool {
 	}
 	combined := old + content
 	stored := limitVirtualContent(combined)
+	if !w.canStoreVirtualContent(target, stored) {
+		return false
+	}
 	w.files[target] = stored
 	now := w.system.snapshot().Now
 	w.fileMeta[target] = virtualFileMeta{Size: int64(len(combined)), ModTime: now, Kind: inferVirtualFileKind(target, stored)}
 	return true
+}
+
+func (w *virtualSSHWorld) canStoreVirtualContent(target, stored string) bool {
+	current := len(w.files[target])
+	total := w.virtualStorageBytes() - current + len(stored)
+	return total <= maxVirtualTotalBytes
+}
+
+func (w *virtualSSHWorld) virtualStorageBytes() int {
+	total := 0
+	for _, v := range w.files {
+		total += len(v)
+	}
+	return total
 }
 
 func (w *virtualSSHWorld) deleteVirtualFile(target string) {

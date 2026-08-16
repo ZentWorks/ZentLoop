@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -16,9 +17,13 @@ import (
 )
 
 const (
-	maxRing     = 5000
-	maxPathKeys = 5000
-	maxSessions = 10000
+	maxRing                        = 5000
+	maxPathKeys                    = 5000
+	maxSessions                    = 10000
+	maxLiveSubscribers             = 24
+	storagePressureWarnBytes       = 32 << 20
+	storagePressureCritBytes       = 128 << 20
+	storagePressureTargetFileBytes = 32 << 20
 )
 
 type Store struct {
@@ -75,6 +80,10 @@ type Store struct {
 	retentionDone         chan struct{}
 }
 
+func eventStorageBytes(dataDir string) int64 {
+	return fileSize(filepath.Join(dataDir, "events.jsonl")) + fileSize(filepath.Join(dataDir, "ssh-events.jsonl")) + fileSize(filepath.Join(dataDir, "intel-events.jsonl"))
+}
+
 func New(dataDir string) (*Store, error) {
 	return NewWithRetention(dataDir, 30)
 }
@@ -107,6 +116,14 @@ func NewWithRetention(dataDir string, retentionDays int) (*Store, error) {
 	}
 	if err := pruneJSONLPaths(dataDir, retentionDays, time.Now()); err != nil {
 		return nil, err
+	}
+	if eventStorageBytes(dataDir) >= storagePressureCritBytes {
+		for _, name := range []string{"events.jsonl", "ssh-events.jsonl", "intel-events.jsonl"} {
+			if err := compactJSONLTail(filepath.Join(dataDir, name), storagePressureTargetFileBytes, nil); err != nil {
+				return nil, fmt.Errorf("startup storage pressure compact %s: %w", name, err)
+			}
+		}
+		s.health.StorageCompactions++
 	}
 	path := filepath.Join(dataDir, "events.jsonl")
 	if err := s.load(path); err != nil {
@@ -778,9 +795,14 @@ func (s *Store) HistoryView(inactiveFor time.Duration, limit int, target ...stri
 	return rows
 }
 
-func (s *Store) Subscribe() (<-chan model.Event, func()) {
+func (s *Store) Subscribe() (<-chan model.Event, func(), bool) {
 	ch := make(chan model.Event, 64)
 	s.mu.Lock()
+	if len(s.subs) >= maxLiveSubscribers {
+		s.health.LiveSubscriberRejected++
+		s.mu.Unlock()
+		return nil, func() {}, false
+	}
 	s.subs[ch] = struct{}{}
 	s.mu.Unlock()
 	cancel := func() {
@@ -791,7 +813,7 @@ func (s *Store) Subscribe() (<-chan model.Event, func()) {
 		}
 		s.mu.Unlock()
 	}
-	return ch, cancel
+	return ch, cancel, true
 }
 
 func inRange(t, from, to time.Time) bool {

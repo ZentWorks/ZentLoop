@@ -109,6 +109,9 @@
         <article class="metric"><span>GUARD HITS</span><strong id="healthGuardHits">0</strong><small>budget / recursion / VFS</small></article>
         <article class="metric ok"><span>EVENT STORAGE</span><strong id="healthStorage">0 B</strong><small>HTTP + SSH + intel</small></article>
         <article class="metric"><span>IN-MEMORY EVENTS</span><strong id="healthMemoryEvents">0</strong><small>bounded rings</small></article>
+        <article class="metric"><span>STORAGE PRESSURE</span><strong id="healthStoragePressure">NORMAL</strong><small id="healthStorageBudget">warn at 32 MB</small></article>
+        <article class="metric"><span>LIVE STREAMS</span><strong id="healthLiveSubscribers">0 / 0</strong><small id="healthLiveSubscribersNote">web + ssh subscribers</small></article>
+        <article class="metric"><span>STREAM SHED</span><strong id="healthLiveRejected">0</strong><small>new SSE viewers rejected</small></article>
       </section>
     </section>
 
@@ -258,7 +261,7 @@
       <label for="trustedDomainsInput">Manual trusted domains</label>
       <textarea id="trustedDomainsInput" rows="9" spellcheck="false" placeholder="example.com
 example.net"></textarea>
-      <small class="settings-hint">Example: <b>example.com</b> trusts example.com, www.example.com, api.example.com, etc.</small>
+      <small class="settings-hint">Enter one root domain per line. Subdomains are trusted automatically.</small>
       <div class="settings-proxy-title"><b>Proxy-trusted targets</b><span>signed non-catch-all upstream routes · read only</span></div>
       <div id="proxyTrustedDomains" class="trusted-domain-list"><small>No proxy-trusted targets yet.</small></div>
       <div class="settings-actions"><span id="settingsStatus"></span><button id="saveSettings" type="button">Save trusted domains</button></div>
@@ -276,6 +279,7 @@ example.net"></textarea>
       <div class="help-block"><h3>Integration / Proxy</h3><p>When ZentLoop is used behind a compatible proxy or upstream integration, the original public target and visitor information can be preserved. Verified, explicit proxy routes may also provide trusted targets automatically.</p></div>
       <div class="help-block"><h3>Web Sessions</h3><p>Shows activity against the Web Traps, including the requested paths and how far a visitor follows the presented breadcrumbs.</p></div>
       <div class="help-block"><h3>SSH Sessions</h3><p>Shows SSH login attempts, commands and movement through the virtual SSH environment and its deception paths.</p></div>
+      <div class="help-block"><h3>Self Protection</h3><p>These counters show when ZentLoop protects itself instead of serving unlimited work, for example by shedding excess live viewers, limiting SSH abuse or warning when retained storage grows unusually high.</p></div>
       <div class="help-grid">
         <div><b>Risk</b><span>How suspicious or aggressive the observed session currently appears.</span></div>
         <div><b>Actor</b><span>ZentLoop's behavioral classification of the visitor, such as automated or human-like activity.</span></div>

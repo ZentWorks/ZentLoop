@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/x509"
+	"encoding/binary"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 
@@ -20,11 +22,20 @@ import (
 	"zentloop/internal/tui"
 )
 
+const (
+	adminSSHHandshakeTimeout = 20 * time.Second
+	adminSSHMaxConcurrent    = 6
+	adminSSHMaxPerIP         = 2
+)
+
 // AdminSSH exposes only the ZentLoop live TUI over SSH. It intentionally does
 // not provide a shell, command execution, subsystems or forwarding.
 type AdminSSH struct {
 	listener net.Listener
 	config   *ssh.ServerConfig
+	sem      chan struct{}
+	mu       sync.Mutex
+	perIP    map[string]int
 	close    sync.Once
 }
 
@@ -67,7 +78,7 @@ func NewAdminSSH(cfg config.Config) (*AdminSSH, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &AdminSSH{listener: ln, config: sshCfg}, nil
+	return &AdminSSH{listener: ln, config: sshCfg, sem: make(chan struct{}, adminSSHMaxConcurrent), perIP: make(map[string]int)}, nil
 }
 
 func (s *AdminSSH) Addr() net.Addr {
@@ -83,7 +94,7 @@ func (s *AdminSSH) Serve() error {
 			}
 			return err
 		}
-		go s.handleConn(conn)
+		go s.acceptConn(conn)
 	}
 }
 
@@ -93,13 +104,52 @@ func (s *AdminSSH) Close() error {
 	return err
 }
 
+func (s *AdminSSH) acceptConn(conn net.Conn) {
+	ip := remoteIP(conn.RemoteAddr().String())
+	select {
+	case s.sem <- struct{}{}:
+		defer func() { <-s.sem }()
+	default:
+		_ = conn.Close()
+		return
+	}
+	if !s.acquireIP(ip) {
+		_ = conn.Close()
+		return
+	}
+	defer s.releaseIP(ip)
+	s.handleConn(conn)
+}
+
+func (s *AdminSSH) acquireIP(ip string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.perIP[ip] >= adminSSHMaxPerIP {
+		return false
+	}
+	s.perIP[ip]++
+	return true
+}
+
+func (s *AdminSSH) releaseIP(ip string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.perIP[ip] <= 1 {
+		delete(s.perIP, ip)
+		return
+	}
+	s.perIP[ip]--
+}
+
 func (s *AdminSSH) handleConn(conn net.Conn) {
 	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(adminSSHHandshakeTimeout))
 
 	serverConn, channels, requests, err := ssh.NewServerConn(conn, s.config)
 	if err != nil {
 		return
 	}
+	_ = conn.SetDeadline(time.Time{})
 	defer serverConn.Close()
 	log.Printf("ZentLoop admin SSH authenticated from %s", serverConn.RemoteAddr())
 
@@ -121,6 +171,7 @@ func handleAdminSSHSession(channel ssh.Channel, requests <-chan *ssh.Request) {
 	defer channel.Close()
 	started := false
 	done := make(chan struct{})
+	resize := make(chan tui.Resize, 4)
 
 	for {
 		select {
@@ -129,7 +180,15 @@ func handleAdminSSHSession(channel ssh.Channel, requests <-chan *ssh.Request) {
 				return
 			}
 			switch req.Type {
-			case "pty-req", "window-change":
+			case "pty-req":
+				if cols, rows, ok := parsePTYPayload(req.Payload); ok {
+					nonBlockingResize(resize, tui.Resize{Cols: cols, Rows: rows})
+				}
+				replySSHRequest(req, true)
+			case "window-change":
+				if cols, rows, ok := parseWindowChangePayload(req.Payload); ok {
+					nonBlockingResize(resize, tui.Resize{Cols: cols, Rows: rows})
+				}
 				replySSHRequest(req, true)
 			case "shell":
 				if started {
@@ -139,7 +198,7 @@ func handleAdminSSHSession(channel ssh.Channel, requests <-chan *ssh.Request) {
 				started = true
 				replySSHRequest(req, true)
 				go func() {
-					if err := tui.RunRemote(nil, channel, channel); err != nil {
+					if err := tui.RunRemoteSized(nil, channel, channel, resize); err != nil {
 						_, _ = fmt.Fprintf(channel.Stderr(), "ZentLoop top: %v\r\n", err)
 					}
 					_, _ = channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{0}))
@@ -152,6 +211,56 @@ func handleAdminSSHSession(channel ssh.Channel, requests <-chan *ssh.Request) {
 			return
 		}
 	}
+}
+
+func nonBlockingResize(ch chan tui.Resize, size tui.Resize) {
+	select {
+	case ch <- size:
+	default:
+		select {
+		case <-ch:
+		default:
+		}
+		select {
+		case ch <- size:
+		default:
+		}
+	}
+}
+
+func parsePTYPayload(payload []byte) (int, int, bool) {
+	if len(payload) < 4 {
+		return 0, 0, false
+	}
+	termLen := int(binary.BigEndian.Uint32(payload[:4]))
+	off := 4 + termLen
+	if len(payload) < off+8 {
+		return 0, 0, false
+	}
+	cols := int(binary.BigEndian.Uint32(payload[off : off+4]))
+	rows := int(binary.BigEndian.Uint32(payload[off+4 : off+8]))
+	if cols <= 0 {
+		cols = 80
+	}
+	if rows <= 0 {
+		rows = 24
+	}
+	return cols, rows, true
+}
+
+func parseWindowChangePayload(payload []byte) (int, int, bool) {
+	if len(payload) < 8 {
+		return 0, 0, false
+	}
+	cols := int(binary.BigEndian.Uint32(payload[:4]))
+	rows := int(binary.BigEndian.Uint32(payload[4:8]))
+	if cols <= 0 {
+		cols = 80
+	}
+	if rows <= 0 {
+		rows = 24
+	}
+	return cols, rows, true
 }
 
 func replySSHRequest(req *ssh.Request, ok bool) {

@@ -21,25 +21,46 @@ import (
 // shell, executes attacker commands, opens outbound network connections or
 // exposes the container filesystem. Every accepted session lives in an
 // in-memory virtual world owned by that SSH channel.
+const defaultSSHAuthTimeout = 60 * time.Second
+
 type TrapSSH struct {
-	cfg      config.Config
-	store    *store.Store
-	listener net.Listener
-	signer   ssh.Signer
-	geo      *geoResolver
-	system   *virtualSSHSystem
-	sem      chan struct{}
-	mu       sync.Mutex
-	perIP    map[string]int
-	close    sync.Once
+	cfg         config.Config
+	store       *store.Store
+	listener    net.Listener
+	signer      ssh.Signer
+	geo         *geoResolver
+	system      *virtualSSHSystem
+	sem         chan struct{}
+	mu          sync.Mutex
+	perIP       map[string]int
+	close       sync.Once
+	authTimeout time.Duration
 }
 
 type sshAuthState struct {
-	sessionID     string
-	ip            string
-	country       string
-	countrySource string
-	attempts      int
+	sessionID                   string
+	ip                          string
+	country                     string
+	countrySource               string
+	credentialAttempts          int
+	passwordAttempts            int
+	keyboardInteractiveAttempts int
+	publicKeyAttempts           int
+}
+
+func (a *sshAuthState) nextCredentialAttempt(method string) int {
+	switch method {
+	case "password":
+		a.passwordAttempts++
+	case "keyboard-interactive":
+		a.keyboardInteractiveAttempts++
+	}
+	a.credentialAttempts++
+	return a.credentialAttempts
+}
+
+func (a *sshAuthState) notePublicKeyAttempt() {
+	a.publicKeyAttempts++
 }
 
 func NewTrapSSH(cfg config.Config, st *store.Store) (*TrapSSH, error) {
@@ -53,7 +74,7 @@ func NewTrapSSH(cfg config.Config, st *store.Store) (*TrapSSH, error) {
 	}
 	return &TrapSSH{
 		cfg: cfg, store: st, listener: ln, signer: signer, geo: newGeoResolver(cfg.GeoIPDB), system: loadVirtualSSHSystem(cfg.DataDir),
-		sem: make(chan struct{}, cfg.SSHMaxConcurrent), perIP: make(map[string]int),
+		sem: make(chan struct{}, cfg.SSHMaxConcurrent), perIP: make(map[string]int), authTimeout: defaultSSHAuthTimeout,
 	}, nil
 }
 
@@ -126,7 +147,9 @@ func (s *TrapSSH) releaseIP(ip string) {
 
 func (s *TrapSSH) handleConn(conn net.Conn, auth sshAuthState) {
 	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(12 * time.Second))
+	// Keep half-open/slow handshakes bounded without cutting off realistic human
+	// password retries. The deadline is cleared immediately after authentication.
+	_ = conn.SetDeadline(time.Now().Add(s.authTimeout))
 
 	algorithms := ssh.SupportedAlgorithms()
 	sshCfg := &ssh.ServerConfig{
@@ -137,11 +160,11 @@ func (s *TrapSSH) handleConn(conn net.Conn, auth sshAuthState) {
 	}
 	sshCfg.AddHostKey(s.signer)
 	sshCfg.PasswordCallback = func(meta ssh.ConnMetadata, password []byte) (*ssh.Permissions, error) {
-		auth.attempts++
+		attempt := auth.nextCredentialAttempt("password")
 		user := cleanSSHField(meta.User(), 64)
 		client := cleanSSHField(string(meta.ClientVersion()), 128)
-		accept := shouldAcceptTrapPassword(auth.ip, user, password, auth.attempts, s.cfg.SSHMaxAuthTries)
-		if !accept && shouldAcceptRecurringProbe(s.store.SSHRecurrence(auth.ip, time.Now()), auth.ip, user, password, auth.attempts) {
+		accept := shouldAcceptTrapPassword(auth.ip, user, password, attempt, s.cfg.SSHMaxAuthTries)
+		if !accept && shouldAcceptRecurringProbe(s.store.SSHRecurrence(auth.ip, time.Now()), auth.ip, user, password, attempt) {
 			accept = true
 		}
 		s.recordSSHAuth(auth, client, user, "password", accept, len(password), "")
@@ -151,7 +174,7 @@ func (s *TrapSSH) handleConn(conn net.Conn, auth sshAuthState) {
 		return nil, errors.New("permission denied")
 	}
 	sshCfg.PublicKeyCallback = func(meta ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
-		auth.attempts++
+		auth.notePublicKeyAttempt()
 		user := cleanSSHField(meta.User(), 64)
 		client := cleanSSHField(string(meta.ClientVersion()), 128)
 		fingerprint := ssh.FingerprintSHA256(key)
@@ -159,7 +182,7 @@ func (s *TrapSSH) handleConn(conn net.Conn, auth sshAuthState) {
 		return nil, errors.New("permission denied")
 	}
 	sshCfg.KeyboardInteractiveCallback = func(meta ssh.ConnMetadata, challenge ssh.KeyboardInteractiveChallenge) (*ssh.Permissions, error) {
-		auth.attempts++
+		attempt := auth.nextCredentialAttempt("keyboard-interactive")
 		user := cleanSSHField(meta.User(), 64)
 		client := cleanSSHField(string(meta.ClientVersion()), 128)
 		answers, err := challenge("", "Password authentication", []string{"Password: "}, []bool{false})
@@ -168,8 +191,8 @@ func (s *TrapSSH) handleConn(conn net.Conn, auth sshAuthState) {
 			return nil, errors.New("permission denied")
 		}
 		password := []byte(answers[0])
-		accept := shouldAcceptTrapPassword(auth.ip, user, password, auth.attempts, s.cfg.SSHMaxAuthTries)
-		if !accept && shouldAcceptRecurringProbe(s.store.SSHRecurrence(auth.ip, time.Now()), auth.ip, user, password, auth.attempts) {
+		accept := shouldAcceptTrapPassword(auth.ip, user, password, attempt, s.cfg.SSHMaxAuthTries)
+		if !accept && shouldAcceptRecurringProbe(s.store.SSHRecurrence(auth.ip, time.Now()), auth.ip, user, password, attempt) {
 			accept = true
 		}
 		s.recordSSHAuth(auth, client, user, "keyboard-interactive", accept, len(password), "")

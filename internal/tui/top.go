@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -19,6 +20,11 @@ import (
 type client struct {
 	base, user, password string
 	http                 *http.Client
+}
+
+type Resize struct {
+	Cols int
+	Rows int
 }
 
 func Run(args []string) error {
@@ -35,7 +41,7 @@ func Run(args []string) error {
 		case <-done:
 		}
 	}()
-	err := run(args, os.Stdin, os.Stdout, quit)
+	err := run(args, os.Stdin, os.Stdout, quit, nil)
 	close(done)
 	return err
 }
@@ -43,11 +49,16 @@ func Run(args []string) error {
 // RunRemote renders the same live TUI over an arbitrary interactive stream,
 // such as an SSH session. q/Q, Ctrl+C or EOF closes the remote view.
 func RunRemote(args []string, in io.Reader, out io.Writer) error {
-	quit := make(chan struct{}, 1)
-	return run(args, in, out, quit)
+	return RunRemoteSized(args, in, out, nil)
 }
 
-func run(args []string, in io.Reader, out io.Writer, quit chan struct{}) error {
+// RunRemoteSized renders the live TUI and listens for PTY/window resize hints.
+func RunRemoteSized(args []string, in io.Reader, out io.Writer, resize <-chan Resize) error {
+	quit := make(chan struct{}, 1)
+	return run(args, in, out, quit, resize)
+}
+
+func run(args []string, in io.Reader, out io.Writer, quit chan struct{}, resize <-chan Resize) error {
 	fs := flag.NewFlagSet("top", flag.ContinueOnError)
 	url := fs.String("url", env("ZENTLOOP_TOP_URL", "http://127.0.0.1:9090"), "admin API URL")
 	user := fs.String("user", env("ZENTLOOP_ADMIN_USER", "admin"), "admin user")
@@ -63,17 +74,33 @@ func run(args []string, in io.Reader, out io.Writer, quit chan struct{}) error {
 	c := &client{base: strings.TrimRight(*url, "/"), user: *user, password: *pass, http: &http.Client{Timeout: 4 * time.Second}}
 	go readQuit(in, quit)
 
+	width := initialWidth()
+	if resize != nil {
+		select {
+		case sz := <-resize:
+			if sz.Cols > 0 {
+				width = sz.Cols
+			}
+		default:
+		}
+	}
+
 	t := time.NewTicker(*interval)
 	defer t.Stop()
 	_, _ = fmt.Fprint(out, "\x1b[?25l")
 	defer fmt.Fprint(out, "\x1b[?25h\x1b[0m\r\n")
 
 	for {
-		if err := draw(c, out); err != nil {
+		if err := draw(c, out, width); err != nil {
 			_, _ = fmt.Fprintf(out, "\x1b[2J\x1b[H ZentLoop top\r\n\r\n error: %v\r\n", err)
 		}
 		select {
 		case <-t.C:
+			continue
+		case sz := <-resize:
+			if sz.Cols > 0 {
+				width = sz.Cols
+			}
 			continue
 		case <-quit:
 			return nil
@@ -103,7 +130,7 @@ func requestQuit(quit chan struct{}) {
 	}
 }
 
-func draw(c *client, out io.Writer) error {
+func draw(c *client, out io.Writer, width int) error {
 	var o model.Overview
 	var sessions []model.Session
 	var events []model.Event
@@ -138,47 +165,75 @@ func draw(c *client, out io.Writer) error {
 		}
 		return sessions[i].RiskScore > sessions[j].RiskScore
 	})
+
 	_, _ = fmt.Fprint(out, "\x1b[2J\x1b[H")
 	_, _ = fmt.Fprintf(out, " \x1b[1;33m⬡ ZentLoop top\x1b[0m   %s   \x1b[31m● LIVE\x1b[0m\r\n", time.Now().Format("2006-01-02 15:04:05"))
-	_, _ = fmt.Fprint(out, " ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\r\n")
+	_, _ = fmt.Fprintf(out, " %s\r\n", strings.Repeat("─", maxInt(24, minInt(width-2, 118))))
 	_, _ = fmt.Fprintf(out, " ACTIVE %-5d  \x1b[31mHOSTILE %-5d\x1b[0m  \x1b[33mSUSPICIOUS %-5d\x1b[0m  \x1b[32mBENIGN %-5d\x1b[0m  REQ/s %-7.1f  TODAY %-9d  LOOPS %-5d\r\n", o.ActiveSessions, o.Hostile, o.Suspicious, o.Benign, o.RequestsPerSec, o.RequestsToday, o.LoopsTotal)
-	_, _ = fmt.Fprintf(out, " ACTOR  automated %-5d  human %-5d  unknown %-5d     avg depth %.1f     uptime %s\r\n", o.Automated, o.Human, o.Unknown, o.AvgDepth, fmtDuration(time.Duration(o.UptimeSeconds)*time.Second))
+	_, _ = fmt.Fprintf(out, " ACTOR automated %-5d  human %-5d  unknown %-5d   avg depth %.1f   uptime %s\r\n", o.Automated, o.Human, o.Unknown, o.AvgDepth, fmtDuration(time.Duration(o.UptimeSeconds)*time.Second))
 	sshState := "OFF"
 	if sshOverview.Enabled {
 		sshState = "ON"
 	}
-	_, _ = fmt.Fprintf(out, " SSH %-3s  active %-4d  conn today %-6d  auth today %-6d  shells %-6d  commands today %-7d  avg depth %.1f\r\n", sshState, sshOverview.ActiveSessions, sshOverview.ConnectionsToday, sshOverview.AuthAttemptsToday, sshOverview.ShellsToday, sshOverview.CommandsToday, sshOverview.AvgDepth)
+	_, _ = fmt.Fprintf(out, " SSH %-3s active %-4d  conn today %-6d  auth today %-6d  shells %-6d  commands today %-7d\r\n", sshState, sshOverview.ActiveSessions, sshOverview.ConnectionsToday, sshOverview.AuthAttemptsToday, sshOverview.ShellsToday, sshOverview.CommandsToday)
 	_, _ = fmt.Fprintf(out, " TRACK actors %-5d cross %-5d engaged %-8s canary %-5d payload %-5d\r\n", actorOverview.ActorsTotal, actorOverview.CrossProtocol, fmtDuration(time.Duration(actorOverview.EngagementSeconds)*time.Second), actorOverview.CanaryTouches, actorOverview.PayloadAttempts)
 	guardHits := health.SSHCommandBudgetHits + health.SSHVirtualStorageHits + health.SSHRecursionGuardHits
 	sshShed := health.SSHRejectedGlobal + health.SSHRejectedPerIP
-	storage := health.EventsBytes + health.SSHEventsBytes + health.IntelEventsBytes
-	_, _ = fmt.Fprintf(out, " GUARD http shed %-5d ssh shed %-5d guard hits %-5d storage %-9s mem events %-7d\r\n", health.HTTPRejected, sshShed, guardHits, fmtBytes(storage), health.HTTPEventsInMemory+health.SSHEventsInMemory+health.IntelEventsInMemory)
+	_, _ = fmt.Fprintf(out, " GUARD http shed %-5d ssh shed %-5d guard hits %-5d storage %-9s live SSE %d/%d ssh SSE %d/%d\r\n", health.HTTPRejected, sshShed, guardHits, fmtBytes(health.StorageTotalBytes), health.LiveSubscribers, health.LiveSubscriberLimit, health.SSHLiveSubscribers, health.LiveSubscriberLimit)
+	_, _ = fmt.Fprintf(out, " HEALTH storage %-8s stream rejects %-5d\r\n", strings.ToUpper(health.StoragePressure), health.LiveSubscriberRejected)
+
+	renderWebSessions(out, width, sessions)
+	renderSSHSessions(out, width, sshSessions)
+	renderLiveEvents(out, width, sessions, events)
+	_, _ = fmt.Fprint(out, "\r\n q / Ctrl+C quit  ·  detailed analysis: web admin\r\n")
+	return nil
+}
+
+func renderWebSessions(out io.Writer, width int, sessions []model.Session) {
 	_, _ = fmt.Fprint(out, "\r\n \x1b[1mWEB SESSIONS\x1b[0m\r\n")
-	_, _ = fmt.Fprint(out, " LAST     TARGET                 IP                     CC   VIA      RISK  ACTOR       AUTO  REQ    D  L  F  CURRENT\r\n")
-	_, _ = fmt.Fprint(out, " ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\r\n")
-	for i, s := range sessions {
-		if i >= 12 {
-			break
+	switch {
+	case width >= 150:
+		_, _ = fmt.Fprint(out, " LAST     TARGET                 IP                     CC   VIA      RISK  ACTOR       AUTO  REQ    D  L  F  CURRENT\r\n")
+		_, _ = fmt.Fprintf(out, " %s\r\n", strings.Repeat("─", 118))
+		for i, s := range sessions {
+			if i >= 12 {
+				break
+			}
+			risk := formatRisk(s.RiskScore)
+			target := displayTarget(s)
+			_, _ = fmt.Fprintf(out, " %-8s %-22s %-22s %-4s %-8s %s  %-11s %3d%%  %-5d %2d %2d %2d %-45s\r\n", ago(s.LastSeen), clip(target, 22), clip(s.IP, 22), clip(s.Country, 4), clip(networkLabel(s), 8), risk, clip(string(s.Actor), 11), s.AutomationScore, s.RequestCount, s.Depth, s.Loop, s.Frustration, clip(s.CurrentPath, 45))
 		}
-		risk := fmt.Sprintf("%3d", s.RiskScore)
-		if s.RiskScore >= 60 {
-			risk = "\x1b[31m" + risk + "\x1b[0m"
-		} else if s.RiskScore >= 30 {
-			risk = "\x1b[33m" + risk + "\x1b[0m"
+	case width >= 110:
+		_, _ = fmt.Fprint(out, " LAST     TARGET                 IP                 CC   RISK  ACTOR       REQ  CURRENT\r\n")
+		_, _ = fmt.Fprintf(out, " %s\r\n", strings.Repeat("─", 96))
+		for i, s := range sessions {
+			if i >= 10 {
+				break
+			}
+			risk := formatRisk(s.RiskScore)
+			_, _ = fmt.Fprintf(out, " %-8s %-22s %-18s %-4s %s  %-11s %-4d %-28s\r\n", ago(s.LastSeen), clip(displayTarget(s), 22), clip(s.IP, 18), clip(s.Country, 4), risk, clip(string(s.Actor), 11), s.RequestCount, clip(s.CurrentPath, 28))
 		}
-		target := s.Target
-		if target == "" && s.RequestHost != "" {
-			target = "(" + s.RequestHost + ")"
+	default:
+		_, _ = fmt.Fprint(out, " LAST     TARGET             IP               REQ  CURRENT\r\n")
+		_, _ = fmt.Fprintf(out, " %s\r\n", strings.Repeat("─", 72))
+		for i, s := range sessions {
+			if i >= 8 {
+				break
+			}
+			_, _ = fmt.Fprintf(out, " %-8s %-18s %-16s %-4d %-20s\r\n", ago(s.LastSeen), clip(displayTarget(s), 18), clip(s.IP, 16), s.RequestCount, clip(s.CurrentPath, 20))
 		}
-		if target == "" {
-			target = "—"
-		}
-		_, _ = fmt.Fprintf(out, " %-8s %-22s %-22s %-4s %-8s %s  %-11s %3d%%  %-5d %2d %2d %2d %-45s\r\n", ago(s.LastSeen), clip(target, 22), clip(s.IP, 22), clip(s.Country, 4), clip(networkLabel(s), 8), risk, clip(string(s.Actor), 11), s.AutomationScore, s.RequestCount, s.Depth, s.Loop, s.Frustration, clip(s.CurrentPath, 45))
 	}
-	if len(sshSessions) > 0 {
-		_, _ = fmt.Fprint(out, "\r\n \x1b[1mSSH SESSIONS\x1b[0m\r\n")
+}
+
+func renderSSHSessions(out io.Writer, width int, sshSessions []model.SSHSession) {
+	if len(sshSessions) == 0 {
+		return
+	}
+	_, _ = fmt.Fprint(out, "\r\n \x1b[1mSSH SESSIONS\x1b[0m\r\n")
+	switch {
+	case width >= 140:
 		_, _ = fmt.Fprint(out, " LAST     IP                     CC   USER             CLIENT                 CMD   D  CURRENT\r\n")
-		_, _ = fmt.Fprint(out, " ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\r\n")
+		_, _ = fmt.Fprintf(out, " %s\r\n", strings.Repeat("─", 108))
 		for i, ss := range sshSessions {
 			if i >= 6 {
 				break
@@ -193,11 +248,44 @@ func draw(c *client, out io.Writer) error {
 			}
 			_, _ = fmt.Fprintf(out, " %-8s %-22s %-4s %-16s %-22s %-5d %2d %-45s\r\n", ago(ss.LastSeen), clip(ss.IP, 22), clip(ss.Country, 4), clip(ss.Username, 16), clip(ss.ClientVersion, 22), ss.CommandCount, ss.Depth, clip(ss.CurrentCommand, 45))
 		}
+	case width >= 100:
+		_, _ = fmt.Fprint(out, " LAST     IP                 USER           CMD   D  CURRENT\r\n")
+		_, _ = fmt.Fprintf(out, " %s\r\n", strings.Repeat("─", 78))
+		for i, ss := range sshSessions {
+			if i >= 6 {
+				break
+			}
+			current := ss.CurrentCommand
+			if !ss.Active {
+				current = ss.LastAction
+			}
+			_, _ = fmt.Fprintf(out, " %-8s %-18s %-14s %-5d %2d %-24s\r\n", ago(ss.LastSeen), clip(ss.IP, 18), clip(ss.Username, 14), ss.CommandCount, ss.Depth, clip(current, 24))
+		}
+	default:
+		_, _ = fmt.Fprint(out, " LAST     IP               USER         CURRENT\r\n")
+		_, _ = fmt.Fprintf(out, " %s\r\n", strings.Repeat("─", 58))
+		for i, ss := range sshSessions {
+			if i >= 5 {
+				break
+			}
+			current := ss.CurrentCommand
+			if !ss.Active {
+				current = ss.LastAction
+			}
+			_, _ = fmt.Fprintf(out, " %-8s %-16s %-12s %-18s\r\n", ago(ss.LastSeen), clip(ss.IP, 16), clip(ss.Username, 12), clip(current, 18))
+		}
 	}
+}
 
+func renderLiveEvents(out io.Writer, width int, sessions []model.Session, events []model.Event) {
 	_, _ = fmt.Fprint(out, "\r\n \x1b[1mLIVE EVENTS\x1b[0m\r\n")
-	_, _ = fmt.Fprint(out, " TIME      IP                     METHOD STATUS RISK  PATH\r\n")
-	_, _ = fmt.Fprint(out, " ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\r\n")
+	if width >= 100 {
+		_, _ = fmt.Fprint(out, " TIME      IP                     METHOD STATUS RISK  PATH\r\n")
+		_, _ = fmt.Fprintf(out, " %s\r\n", strings.Repeat("─", 96))
+	} else {
+		_, _ = fmt.Fprint(out, " TIME      IP               STATUS PATH\r\n")
+		_, _ = fmt.Fprintf(out, " %s\r\n", strings.Repeat("─", 60))
+	}
 	activeSessionIDs := make(map[string]struct{}, len(sessions))
 	for _, s := range sessions {
 		activeSessionIDs[s.ID] = struct{}{}
@@ -210,17 +298,45 @@ func draw(c *client, out io.Writer) error {
 		if shown >= 10 {
 			break
 		}
-		risk := fmt.Sprintf("%3d", e.RiskScore)
-		if e.RiskScore >= 60 {
-			risk = "\x1b[31m" + risk + "\x1b[0m"
-		} else if e.RiskScore >= 30 {
-			risk = "\x1b[33m" + risk + "\x1b[0m"
+		if width >= 100 {
+			risk := formatRisk(e.RiskScore)
+			_, _ = fmt.Fprintf(out, " %-9s %-22s %-6s %3d    %s  %-56s\r\n", e.At.Local().Format("15:04:05"), clip(e.IP, 22), clip(e.Method, 6), e.Status, risk, clip(e.Path, 56))
+		} else {
+			_, _ = fmt.Fprintf(out, " %-9s %-16s %-6d %-24s\r\n", e.At.Local().Format("15:04:05"), clip(e.IP, 16), e.Status, clip(e.Path, 24))
 		}
-		_, _ = fmt.Fprintf(out, " %-9s %-22s %-6s %3d    %s  %-56s\r\n", e.At.Local().Format("15:04:05"), clip(e.IP, 22), clip(e.Method, 6), e.Status, risk, clip(e.Path, 56))
 		shown++
 	}
-	_, _ = fmt.Fprint(out, "\r\n q / Ctrl+C quit  ·  detailed analysis: web admin\r\n")
-	return nil
+}
+
+func displayTarget(s model.Session) string {
+	target := s.Target
+	if target == "" && s.RequestHost != "" {
+		target = "(" + s.RequestHost + ")"
+	}
+	if target == "" {
+		target = "—"
+	}
+	return target
+}
+
+func formatRisk(v int) string {
+	risk := fmt.Sprintf("%3d", v)
+	if v >= 60 {
+		return "\x1b[31m" + risk + "\x1b[0m"
+	}
+	if v >= 30 {
+		return "\x1b[33m" + risk + "\x1b[0m"
+	}
+	return risk
+}
+
+func initialWidth() int {
+	if v := strings.TrimSpace(os.Getenv("COLUMNS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 60 {
+			return n
+		}
+	}
+	return 120
 }
 
 func (c *client) get(path string, out any) error {
@@ -322,4 +438,18 @@ func env(k, d string) string {
 		return v
 	}
 	return d
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }

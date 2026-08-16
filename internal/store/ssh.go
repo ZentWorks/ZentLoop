@@ -432,9 +432,14 @@ func (s *Store) SSHSessionExport(id, version string) (model.SSHSessionExport, bo
 	return model.SSHSessionExport{ExportedAt: time.Now().UTC(), Version: version, Session: cloneSSHSession(ss), Events: events, Actor: actor, Intel: intel}, true
 }
 
-func (s *Store) SubscribeSSH() (<-chan model.SSHEvent, func()) {
+func (s *Store) SubscribeSSH() (<-chan model.SSHEvent, func(), bool) {
 	ch := make(chan model.SSHEvent, 64)
 	s.mu.Lock()
+	if len(s.sshSubs) >= maxLiveSubscribers {
+		s.health.LiveSubscriberRejected++
+		s.mu.Unlock()
+		return nil, func() {}, false
+	}
 	s.sshSubs[ch] = struct{}{}
 	s.mu.Unlock()
 	cancel := func() {
@@ -445,7 +450,7 @@ func (s *Store) SubscribeSSH() (<-chan model.SSHEvent, func()) {
 		}
 		s.mu.Unlock()
 	}
-	return ch, cancel
+	return ch, cancel, true
 }
 
 func (s *Store) SSHOverviewRange(enabled bool, from, to time.Time) model.SSHOverview {
