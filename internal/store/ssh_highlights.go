@@ -17,6 +17,10 @@ type sshHighlightBuild struct {
 }
 
 func (s *Store) SSHHighlights(limit int, before time.Time, beforeID, rating string) model.SSHHighlightPage {
+	return s.SSHHighlightsRange(limit, before, beforeID, rating, time.Time{}, time.Time{})
+}
+
+func (s *Store) SSHHighlightsRange(limit int, before time.Time, beforeID, rating string, from, to time.Time) model.SSHHighlightPage {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if limit <= 0 {
@@ -44,6 +48,12 @@ func (s *Store) SSHHighlights(limit int, before time.Time, beforeID, rating stri
 			if h.At.After(before) || (h.At.Equal(before) && (beforeID == "" || h.SessionID >= beforeID)) {
 				continue
 			}
+		}
+		if !from.IsZero() && h.At.Before(from) {
+			continue
+		}
+		if !to.IsZero() && !h.At.Before(to) {
+			continue
 		}
 		if rating != "" && rating != "all" && h.Rating != rating {
 			continue
@@ -95,7 +105,10 @@ func scoreSSHHighlight(ss model.SSHSession, events []model.SSHEvent) (model.SSHH
 		if strings.Contains(fp, "privilege") || fam == "privilege" || strings.Contains(cmd, "sudo -l") {
 			signals["privilege"] = true
 		}
-		if strings.Contains(fp, "persistence") || fam == "persistence" || strings.Contains(cmd, "crontab") {
+		if strings.Contains(fp, "resource-hijack") {
+			signals["resource-hijack"] = true
+		}
+		if strings.Contains(fp, "persistence") || fam == "persistence" || (strings.Contains(cmd, "crontab") && !strings.Contains(cmd, "crontab -r")) {
 			signals["persistence"] = true
 		}
 		if e.StdinBytes > 0 || strings.Contains(fp, "staged-payload") || strings.Contains(cmd, "cat >") || strings.Contains(cmd, "cat  >") {
@@ -120,7 +133,7 @@ func scoreSSHHighlight(ss model.SSHSession, events []model.SSHEvent) (model.SSHH
 	if commandEvents < 2 {
 		return model.SSHHighlight{}, false
 	}
-	highSignal := signals["privilege"] || signals["persistence"] || signals["payload-staging"] || signals["canary"] || signals["miner"]
+	highSignal := signals["privilege"] || signals["persistence"] || signals["payload-staging"] || signals["canary"] || signals["miner"] || signals["resource-hijack"]
 	if !highSignal && !(commandEvents >= 4 && len(families) >= 2) {
 		return model.SSHHighlight{}, false
 	}
@@ -160,6 +173,9 @@ func scoreSSHHighlight(ss model.SSHSession, events []model.SSHEvent) (model.SSHH
 	if signals["miner"] {
 		score += 18
 	}
+	if signals["resource-hijack"] {
+		score += 20
+	}
 	if len(families) >= 3 {
 		score += 7
 	}
@@ -170,8 +186,8 @@ func scoreSSHHighlight(ss model.SSHSession, events []model.SSHEvent) (model.SSHH
 		return model.SSHHighlight{}, false
 	}
 
-	order := []string{"canary", "payload-staging", "persistence", "privilege", "miner", "process-control", "credentials", "control-flow"}
-	labels := map[string]string{"canary": "Canary touch", "payload-staging": "Payload staging", "persistence": "Persistence", "privilege": "Privilege discovery", "miner": "Miner behavior", "process-control": "Process control", "credentials": "Credential hunting", "control-flow": "Shell control flow"}
+	order := []string{"canary", "payload-staging", "resource-hijack", "persistence", "privilege", "miner", "process-control", "credentials", "control-flow"}
+	labels := map[string]string{"canary": "Canary touch", "payload-staging": "Payload staging", "resource-hijack": "Resource hijack prep", "persistence": "Persistence", "privilege": "Privilege discovery", "miner": "Miner behavior", "process-control": "Process control", "credentials": "Credential hunting", "control-flow": "Shell control flow"}
 	outSignals := make([]string, 0, len(signals))
 	for _, k := range order {
 		if signals[k] {
@@ -187,7 +203,7 @@ func scoreSSHHighlight(ss model.SSHSession, events []model.SSHEvent) (model.SSHH
 	}
 	tagLabels := map[string]string{
 		"Canary touch": "CANARY", "Payload staging": "PAYLOAD", "Persistence": "PERSISTENCE",
-		"Privilege discovery": "PRIVILEGE", "Miner behavior": "MINER", "Process control": "PROCESS",
+		"Privilege discovery": "PRIVILEGE", "Miner behavior": "MINER", "Resource hijack prep": "RESOURCE", "Process control": "PROCESS",
 		"Credential hunting": "CREDENTIALS", "Shell control flow": "CONTROL-FLOW", "Multi-stage command activity": "MULTI-STAGE",
 	}
 	tags := make([]string, 0, len(outSignals))

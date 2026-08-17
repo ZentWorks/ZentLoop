@@ -11,8 +11,14 @@ import (
 func sshBehaviorFingerprint(result virtualSSHResult, command string) string {
 	low := strings.ToLower(command)
 	switch {
+	case looksLikeObservedResourceCleanup(low):
+		return "ssh:resource-hijack-preparation"
+	case strings.Contains(low, "ipinfo.io/org"):
+		return "ssh:hosting-provider-discovery"
 	case ((strings.Contains(low, "===shell_behavior===") || (strings.Contains(low, "path_err=") && strings.Contains(low, "cmd_err="))) && strings.Contains(low, "xxxxxx")) || environmentFingerprintCollectorScore(low) >= 5:
 		return "ssh:environment-fingerprint-probe"
+	case strings.Contains(low, "nvidia-smi") || strings.Contains(low, "lspci") || strings.Contains(low, "lscpu") || strings.Contains(low, "nproc"):
+		return "ssh:resource-discovery"
 	case looksLikeMinerCleanupSequence(low) && (strings.Contains(low, "chmod 777") || strings.Contains(low, "history -c")):
 		return "ssh:cryptominer-behavior"
 	case result.PayloadStage == "completed" || (result.StdinBytes > 0 && (strings.Contains(low, "cat >") || strings.Contains(low, "cat  >"))):
@@ -23,7 +29,9 @@ func sshBehaviorFingerprint(result virtualSSHResult, command string) string {
 		return "ssh:payload-staging-intent"
 	case result.PayloadStage == "executed":
 		return "ssh:staged-payload-execution"
-	case strings.Contains(low, "crontab -") || (strings.Contains(low, "crontab") && strings.Contains(low, "@reboot")):
+	case strings.Contains(low, "crontab -r"):
+		return "ssh:scheduled-task-removal"
+	case (strings.Contains(low, "crontab -") && !strings.Contains(low, "crontab -r")) || (strings.Contains(low, "crontab") && strings.Contains(low, "@reboot")):
 		return "ssh:cron-persistence"
 	case strings.Contains(low, "kill -9") || strings.Contains(low, "pkill ") || strings.Contains(low, "killall "):
 		return "ssh:process-killer"

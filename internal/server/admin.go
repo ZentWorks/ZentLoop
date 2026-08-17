@@ -83,6 +83,7 @@ func (s *AdminServer) Handler() http.Handler {
 	protected.HandleFunc("/api/ssh/live-feed", s.sshLiveFeed)
 	protected.HandleFunc("/api/ssh/history", s.sshHistory)
 	protected.HandleFunc("/api/ssh/highlights", s.sshHighlights)
+	protected.HandleFunc("/api/ssh/highlights/export.json", s.sshHighlightsExport)
 	protected.HandleFunc("/api/ssh/sessions/", s.sshSession)
 	protected.HandleFunc("/api/ssh/events", s.sshEvents)
 
@@ -509,7 +510,49 @@ func (s *AdminServer) sshHighlights(w http.ResponseWriter, r *http.Request) {
 			before = t
 		}
 	}
-	writeJSON(w, s.store.SSHHighlights(limit, before, beforeID, r.URL.Query().Get("rating")))
+	tr := requestTimeRange(r)
+	writeJSON(w, s.store.SSHHighlightsRange(limit, before, beforeID, r.URL.Query().Get("rating"), tr.From, tr.To))
+}
+
+func (s *AdminServer) sshHighlightsExport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	rating := strings.TrimSpace(r.URL.Query().Get("rating"))
+	tr := requestTimeRange(r)
+	items := make([]model.SSHHighlight, 0, 128)
+	var before time.Time
+	beforeID := ""
+	for {
+		page := s.store.SSHHighlightsRange(100, before, beforeID, rating, tr.From, tr.To)
+		if len(page.Items) == 0 {
+			break
+		}
+		items = append(items, page.Items...)
+		if page.NextBefore == "" {
+			break
+		}
+		ts := page.NextBefore
+		if i := strings.LastIndex(ts, "|"); i > 0 {
+			beforeID = ts[i+1:]
+			ts = ts[:i]
+		}
+		t, err := time.Parse(time.RFC3339Nano, ts)
+		if err != nil {
+			break
+		}
+		before = t
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="zentloop-ssh-highlights.json"`)
+	writeJSON(w, map[string]any{
+		"exported_at": time.Now(),
+		"version":     currentZentLoopVersion,
+		"rating":      rating,
+		"count":       len(items),
+		"items":       items,
+	})
 }
 
 func (s *AdminServer) sshHistory(w http.ResponseWriter, r *http.Request) {

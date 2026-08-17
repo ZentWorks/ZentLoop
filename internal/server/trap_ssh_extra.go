@@ -598,6 +598,7 @@ func (w *virtualSSHWorld) executeExtraCommand(cmd string, args []string, raw, in
 		data := virtualTextInput(w, args, input)
 		delim := "\t"
 		field := 1
+		fieldToEnd := false
 		for i, a := range args {
 			switch {
 			case a == "-d" && i+1 < len(args):
@@ -605,9 +606,13 @@ func (w *virtualSSHWorld) executeExtraCommand(cmd string, args []string, raw, in
 			case strings.HasPrefix(a, "-d") && len(a) > 2:
 				delim = strings.TrimPrefix(a, "-d")
 			case a == "-f" && i+1 < len(args):
-				field, _ = strconv.Atoi(strings.Split(args[i+1], ",")[0])
+				spec := strings.Split(args[i+1], ",")[0]
+				fieldToEnd = strings.HasSuffix(spec, "-")
+				field, _ = strconv.Atoi(strings.TrimSuffix(spec, "-"))
 			case strings.HasPrefix(a, "-f") && len(a) > 2:
-				field, _ = strconv.Atoi(strings.Split(strings.TrimPrefix(a, "-f"), ",")[0])
+				spec := strings.Split(strings.TrimPrefix(a, "-f"), ",")[0]
+				fieldToEnd = strings.HasSuffix(spec, "-")
+				field, _ = strconv.Atoi(strings.TrimSuffix(spec, "-"))
 			}
 		}
 		if delim == "" {
@@ -616,7 +621,11 @@ func (w *virtualSSHWorld) executeExtraCommand(cmd string, args []string, raw, in
 		for _, row := range strings.Split(strings.TrimSuffix(data, "\n"), "\n") {
 			parts := strings.Split(row, delim)
 			if field > 0 && field <= len(parts) {
-				r.Output += parts[field-1] + "\n"
+				if fieldToEnd {
+					r.Output += strings.Join(parts[field-1:], delim) + "\n"
+				} else {
+					r.Output += parts[field-1] + "\n"
+				}
 			}
 		}
 		r.Output = strings.TrimSuffix(r.Output, "\n")

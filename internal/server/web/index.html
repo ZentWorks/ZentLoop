@@ -156,12 +156,12 @@
       <section class="panel ssh-highlights-panel">
         <div class="panel-title ssh-highlights-title">
           <div><h2>SSH Highlights</h2><span id="sshHighlightsCount">curated authenticated sessions</span></div>
-          <div id="sshHighlightFilters" class="feed-filters" role="group" aria-label="SSH highlight rating filter">
+          <div class="ssh-highlight-actions"><a id="sshHighlightsExportJSON" class="export-link export-json" href="#" aria-label="Export filtered SSH highlights JSON" title="Export JSON"><svg class="export-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1v9m0 0 3-3m-3 3L5 7M3 11.5v2h10v-2"/></svg><span>JSON</span></a><div id="sshHighlightFilters" class="feed-filters" role="group" aria-label="SSH highlight rating filter">
             <button type="button" class="active" data-highlight-filter="all">All</button>
             <button type="button" data-highlight-filter="critical">Critical</button>
             <button type="button" data-highlight-filter="high">High</button>
             <button type="button" data-highlight-filter="notable">Notable</button>
-          </div>
+          </div></div>
         </div>
         <div id="sshHighlightsScroll" class="table-wrap ssh-highlights-scroll">
           <table class="ssh-highlights-table"><thead><tr><th>DATE / TIME</th><th>IP</th><th>CC</th><th>RATING</th><th>SCORE</th><th>HIGHLIGHT</th><th>COMMANDS</th><th>DURATION</th><th>DEPTH</th></tr></thead><tbody id="sshHighlightsBody"></tbody></table>
@@ -204,7 +204,7 @@
     </section>
 
     <section class="panel">
-      <div class="panel-title"><div><h2>Known probes</h2><span id="knownProbeSummary">recognized discovery, exploit and lure signatures · all targets</span></div><a class="export-link" href="/api/known-probes.csv">Export CSV</a></div>
+      <div class="panel-title"><div><h2>Known probes</h2><span id="knownProbeSummary">recognized discovery, exploit and lure signatures · all targets</span></div><a class="export-link" href="/api/known-probes.csv" aria-label="Export CSV" title="Export CSV"><svg class="export-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1v9m0 0 3-3m-3 3L5 7M3 11.5v2h10v-2"/></svg><span>CSV</span></a></div>
       <div class="table-wrap"><table>
         <thead><tr><th>COUNT</th><th>PROBE</th><th>PRODUCT / FAMILY</th><th>CVE</th><th>HOSTILE</th><th>SUSP.</th><th>LAST</th></tr></thead>
         <tbody id="knownProbeBody"></tbody>
@@ -217,7 +217,7 @@
         <div id="topTargets" class="bars"></div>
       </article>
       <article class="panel">
-        <div class="panel-title"><div><h2>Unmapped paths</h2><span>not yet covered by a known probe signature</span></div><a id="unknownExport" class="export-link" href="/api/unknown-paths.csv">Export CSV</a></div>
+        <div class="panel-title"><div><h2>Unmapped paths</h2><span>not yet covered by a known probe signature</span></div><a id="unknownExport" class="export-link" href="/api/unknown-paths.csv" aria-label="Export CSV" title="Export CSV"><svg class="export-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1v9m0 0 3-3m-3 3L5 7M3 11.5v2h10v-2"/></svg><span>CSV</span></a></div>
         <div class="table-wrap"><table><thead><tr><th>COUNT</th><th>METHOD</th><th>PATH</th><th>LAST</th></tr></thead><tbody id="unknownBody"></tbody></table></div>
       </article>
     </section>
@@ -232,7 +232,7 @@
 
     <section class="grid two lower">
       <article class="panel">
-        <div class="panel-title"><div><h2>Catch-all / unknown hosts</h2><span id="catchAllSummary">0 requests · 0 hosts</span></div><a class="export-link" href="/api/catchall-hosts.csv">Export CSV</a></div>
+        <div class="panel-title"><div><h2>Catch-all / unknown hosts</h2><span id="catchAllSummary">0 requests · 0 hosts</span></div><a class="export-link" href="/api/catchall-hosts.csv" aria-label="Export CSV" title="Export CSV"><svg class="export-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1v9m0 0 3-3m-3 3L5 7M3 11.5v2h10v-2"/></svg><span>CSV</span></a></div>
         <div class="table-wrap"><table>
           <thead><tr><th>REQ</th><th>HOST</th><th>HOSTILE</th><th>SUSP.</th><th>FIRST</th><th>LAST</th><th>INGRESS</th></tr></thead>
           <tbody id="catchAllBody"></tbody>
@@ -325,7 +325,7 @@
       <section class="panel"><div class="panel-title"><h2>Observed timeline</h2><span id="ipRawCounts">retained events</span></div><div id="ipObservedTimeline" class="ip-observed-timeline"></div></section>
     </section>
 
-    <footer><span id="version">ZentLoop 0.2.20</span><span>Proxy: <b id="proxyMode">direct</b> · GeoIP: <b id="geoStatus">local</b> · Official bots: <b id="botStatus">waiting</b> · <a href="https://db-ip.com" target="_blank" rel="noopener noreferrer">IP Geolocation by DB-IP</a> · no telemetry</span></footer>
+    <footer><span id="version">ZentLoop 0.2.21</span><span>Proxy: <b id="proxyMode">direct</b> · GeoIP: <b id="geoStatus">local</b> · Official bots: <b id="botStatus">waiting</b> · <a href="https://db-ip.com" target="_blank" rel="noopener noreferrer">IP Geolocation by DB-IP</a> · no telemetry</span></footer>
   </main>
 
   <div id="settingsBackdrop" class="modal-backdrop settings-backdrop" aria-hidden="true"></div>

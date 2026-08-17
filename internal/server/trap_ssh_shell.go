@@ -337,6 +337,12 @@ func (w *virtualSSHWorld) executeWithInput(line, initialInput string) virtualSSH
 		w.system.markActivity(virtualActivityWeight(res))
 		return res
 	}
+	if res, ok := w.executeKnownResourceCleanup(line); ok {
+		w.adaptToBehavior(res.Family, line)
+		w.lastStatus = res.Status
+		w.system.markActivity(virtualActivityWeight(res))
+		return res
+	}
 	if res, ok := w.executeVirtualControlFlow(line, initialInput); ok {
 		w.adaptToBehavior(res.Family, line)
 		w.lastStatus = res.Status
@@ -424,6 +430,7 @@ func (w *virtualSSHWorld) executeWithInput(line, initialInput string) virtualSSH
 		}
 	}
 	combined.Output = strings.TrimSuffix(out.String(), "\n")
+	normalizeVirtualResourceIntent(&combined, line)
 	if combined.Depth == 0 {
 		combined.Depth = maxInt(w.depth, 2)
 	}
@@ -1810,7 +1817,20 @@ func (w *virtualSSHWorld) fakeCurl(args []string) virtualSSHResult {
 	}
 	url := lastURLLike(args)
 	if url == "" {
+		for _, arg := range args {
+			if isVirtualProviderLookup(arg) {
+				url = arg
+				break
+			}
+		}
+	}
+	if url == "" {
 		r.Output, r.Status = "curl: try 'curl --help' or 'curl --manual' for more information", 2
+		return r
+	}
+	if isVirtualProviderLookup(url) {
+		r.Family, r.Depth, r.Risk, r.Persona, r.Message, r.LoopInc, r.Delay = "network", 4, 89, "hosting-provider-discovery", "hosting provider discovery", 0, 0
+		r.Output = virtualProviderOrg
 		return r
 	}
 	internal := strings.Contains(url, "127.0.0.1:8081") || strings.Contains(url, "db-internal") || strings.Contains(url, "10.10.30.12") || strings.Contains(url, "backup-01")
