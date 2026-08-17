@@ -19,7 +19,7 @@ import (
 	"zentloop/internal/tui"
 )
 
-const version = "0.2.14"
+const version = "0.2.16"
 
 func main() {
 	if len(os.Args) > 1 {

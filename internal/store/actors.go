@@ -202,6 +202,17 @@ func (s *Store) applyActorSSHEventLocked(e model.SSHEvent) {
 	addProtocol(a, "ssh")
 	if e.Type == "connect" {
 		a.SSHConnections++
+		concurrent := 0
+		for _, ss := range s.sshSessions {
+			if ss.IP == e.IP && ss.Active {
+				concurrent++
+			}
+		}
+		if concurrent >= 3 {
+			if addFingerprint(a, "ssh:parallel-session-burst") {
+				s.actorFingerprints["ssh:parallel-session-burst"]++
+			}
+		}
 		recur := s.sshRecurrenceLocked(e.IP, e.At)
 		a.SSHMedianRevisitSeconds = recur.MedianSeconds
 		a.SSHRevisitJitterSeconds = recur.JitterSeconds
@@ -244,6 +255,22 @@ func (s *Store) applyActorSSHEventLocked(e model.SSHEvent) {
 		s.actorFingerprints[fp]++
 	}
 	if (e.Type == "exec" || e.Type == "command") && fp == "ssh:environment-fingerprint-probe" && strings.TrimSpace(e.Command) != "" {
+		seenSessions := map[string]struct{}{}
+		for i := len(s.sshEvents) - 1; i >= 0; i-- {
+			row := s.sshEvents[i]
+			if e.At.Sub(row.At) > 30*time.Minute {
+				break
+			}
+			if row.IP == e.IP && row.Fingerprint == "ssh:environment-fingerprint-probe" {
+				seenSessions[row.SessionID] = struct{}{}
+			}
+		}
+		if len(seenSessions) >= 3 {
+			a.Actor = model.ActorAutomated
+			if addFingerprint(a, "ssh:repeating-post-auth-probe") {
+				s.actorFingerprints["ssh:repeating-post-auth-probe"]++
+			}
+		}
 		key := a.ID
 		if previous, ok := s.sshActorLastCommand[key]; ok && previous == e.Command {
 			if at := s.sshActorLastCommandAt[key]; !at.IsZero() && !e.At.Before(at) && e.At.Sub(at) <= 2*time.Second {
@@ -446,9 +473,8 @@ func (s *Store) HealthOverview() model.HealthOverview {
 	o.HTTPSessionsInMemory = len(s.sessions)
 	o.SSHSessionsInMemory = len(s.sshSessions)
 	o.ActorsInMemory = len(s.actors)
-	o.LiveSubscribers = len(s.subs)
-	o.SSHLiveSubscribers = len(s.sshSubs)
-	o.LiveSubscriberLimit = maxLiveSubscribers
+	o.RealtimeSubscribers = len(s.realtimeSubs)
+	o.RealtimeSubscriberLimit = maxRealtimeSubscribers
 	dataDir := s.dataDir
 	s.mu.RUnlock()
 	o.EventsBytes = fileSize(filepath.Join(dataDir, "events.jsonl"))

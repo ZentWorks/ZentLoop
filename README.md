@@ -18,7 +18,7 @@ It combines an HTTP deception trap, an optional fully virtual SSH **Rabbit Hole*
 - Optional SSH deception listener with a fully virtual filesystem and command environment
 - Shared synthetic world across HTTP and SSH
 - Actor intelligence and cross-protocol correlation
-- SSH highlights and live session observability
+- SSH highlights and unified Web/SSH realtime session observability
 - Web administration interface
 - Optional read-only management SSH view for the live TUI
 - Reverse-proxy catch-all / sink-backend integration
@@ -36,7 +36,6 @@ The production image is published to GitHub Container Registry:
 ghcr.io/zentworks/zentloop:latest
 ```
 
-Versioned images can also be published from semantic Git tags such as `v0.2.14`.
 
 ## Quick start with Docker Compose
 

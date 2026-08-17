@@ -85,12 +85,12 @@ func (s *Store) AddSSHEvent(e model.SSHEvent) error {
 	if len(s.sshSessions) > maxSessions {
 		s.pruneSSHSessionsLocked(maxSessions - 1000)
 	}
-	for ch := range s.sshSubs {
-		select {
-		case ch <- e:
-		default:
-		}
+	var viewSession *model.SSHSession
+	if ss := s.sshSessions[e.SessionID]; ss != nil {
+		cp := *ss
+		viewSession = &cp
 	}
+	s.publishRealtimeLocked(model.RealtimeMessage{Type: "ssh", At: e.At, SSHEvent: &e, SSHSession: viewSession})
 	return nil
 }
 
@@ -435,27 +435,6 @@ func (s *Store) SSHSessionExport(id, version string) (model.SSHSessionExport, bo
 		}
 	}
 	return model.SSHSessionExport{ExportedAt: time.Now().UTC(), Version: version, Session: cloneSSHSession(ss), Events: events, Actor: actor, Intel: intel}, true
-}
-
-func (s *Store) SubscribeSSH() (<-chan model.SSHEvent, func(), bool) {
-	ch := make(chan model.SSHEvent, 64)
-	s.mu.Lock()
-	if len(s.sshSubs) >= maxLiveSubscribers {
-		s.health.LiveSubscriberRejected++
-		s.mu.Unlock()
-		return nil, func() {}, false
-	}
-	s.sshSubs[ch] = struct{}{}
-	s.mu.Unlock()
-	cancel := func() {
-		s.mu.Lock()
-		if _, ok := s.sshSubs[ch]; ok {
-			delete(s.sshSubs, ch)
-			close(ch)
-		}
-		s.mu.Unlock()
-	}
-	return ch, cancel, true
 }
 
 func (s *Store) SSHOverviewRange(enabled bool, from, to time.Time) model.SSHOverview {

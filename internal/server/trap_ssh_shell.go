@@ -331,6 +331,12 @@ func (w *virtualSSHWorld) executeWithInput(line, initialInput string) virtualSSH
 		w.seedDropperExecutionTargets(line)
 	}
 	w.observeRealityProbe(line)
+	if res, ok := w.executeKnownEnvironmentCollector(line); ok {
+		w.adaptToBehavior(res.Family, line)
+		w.lastStatus = res.Status
+		w.system.markActivity(virtualActivityWeight(res))
+		return res
+	}
 	if res, ok := w.executeVirtualControlFlow(line, initialInput); ok {
 		w.adaptToBehavior(res.Family, line)
 		w.lastStatus = res.Status
@@ -663,6 +669,11 @@ func (w *virtualSSHWorld) executePipeline(line string, initialInput ...string) v
 					res.Output, res.Status = "bash: "+redirect.stdout+": "+w.virtualWriteFailure(resolvedOut), 1
 				} else {
 					res.Output = ""
+					res.Family = "filesystem"
+					res.Depth = maxInt(res.Depth, 4)
+					res.Risk = maxInt(res.Risk, 88)
+					res.Persona = "file-manipulation"
+					res.Message = "virtual shell output redirection"
 					words := virtualWords(clean)
 					if len(words) > 0 && path.Base(words[0]) == "cat" && w.isVirtualPayloadStagingPath(resolvedOut) {
 						w.stagingAttempts[resolvedOut]++
@@ -1614,7 +1625,7 @@ func (w *virtualSSHWorld) executeOneDepth(raw, input string, aliasDepth int) vir
 		}
 		return r
 	case "echo", "printf":
-		r := base("filesystem", 4, 88, "file-manipulation", "virtual shell output/redirection")
+		r := base("shell", 2, 70, "interactive-shell", "shell output")
 		r.Output = virtualEchoOutput(cmd, args)
 		return r
 	case "shutdown", "reboot", "poweroff", "halt":

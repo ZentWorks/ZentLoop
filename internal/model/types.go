@@ -138,6 +138,15 @@ type Event struct {
 	BotClaimed          bool           `json:"bot_claimed,omitempty"`
 }
 
+type RealtimeMessage struct {
+	Type       string      `json:"type"`
+	At         time.Time   `json:"at"`
+	Event      *Event      `json:"event,omitempty"`
+	Session    *Session    `json:"session,omitempty"`
+	SSHEvent   *SSHEvent   `json:"ssh_event,omitempty"`
+	SSHSession *SSHSession `json:"ssh_session,omitempty"`
+}
+
 type Overview struct {
 	Now            time.Time `json:"now"`
 	UptimeSeconds  int64     `json:"uptime_seconds"`
@@ -325,31 +334,40 @@ type IntelSignal struct {
 	Summary   string    `json:"summary"`
 }
 
+type IntelSummary struct {
+	Indicator string    `json:"indicator"`
+	Kind      string    `json:"kind"`
+	Protocols []string  `json:"protocols"`
+	Tools     []string  `json:"tools,omitempty"`
+	Count     int64     `json:"count"`
+	FirstSeen time.Time `json:"first_seen"`
+	LastSeen  time.Time `json:"last_seen"`
+}
+
 type HealthOverview struct {
-	HTTPRejected           int64  `json:"http_rejected"`
-	SSHRejectedGlobal      int64  `json:"ssh_rejected_global"`
-	SSHRejectedPerIP       int64  `json:"ssh_rejected_per_ip"`
-	SSHCommandBudgetHits   int64  `json:"ssh_command_budget_hits"`
-	SSHVirtualStorageHits  int64  `json:"ssh_virtual_storage_hits"`
-	SSHRecursionGuardHits  int64  `json:"ssh_recursion_guard_hits"`
-	LiveSubscriberRejected int64  `json:"live_subscriber_rejected"`
-	EventsBytes            int64  `json:"events_bytes"`
-	SSHEventsBytes         int64  `json:"ssh_events_bytes"`
-	IntelEventsBytes       int64  `json:"intel_events_bytes"`
-	StorageTotalBytes      int64  `json:"storage_total_bytes"`
-	StorageWarnBytes       int64  `json:"storage_warn_bytes"`
-	StorageCriticalBytes   int64  `json:"storage_critical_bytes"`
-	StoragePressure        string `json:"storage_pressure"`
-	StorageCompactions     int64  `json:"storage_compactions"`
-	HTTPEventsInMemory     int    `json:"http_events_in_memory"`
-	SSHEventsInMemory      int    `json:"ssh_events_in_memory"`
-	IntelEventsInMemory    int    `json:"intel_events_in_memory"`
-	HTTPSessionsInMemory   int    `json:"http_sessions_in_memory"`
-	SSHSessionsInMemory    int    `json:"ssh_sessions_in_memory"`
-	ActorsInMemory         int    `json:"actors_in_memory"`
-	LiveSubscribers        int    `json:"live_subscribers"`
-	SSHLiveSubscribers     int    `json:"ssh_live_subscribers"`
-	LiveSubscriberLimit    int    `json:"live_subscriber_limit"`
+	HTTPRejected               int64  `json:"http_rejected"`
+	SSHRejectedGlobal          int64  `json:"ssh_rejected_global"`
+	SSHRejectedPerIP           int64  `json:"ssh_rejected_per_ip"`
+	SSHCommandBudgetHits       int64  `json:"ssh_command_budget_hits"`
+	SSHVirtualStorageHits      int64  `json:"ssh_virtual_storage_hits"`
+	SSHRecursionGuardHits      int64  `json:"ssh_recursion_guard_hits"`
+	RealtimeSubscriberRejected int64  `json:"realtime_subscriber_rejected"`
+	EventsBytes                int64  `json:"events_bytes"`
+	SSHEventsBytes             int64  `json:"ssh_events_bytes"`
+	IntelEventsBytes           int64  `json:"intel_events_bytes"`
+	StorageTotalBytes          int64  `json:"storage_total_bytes"`
+	StorageWarnBytes           int64  `json:"storage_warn_bytes"`
+	StorageCriticalBytes       int64  `json:"storage_critical_bytes"`
+	StoragePressure            string `json:"storage_pressure"`
+	StorageCompactions         int64  `json:"storage_compactions"`
+	HTTPEventsInMemory         int    `json:"http_events_in_memory"`
+	SSHEventsInMemory          int    `json:"ssh_events_in_memory"`
+	IntelEventsInMemory        int    `json:"intel_events_in_memory"`
+	HTTPSessionsInMemory       int    `json:"http_sessions_in_memory"`
+	SSHSessionsInMemory        int    `json:"ssh_sessions_in_memory"`
+	ActorsInMemory             int    `json:"actors_in_memory"`
+	RealtimeSubscribers        int    `json:"realtime_subscribers"`
+	RealtimeSubscriberLimit    int    `json:"realtime_subscriber_limit"`
 }
 
 type SSHSession struct {

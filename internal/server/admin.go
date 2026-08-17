@@ -50,7 +50,7 @@ func (s *AdminServer) Handler() http.Handler {
 	mux.HandleFunc("/api/history", s.history)
 	mux.HandleFunc("/api/sessions/", s.session)
 	mux.HandleFunc("/api/events", s.events)
-	mux.HandleFunc("/api/live/events", s.live)
+	mux.HandleFunc("/api/realtime", s.realtime)
 	mux.HandleFunc("/api/info", s.info)
 	mux.HandleFunc("/api/settings/trusted-domains", s.trustedDomains)
 	mux.HandleFunc("/api/untrusted-hosts", s.untrustedHosts)
@@ -77,7 +77,6 @@ func (s *AdminServer) Handler() http.Handler {
 	mux.HandleFunc("/api/ssh/highlights", s.sshHighlights)
 	mux.HandleFunc("/api/ssh/sessions/", s.sshSession)
 	mux.HandleFunc("/api/ssh/events", s.sshEvents)
-	mux.HandleFunc("/api/live/ssh", s.liveSSH)
 
 	sub, _ := fs.Sub(webFS, "web")
 	mux.Handle("/", http.FileServer(http.FS(sub)))
@@ -161,9 +160,23 @@ func (s *AdminServer) securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; img-src 'self' data:")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src "+adminConnectSources(r.Host)+"; img-src 'self' data:")
 		next.ServeHTTP(w, r)
 	})
+}
+
+func adminConnectSources(host string) string {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return "'self'"
+	}
+	for _, r := range host {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || strings.ContainsRune(".-_:[]", r) {
+			continue
+		}
+		return "'self'"
+	}
+	return "'self' ws://" + host + " wss://" + host
 }
 
 func subtleStringMismatch(a, b string) bool {
@@ -315,7 +328,7 @@ func (s *AdminServer) info(w http.ResponseWriter, r *http.Request) {
 	_, geoErr := os.Stat(s.cfg.GeoIPDB)
 	_, botCacheErr := os.Stat(s.cfg.OfficialBotsCache)
 	writeJSON(w, map[string]any{
-		"brand": s.cfg.Brand, "version": "0.2.14", "proxy_mode": s.cfg.ProxyMode, "proxy_rules": s.cfg.ProxyRules,
+		"brand": s.cfg.Brand, "version": "0.2.16", "proxy_mode": s.cfg.ProxyMode, "proxy_rules": s.cfg.ProxyRules,
 		"hostile_threshold": s.cfg.HostileThreshold, "suspicious_threshold": s.cfg.SuspiciousThreshold,
 		"live_session_minutes": s.cfg.LiveSessionMinutes, "resume_window_hours": s.cfg.ResumeWindowHours,
 		"geo_enrichment": true, "geoip_ready": geoErr == nil, "geoip_db": s.cfg.GeoIPDB, "integration_protocol": 1, "integration_secret_configured": s.cfg.IntegrationSecret != "", "telemetry": false,
@@ -323,48 +336,6 @@ func (s *AdminServer) info(w http.ResponseWriter, r *http.Request) {
 		"official_bots_enabled": s.cfg.OfficialBotsEnabled, "official_bots_refresh_hours": s.cfg.OfficialBotsRefreshH, "official_bots_cache_ready": botCacheErr == nil,
 	})
 }
-func (s *AdminServer) live(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		methodNotAllowed(w)
-		return
-	}
-	fl, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming unsupported", 500)
-		return
-	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	ch, cancel, ok := s.store.Subscribe()
-	if !ok {
-		http.Error(w, "too many live subscribers", http.StatusTooManyRequests)
-		return
-	}
-	defer cancel()
-	fmt.Fprint(w, ": connected\n\n")
-	fl.Flush()
-	keep := time.NewTicker(15 * time.Second)
-	defer keep.Stop()
-	for {
-		select {
-		case e, ok := <-ch:
-			if !ok {
-				return
-			}
-			e = s.store.EventView(e)
-			b, _ := json.Marshal(e)
-			fmt.Fprintf(w, "event: request\ndata: %s\n\n", b)
-			fl.Flush()
-		case <-keep.C:
-			fmt.Fprint(w, ": keepalive\n\n")
-			fl.Flush()
-		case <-r.Context().Done():
-			return
-		}
-	}
-}
-
 func (s *AdminServer) actorOverview(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		methodNotAllowed(w)
@@ -427,11 +398,18 @@ func (s *AdminServer) intelligence(w http.ResponseWriter, r *http.Request) {
 	}
 	limit := queryInt(r, "limit", 250, 1, 1000)
 	tr := requestTimeRange(r)
+	rows := s.store.IntelEvents(0)
 	if tr.Set {
-		writeJSON(w, limitIntel(s.store.IntelEvents(0), tr, limit))
+		rows = limitIntel(rows, tr, 0)
+	}
+	if r.URL.Query().Get("aggregate") == "1" {
+		writeJSON(w, aggregateIntel(rows, limit))
 		return
 	}
-	writeJSON(w, s.store.IntelEvents(limit))
+	if limit > 0 && len(rows) > limit {
+		rows = rows[:limit]
+	}
+	writeJSON(w, rows)
 }
 
 func (s *AdminServer) health(w http.ResponseWriter, r *http.Request) {
@@ -568,7 +546,7 @@ func (s *AdminServer) sshSession(w http.ResponseWriter, r *http.Request) {
 	}
 	switch parts[1] {
 	case "export.json":
-		ex, ok := s.store.SSHSessionExport(id, "0.2.14")
+		ex, ok := s.store.SSHSessionExport(id, "0.2.16")
 		if !ok {
 			http.NotFound(w, r)
 			return
@@ -576,7 +554,7 @@ func (s *AdminServer) sshSession(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="zentloop-ssh-%s.json"`, safeFilename(id)))
 		writeJSON(w, ex)
 	case "export.txt":
-		ex, ok := s.store.SSHSessionExport(id, "0.2.14")
+		ex, ok := s.store.SSHSessionExport(id, "0.2.16")
 		if !ok {
 			http.NotFound(w, r)
 			return
@@ -653,47 +631,6 @@ func (s *AdminServer) sshEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, s.store.SSHEvents(limit))
-}
-
-func (s *AdminServer) liveSSH(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		methodNotAllowed(w)
-		return
-	}
-	fl, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming unsupported", 500)
-		return
-	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	ch, cancel, ok := s.store.SubscribeSSH()
-	if !ok {
-		http.Error(w, "too many live subscribers", http.StatusTooManyRequests)
-		return
-	}
-	defer cancel()
-	fmt.Fprint(w, ": connected\n\n")
-	fl.Flush()
-	keep := time.NewTicker(15 * time.Second)
-	defer keep.Stop()
-	for {
-		select {
-		case e, ok := <-ch:
-			if !ok {
-				return
-			}
-			b, _ := json.Marshal(e)
-			fmt.Fprintf(w, "event: ssh\ndata: %s\n\n", b)
-			fl.Flush()
-		case <-keep.C:
-			fmt.Fprint(w, ": keepalive\n\n")
-			fl.Flush()
-		case <-r.Context().Done():
-			return
-		}
-	}
 }
 
 func (s *AdminServer) knownProbes(w http.ResponseWriter, r *http.Request) {
@@ -911,7 +848,7 @@ func (s *AdminServer) integrationCapabilities(w http.ResponseWriter, r *http.Req
 	}
 	writeJSON(w, map[string]any{
 		"product":          "ZentLoop",
-		"version":          "0.2.14",
+		"version":          "0.2.16",
 		"protocol_version": 1,
 		"capabilities": []string{
 			"catch_all", "forwarded_ip", "target_host", "multi_target", "signed_ingress", "catch_all_statistics", "health_verification", "integration_peers",

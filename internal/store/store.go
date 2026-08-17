@@ -20,7 +20,7 @@ const (
 	maxRing                        = 5000
 	maxPathKeys                    = 5000
 	maxSessions                    = 10000
-	maxLiveSubscribers             = 24
+	maxRealtimeSubscribers         = 24
 	storagePressureWarnBytes       = 32 << 20
 	storagePressureCritBytes       = 128 << 20
 	storagePressureTargetFileBytes = 32 << 20
@@ -31,7 +31,7 @@ type Store struct {
 	sessions              map[string]*model.Session
 	fingerprints          map[string]string
 	events                []model.Event
-	subs                  map[chan model.Event]struct{}
+	realtimeSubs          map[*realtimeSubscriber]struct{}
 	pathCounts            map[string]int64
 	dayCounts             map[string]int64
 	targetCounts          map[string]int64
@@ -47,7 +47,6 @@ type Store struct {
 	eventFile             *os.File
 	sshSessions           map[string]*model.SSHSession
 	sshEvents             []model.SSHEvent
-	sshSubs               map[chan model.SSHEvent]struct{}
 	sshUserCounts         map[string]int64
 	sshCommandCounts      map[string]int64
 	sshFamilyCounts       map[string]int64
@@ -100,9 +99,9 @@ func NewWithRetention(dataDir string, retentionDays int) (*Store, error) {
 	}
 	s := &Store{
 		sessions: make(map[string]*model.Session), fingerprints: make(map[string]string),
-		subs: make(map[chan model.Event]struct{}), pathCounts: make(map[string]int64), dayCounts: make(map[string]int64), targetCounts: make(map[string]int64), requestHostStats: make(map[string]*rawHostStat), unknownPaths: make(map[string]*model.UnknownPath), probeStats: make(map[string]*model.ProbeStat), catchAllHosts: make(map[string]*model.CatchAllHost), integrationCounts: make(map[string]int64),
+		realtimeSubs: make(map[*realtimeSubscriber]struct{}), pathCounts: make(map[string]int64), dayCounts: make(map[string]int64), targetCounts: make(map[string]int64), requestHostStats: make(map[string]*rawHostStat), unknownPaths: make(map[string]*model.UnknownPath), probeStats: make(map[string]*model.ProbeStat), catchAllHosts: make(map[string]*model.CatchAllHost), integrationCounts: make(map[string]int64),
 		actors: make(map[string]*model.ActorProfile), actorTimeline: make(map[string][]model.ActorActivity), actorSessionLast: make(map[string]time.Time), actorFingerprints: make(map[string]int64), sshActorLastCommand: make(map[string]string), sshActorLastCommandAt: make(map[string]time.Time),
-		sshSessions: make(map[string]*model.SSHSession), sshSubs: make(map[chan model.SSHEvent]struct{}), sshUserCounts: make(map[string]int64), sshCommandCounts: make(map[string]int64), sshFamilyCounts: make(map[string]int64), sshCountryCounts: make(map[string]int64), sshClientCounts: make(map[string]int64), sshDayConnections: make(map[string]int64), sshDayAuth: make(map[string]int64), sshDayShells: make(map[string]int64), sshDayCommands: make(map[string]int64),
+		sshSessions: make(map[string]*model.SSHSession), sshUserCounts: make(map[string]int64), sshCommandCounts: make(map[string]int64), sshFamilyCounts: make(map[string]int64), sshCountryCounts: make(map[string]int64), sshClientCounts: make(map[string]int64), sshDayConnections: make(map[string]int64), sshDayAuth: make(map[string]int64), sshDayShells: make(map[string]int64), sshDayCommands: make(map[string]int64),
 		integrationPeers: make(map[string]*model.IntegrationPeer), integrationPersist: make(map[string]time.Time),
 		trustedManual: make(map[string]model.TrustedDomain), trustedProxy: make(map[string]model.TrustedDomain),
 		started: time.Now(), dataDir: dataDir, retentionDays: retentionDays,
@@ -459,12 +458,14 @@ func (s *Store) AddEvent(e model.Event) error {
 	s.countProbe(e)
 	s.countCatchAll(e)
 	s.applyActorHTTPEventLocked(e)
-	for ch := range s.subs {
-		select {
-		case ch <- e:
-		default:
-		}
+	viewEvent := s.decorateEventLocked(e)
+	var viewSession *model.Session
+	if ss := s.sessions[e.SessionID]; ss != nil {
+		cp := s.decorateSessionLocked(ss)
+		cp.RecentTimes = nil
+		viewSession = &cp
 	}
+	s.publishRealtimeLocked(model.RealtimeMessage{Type: "web", At: e.At, Event: &viewEvent, Session: viewSession})
 	return nil
 }
 
@@ -793,27 +794,6 @@ func (s *Store) HistoryView(inactiveFor time.Duration, limit int, target ...stri
 		rows[i] = view
 	}
 	return rows
-}
-
-func (s *Store) Subscribe() (<-chan model.Event, func(), bool) {
-	ch := make(chan model.Event, 64)
-	s.mu.Lock()
-	if len(s.subs) >= maxLiveSubscribers {
-		s.health.LiveSubscriberRejected++
-		s.mu.Unlock()
-		return nil, func() {}, false
-	}
-	s.subs[ch] = struct{}{}
-	s.mu.Unlock()
-	cancel := func() {
-		s.mu.Lock()
-		if _, ok := s.subs[ch]; ok {
-			delete(s.subs, ch)
-			close(ch)
-		}
-		s.mu.Unlock()
-	}
-	return ch, cancel, true
 }
 
 func inRange(t, from, to time.Time) bool {

@@ -85,7 +85,7 @@ SSH background jobs introduced in 0.2.8 are metadata-only simulation objects. `&
 
 ## SSH observability and exports
 
-The 0.2.9 SSH Live Observatory reuses retained SSH events and the existing authenticated admin SSE channel. Recently-left state is presentation metadata only. JSON/TXT exports are available only through the authenticated admin interface and contain only data ZentLoop already retains; plaintext passwords are not added to events or exports.
+SSH live observability reuses retained SSH events and, since 0.2.15, the single authenticated same-origin Admin WebSocket shared with HTTP live deltas. The fixed 60-second recently-left window is presentation metadata only. JSON/TXT exports are available only through the authenticated admin interface and contain only data ZentLoop already retains; plaintext passwords are not added to events or exports.
 
 
 ## 0.2.10 scanner-fed protocol handling

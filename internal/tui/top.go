@@ -179,8 +179,8 @@ func draw(c *client, out io.Writer, width int) error {
 	_, _ = fmt.Fprintf(out, " TRACK actors %-5d cross %-5d engaged %-8s canary %-5d payload %-5d\r\n", actorOverview.ActorsTotal, actorOverview.CrossProtocol, fmtDuration(time.Duration(actorOverview.EngagementSeconds)*time.Second), actorOverview.CanaryTouches, actorOverview.PayloadAttempts)
 	guardHits := health.SSHCommandBudgetHits + health.SSHVirtualStorageHits + health.SSHRecursionGuardHits
 	sshShed := health.SSHRejectedGlobal + health.SSHRejectedPerIP
-	_, _ = fmt.Fprintf(out, " GUARD http shed %-5d ssh shed %-5d guard hits %-5d storage %-9s live SSE %d/%d ssh SSE %d/%d\r\n", health.HTTPRejected, sshShed, guardHits, fmtBytes(health.StorageTotalBytes), health.LiveSubscribers, health.LiveSubscriberLimit, health.SSHLiveSubscribers, health.LiveSubscriberLimit)
-	_, _ = fmt.Fprintf(out, " HEALTH storage %-8s stream rejects %-5d\r\n", strings.ToUpper(health.StoragePressure), health.LiveSubscriberRejected)
+	_, _ = fmt.Fprintf(out, " GUARD http shed %-5d ssh shed %-5d guard hits %-5d storage %-9s realtime %d/%d\r\n", health.HTTPRejected, sshShed, guardHits, fmtBytes(health.StorageTotalBytes), health.RealtimeSubscribers, health.RealtimeSubscriberLimit)
+	_, _ = fmt.Fprintf(out, " HEALTH storage %-8s realtime rejects %-5d\r\n", strings.ToUpper(health.StoragePressure), health.RealtimeSubscriberRejected)
 
 	renderWebSessions(out, width, sessions)
 	renderSSHSessions(out, width, sshSessions)
