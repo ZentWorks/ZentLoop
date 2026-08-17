@@ -185,7 +185,7 @@ func fingerprintSSH(e model.SSHEvent) string {
 	}
 	client := strings.ToLower(e.ClientVersion)
 	for _, p := range []struct{ needle, label string }{
-		{"paramiko", "ssh:paramiko"}, {"libssh", "ssh:libssh"}, {"golang", "ssh:go-client"}, {"go-ssh", "ssh:go-client"}, {"openssh", "ssh:openssh"},
+		{"paramiko", "ssh:paramiko"}, {"libssh", "ssh:libssh"}, {"ssh-2.0-go", "ssh:go-client"}, {"golang", "ssh:go-client"}, {"go-ssh", "ssh:go-client"}, {"openssh", "ssh:openssh"},
 	} {
 		if strings.Contains(client, p.needle) {
 			return p.label
@@ -205,10 +205,14 @@ func (s *Store) applyActorSSHEventLocked(e model.SSHEvent) {
 		recur := s.sshRecurrenceLocked(e.IP, e.At)
 		a.SSHMedianRevisitSeconds = recur.MedianSeconds
 		a.SSHRevisitJitterSeconds = recur.JitterSeconds
-		if recur.LowAndSlow {
+		if recur.Rapid || recur.LowAndSlow {
 			a.Actor = model.ActorAutomated
-			if addFingerprint(a, "ssh:low-and-slow") {
-				s.actorFingerprints["ssh:low-and-slow"]++
+			label := "ssh:low-and-slow"
+			if recur.Rapid {
+				label = "ssh:rapid-recurrence"
+			}
+			if addFingerprint(a, label) {
+				s.actorFingerprints[label]++
 			}
 			if addFingerprint(a, "ssh:recurring-credential-probe") {
 				s.actorFingerprints["ssh:recurring-credential-probe"]++
@@ -217,6 +221,14 @@ func (s *Store) applyActorSSHEventLocked(e model.SSHEvent) {
 	}
 	if e.Type == "command" || e.Type == "exec" {
 		a.SSHCommands++
+		if e.Type == "exec" {
+			if ss := s.sshSessions[e.SessionID]; ss != nil && !ss.ShellOpened && ss.ExecRequests >= 3 && ss.LastSeen.Sub(ss.FirstSeen) >= 0 && ss.LastSeen.Sub(ss.FirstSeen) <= 2*time.Second {
+				a.Actor = model.ActorAutomated
+				if addFingerprint(a, "ssh:rapid-exec-burst") {
+					s.actorFingerprints["ssh:rapid-exec-burst"]++
+				}
+			}
+		}
 	}
 	if e.RiskScore > a.RiskScore {
 		a.RiskScore = e.RiskScore

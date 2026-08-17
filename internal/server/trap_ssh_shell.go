@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -56,7 +57,32 @@ type virtualFileMeta struct {
 	Kind    string
 }
 
+type virtualSSHSharedState struct {
+	mu                 sync.Mutex
+	files              map[string]string
+	fileMeta           map[string]virtualFileMeta
+	dirs               map[string]bool
+	processes          map[int]*virtualSSHProcess
+	fileAttrs          map[string]string
+	fileModes          map[string]uint32
+	stagingAttempts    map[string]int
+	stagingPayloadHash map[string][32]byte
+	installerSignals   map[string]bool
+	installedPackages  map[string]bool
+	nextPID            int
+}
+
+func newVirtualSSHSharedState() *virtualSSHSharedState {
+	return &virtualSSHSharedState{
+		files: make(map[string]string), fileMeta: make(map[string]virtualFileMeta), dirs: make(map[string]bool),
+		processes: make(map[int]*virtualSSHProcess), fileAttrs: make(map[string]string), fileModes: make(map[string]uint32),
+		stagingAttempts: make(map[string]int), stagingPayloadHash: make(map[string][32]byte), installerSignals: make(map[string]bool),
+		installedPackages: map[string]bool{"curl": true, "openssh-server": true, "vim": true}, nextPID: 2841,
+	}
+}
+
 type virtualSSHWorld struct {
+	shared             *virtualSSHSharedState
 	user               string
 	hostname           string
 	cwd                string
@@ -86,11 +112,12 @@ type virtualSSHWorld struct {
 	deepReality        bool
 	processes          map[int]*virtualSSHProcess
 	jobs               map[int]int
-	nextPID            int
 	nextJob            int
 	crontabExists      bool
 	crontabContent     string
 	fileAttrs          map[string]string
+	fileModes          map[string]uint32
+	installedPackages  map[string]bool
 	historyCleared     bool
 	stagingAttempts    map[string]int
 	stagingPayloadHash map[string][32]byte
@@ -107,6 +134,10 @@ func newVirtualSSHWorldWithSystem(sessionID, username string, system *virtualSSH
 }
 
 func newVirtualSSHWorldForSource(sessionID, username, sourceIP string, system *virtualSSHSystem) *virtualSSHWorld {
+	return newVirtualSSHWorldForSourceShared(sessionID, username, sourceIP, system, newVirtualSSHSharedState())
+}
+
+func newVirtualSSHWorldForSourceShared(sessionID, username, sourceIP string, system *virtualSSHSystem, shared *virtualSSHSharedState) *virtualSSHWorld {
 	user := strings.TrimSpace(username)
 	if user == "" {
 		user = "root"
@@ -116,13 +147,16 @@ func newVirtualSSHWorldForSource(sessionID, username, sourceIP string, system *v
 		system = newEphemeralVirtualSSHSystem()
 	}
 	suffix := fmt.Sprintf("%02x", system.seed%0xff)
+	if shared == nil {
+		shared = newVirtualSSHSharedState()
+	}
 	w := &virtualSSHWorld{
-		user: user, hostname: host, files: make(map[string]string), fileMeta: make(map[string]virtualFileMeta), dirs: make(map[string]bool),
+		shared: shared, user: user, hostname: host, files: shared.files, fileMeta: shared.fileMeta, dirs: shared.dirs,
 		env: make(map[string]string), aliases: make(map[string]string), ttyCols: 80, ttyRows: 24, ttyTerm: "xterm-256color", system: system,
 		sourceIP: sourceIP, peerKey: sourceIP + "|" + user, canaries: lures.CanaryLabels(sourceIP), interests: make(map[string]int),
-		processes: make(map[int]*virtualSSHProcess), jobs: make(map[int]int), nextPID: 2841, nextJob: 1,
-		crontabExists: true, crontabContent: "0 2 * * * /usr/local/bin/backupctl sync --profile legacy >/var/log/backup.log 2>&1\n", fileAttrs: make(map[string]string),
-		stagingAttempts: make(map[string]int), stagingPayloadHash: make(map[string][32]byte), installerSignals: make(map[string]bool),
+		processes: shared.processes, jobs: make(map[int]int), nextJob: 1,
+		crontabExists: true, crontabContent: "0 2 * * * /usr/local/bin/backupctl sync --profile legacy >/var/log/backup.log 2>&1\n", fileAttrs: shared.fileAttrs, fileModes: shared.fileModes, installedPackages: shared.installedPackages,
+		stagingAttempts: shared.stagingAttempts, stagingPayloadHash: shared.stagingPayloadHash, installerSignals: shared.installerSignals,
 	}
 	if peer := system.peerState(w.peerKey); peer.Initialized {
 		w.crontabExists = peer.CrontabExists
@@ -145,9 +179,13 @@ func newVirtualSSHWorldForSource(sessionID, username, sourceIP string, system *v
 	w.env["SSH_TTY"] = "/dev/pts/0"
 	w.env["SHLVL"] = "1"
 	w.env["APP_ENV"] = "production"
-	w.seedFilesystem(suffix)
-	w.seedFileMetadata()
-	w.seedSystemBinaries()
+	shared.mu.Lock()
+	if len(shared.files) == 0 {
+		w.seedFilesystem(suffix)
+		w.seedFileMetadata()
+		w.seedSystemBinaries()
+	}
+	shared.mu.Unlock()
 	return w
 }
 
@@ -156,16 +194,32 @@ func (w *virtualSSHWorld) seedFilesystem(suffix string) {
 		w.dirs[d] = true
 	}
 	if w.user != "root" {
-		h := "/home/" + safeVirtualName(w.user)
+		h := w.homeDir()
 		w.dirs[h] = true
 		w.dirs[h+"/.ssh"] = true
 	}
 	w.files["/dev/null"] = ""
 	w.fileMeta["/dev/null"] = virtualFileMeta{Size: 0, ModTime: w.system.snapshot().BootTime, Kind: "device"}
 	w.files["/etc/hostname"] = w.hostname + "\n"
-	w.files["/etc/os-release"] = "PRETTY_NAME=\"Ubuntu 24.04.3 LTS\"\nNAME=\"Ubuntu\"\nVERSION_ID=\"24.04\"\nVERSION_CODENAME=noble\nID=ubuntu\n"
-	w.files["/etc/passwd"] = "root:x:0:0:root:/root:/bin/bash\ndaemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin\nwww-data:x:33:33:www-data:/var/www:/usr/sbin/nologin\nsvc-web:x:997:997:Web Service:/opt/app:/bin/bash\nsvc-backup:x:998:998:Backup Service:/var/lib/backup:/bin/bash\nadmin:x:1000:1000:Administrator:/home/admin:/bin/bash\n"
-	w.files["/etc/shadow"] = "root:$y$j9T$Qf" + suffix + "n4kM7nQp$u7f8P8K2s9V3f5X1xA0:20308:0:99999:7:::\nsvc-backup:$y$j9T$X3" + suffix + "Tn9a$R8r9K1v4c2P7m5:20305:0:99999:7:::\n"
+	w.files["/etc/os-release"] = "PRETTY_NAME=\"" + virtualOSName + "\"\nNAME=\"Ubuntu\"\nVERSION_ID=\"24.04\"\nVERSION_CODENAME=noble\nID=ubuntu\n"
+	passwd := "root:x:0:0:root:/root:/bin/bash\ndaemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin\nwww-data:x:33:33:www-data:/var/www:/usr/sbin/nologin\nsvc-web:x:997:997:Web Service:/opt/app:/bin/bash\nsvc-backup:x:998:998:Backup Service:/var/lib/backup:/bin/bash\nadmin:x:1000:1000:Administrator:/home/admin:/bin/bash\n"
+	groups := "root:x:0:\nsudo:x:27:admin\nsvc-web:x:997:\nsvc-backup:x:998:\ndocker:x:999:admin\nadmin:x:1000:\n"
+	if w.user != "root" && w.user != "admin" && w.user != "svc-web" && w.user != "svc-backup" {
+		passwd += virtualUserPasswdEntry(w.user) + "\n"
+		groups += virtualUserGroupEntry(w.user) + "\n"
+		groups = strings.Replace(groups, "sudo:x:27:admin", "sudo:x:27:admin,"+safeVirtualName(w.user), 1)
+		groups = strings.Replace(groups, "docker:x:999:admin", "docker:x:999:admin,"+safeVirtualName(w.user), 1)
+	}
+	w.files["/etc/passwd"] = passwd
+	w.files["/etc/group"] = groups
+	shadow := "root:$y$j9T$Qf" + suffix + "n4kM7nQp$u7f8P8K2s9V3f5X1xA0:20308:0:99999:7:::\n" +
+		"svc-web:$y$j9T$Wb" + suffix + "p9q$M1x7v2:20306:0:99999:7:::\n" +
+		"svc-backup:$y$j9T$X3" + suffix + "Tn9a$R8r9K1v4c2P7m5:20305:0:99999:7:::\n" +
+		"admin:$y$j9T$Ad" + suffix + "m2v$P3q8k4:20307:0:99999:7:::\n"
+	if w.user != "root" && w.user != "admin" && w.user != "svc-web" && w.user != "svc-backup" {
+		shadow += safeVirtualName(w.user) + ":$y$j9T$U" + suffix + "x$N4r6p2:20307:0:99999:7:::\n"
+	}
+	w.files["/etc/shadow"] = shadow
 	w.files["/etc/hosts"] = lures.HostsFile()
 	w.files["/etc/ssh/sshd_config"] = "Port 22\nPermitRootLogin yes\nPasswordAuthentication yes\nUsePAM yes\n"
 	w.files["/opt/app/.env"] = "APP_ENV=production\nAPP_DEBUG=false\nDB_HOST=db-internal\nDB_PORT=5432\nDB_NAME=platform\nDB_USER=svc_web\nDB_PASSWORD=rotate_after_migration_" + suffix + "\nINTERNAL_API=http://127.0.0.1:8081\nINTERNAL_API_TOKEN=" + w.canaries["internal-api"] + "\nREGISTRY_HOST=registry.internal\nREGISTRY_TOKEN=" + w.canaries["registry"] + "\nBACKUP_DIR=/srv/archive/nightly\nBACKUP_TOKEN=" + w.canaries["backup"] + "\n"
@@ -173,13 +227,17 @@ func (w *virtualSSHWorld) seedFilesystem(suffix string) {
 	w.files["/opt/app/current/docker-compose.yml"] = "services:\n  web:\n    image: registry.internal/platform/web:2026.08\n  worker:\n    image: registry.internal/platform/worker:2026.08\n  redis:\n    image: redis:7-alpine\n"
 	w.files["/opt/backup/backup.conf"] = "legacy_export=true\nexport_path=/srv/archive/nightly\nservice_user=svc-backup\nremote_host=backup-01\nremote_ip=10.10.30.12\nauth_token=" + w.canaries["backup"] + "\nretention_days=14\n"
 	w.files["/srv/archive/nightly/migration-notes.txt"] = "Temporary legacy backup path remains enabled until cutover.\nService account: svc-backup\nTarget: backup-01 (10.10.30.12)\n"
-	w.files["/srv/archive/nightly/customers-2026-08-14.sql.gz"] = "\x1f\x8bFAKE-GZIP-CONTENT-" + suffix + "\n"
-	w.files["/srv/archive/nightly/config-prod.tar.gz"] = "\x1f\x8bFAKE-TAR-GZIP-" + suffix + "\n"
+	w.files["/srv/archive/nightly/customers-2026-08-14.sql.gz"] = "\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\x03DBIP-CUSTOMERS-" + suffix + "\n"
+	w.files["/srv/archive/nightly/config-prod.tar.gz"] = "\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\x03CONFIG-BACKUP-" + suffix + "\n"
 	w.files["/root/.bash_history"] = "cd /opt/app\ncat .env\ndocker ps\ncd /opt/backup\ncat backup.conf\nssh svc-backup@10.10.30.12\n"
+	w.files["/root/.bashrc"] = "# ~/.bashrc: executed by bash for non-login shells\ncase $- in\n    *i*) ;;\n      *) return;;\nesac\nexport PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n"
+	w.files["/root/.profile"] = "# ~/.profile\n[ -f ~/.bashrc ] && . ~/.bashrc\n"
 	if w.user != "root" {
 		w.files[path.Join(w.homeDir(), ".bash_history")] = "sudo -l\nuname -a\ncd /var/tmp\n"
+		w.files[path.Join(w.homeDir(), ".bashrc")] = "case $- in\n    *i*) ;;\n      *) return;;\nesac\n"
+		w.files[path.Join(w.homeDir(), ".profile")] = "[ -f ~/.bashrc ] && . ~/.bashrc\n"
 		_ = w.setVirtualDir(path.Join(w.homeDir(), ".ssh"))
-		w.files[path.Join(w.homeDir(), ".ssh/authorized_keys")] = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK9VIRTUALKEY " + w.user + "@ops-gw-01\n"
+		w.files[path.Join(w.homeDir(), ".ssh/authorized_keys")] = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMv7y4n0M0T2d9Rk9g6vJXx0y9S2k4C5qV6L1f8q " + w.user + "@ops-gw-01\n"
 	}
 	w.files["/root/.ssh/config"] = "Host backup-01\n    HostName 10.10.30.12\n    User svc-backup\n    IdentityFile ~/.ssh/id_ed25519_backup\n"
 	w.files["/root/.ssh/known_hosts"] = "backup-01 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG7m4D8g5gA3Rk2qP9tV6cB1nH0xQe5uL8zK" + suffix + "\n"
@@ -190,8 +248,8 @@ func (w *virtualSSHWorld) seedFilesystem(suffix string) {
 	w.files["/etc/fstab"] = "UUID=4e2a-91bf / ext4 defaults 0 1\nUUID=3ac1-c98d /srv/archive ext4 defaults,nosuid,nodev 0 2\n"
 	w.files["/etc/crontab"] = "SHELL=/bin/sh\nPATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin\n17 * * * * root cd / && run-parts --report /etc/cron.hourly\n0 2 * * * root /usr/local/bin/backupctl sync --profile legacy\n"
 	w.files["/etc/systemd/system/backup-agent.service"] = "[Unit]\nDescription=Legacy Backup Agent\nAfter=network-online.target\n\n[Service]\nUser=svc-backup\nExecStart=/usr/local/bin/backup-agent --config /opt/backup/backup.conf\nRestart=on-failure\n\n[Install]\nWantedBy=multi-user.target\n"
-	w.files["/proc/version"] = "Linux version 6.8.0-64-generic (buildd@lcy02-amd64-042) (x86_64-linux-gnu-gcc-13) #67-Ubuntu SMP PREEMPT_DYNAMIC\n"
-	w.files["/proc/cpuinfo"] = "processor\t: 0\nvendor_id\t: GenuineIntel\nmodel name\t: Intel(R) Xeon(R) CPU E-2288G @ 3.70GHz\ncpu cores\t: 4\nflags\t\t: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr\n"
+	w.files["/proc/version"] = "Linux version " + virtualKernelRelease + " (buildd@lcy02-amd64-042) (x86_64-linux-gnu-gcc-13) " + virtualKernelVersion + "\n"
+	w.files["/proc/cpuinfo"] = "processor\t: 0\nvendor_id\t: GenuineIntel\nmodel name\t: " + virtualCPUModel + "\ncpu cores\t: 4\nflags\t\t: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr\n"
 	w.files["/proc/meminfo"] = "MemTotal:        8063184 kB\nMemFree:         4077672 kB\nMemAvailable:    6163920 kB\nBuffers:          168432 kB\nCached:          1853900 kB\nSwapTotal:       2097148 kB\nSwapFree:        2097148 kB\n"
 	w.files["/proc/1/cgroup"] = "0::/init.scope\n"
 	w.files["/proc/uptime"] = ""
@@ -208,10 +266,16 @@ func (w *virtualSSHWorld) seedFilesystem(suffix string) {
 }
 
 func (w *virtualSSHWorld) homeDir() string {
-	if w.user == "root" {
+	switch w.user {
+	case "root":
 		return "/root"
+	case "svc-web":
+		return "/opt/app"
+	case "svc-backup":
+		return "/var/lib/backup"
+	default:
+		return "/home/" + safeVirtualName(w.user)
 	}
-	return "/home/" + safeVirtualName(w.user)
 }
 
 func safeVirtualName(v string) string {
@@ -231,7 +295,7 @@ func (w *virtualSSHWorld) Banner() string {
 	s := w.system.snapshot()
 	h := w.currentHost()
 	memPct := 100 * s.MemUsedMiB / s.MemTotalMiB
-	return fmt.Sprintf("Welcome to Ubuntu 24.04.3 LTS (GNU/Linux 6.8.0-64-generic x86_64)\r\n\r\n * Documentation:  https://help.ubuntu.com\r\n * Management:     https://landscape.canonical.com\r\n\r\nSystem information as of %s UTC\r\n\r\n  System load:  %.2f              Processes:             143\r\n  Usage of /:   34.1%% of 96.00GB   Users logged in:       2\r\n  Memory usage: %.0f%%               IPv4 address for eth0: %s\r\n  Swap usage:   0%%\r\n\r\n", s.Now.Format("Mon Jan _2 15:04:05 2006"), s.Load1, memPct, h.IP)
+	return fmt.Sprintf("Welcome to %s (GNU/Linux %s %s)\r\n\r\n * Documentation:  https://help.ubuntu.com\r\n * Management:     https://landscape.canonical.com\r\n\r\nSystem information as of %s UTC\r\n\r\n  System load:  %.2f              Processes:             %d\r\n  Usage of /:   %.1f%% of %.2fGB   Users logged in:       2\r\n  Memory usage: %.0f%%               IPv4 address for eth0: %s\r\n  Swap usage:   0%%\r\n\r\n", virtualOSName, virtualKernelRelease, virtualMachineArch, s.Now.Format("Mon Jan _2 15:04:05 2006"), s.Load1, w.virtualProcessCount(), float64(s.RootUsePct), s.RootTotalGiB, memPct, h.IP)
 }
 
 func (w *virtualSSHWorld) Prompt() string {
@@ -264,6 +328,7 @@ func (w *virtualSSHWorld) executeWithInput(line, initialInput string) virtualSSH
 	}
 	if looksLikeMinerCleanupSequence(strings.ToLower(line)) {
 		w.seedMinerCleanupLures()
+		w.seedDropperExecutionTargets(line)
 	}
 	w.observeRealityProbe(line)
 	if res, ok := w.executeVirtualControlFlow(line, initialInput); ok {
@@ -319,6 +384,9 @@ func (w *virtualSSHWorld) executeWithInput(line, initialInput string) virtualSSH
 		w.adaptToBehavior(res.Family, command)
 		executed = true
 		lastStatus = res.Status
+		// `$?` inside a later command in the same compound line must see the
+		// immediately preceding command, just like a real shell.
+		w.lastStatus = lastStatus
 		if res.Output != "" {
 			out.WriteString(res.Output)
 			if !strings.HasSuffix(res.Output, "\n") {
@@ -365,12 +433,38 @@ type virtualChainPart struct {
 
 func splitVirtualChain(line string) []virtualChainPart {
 	var out []virtualChainPart
-	var b strings.Builder
-	var quote rune
+	var b, word strings.Builder
+	var quote byte
 	escaped := false
 	parenDepth, braceDepth := 0, 0
+	caseDepth, ifDepth, loopDepth := 0, 0, 0
 	before := ""
+	processWord := func() {
+		w := strings.TrimSpace(word.String())
+		word.Reset()
+		switch w {
+		case "case":
+			caseDepth++
+		case "esac":
+			if caseDepth > 0 {
+				caseDepth--
+			}
+		case "if":
+			ifDepth++
+		case "fi":
+			if ifDepth > 0 {
+				ifDepth--
+			}
+		case "for", "while", "until":
+			loopDepth++
+		case "done":
+			if loopDepth > 0 {
+				loopDepth--
+			}
+		}
+	}
 	flush := func(next string) {
+		processWord()
 		cmd := strings.TrimSpace(b.String())
 		if cmd != "" {
 			out = append(out, virtualChainPart{before: before, command: cmd})
@@ -379,70 +473,87 @@ func splitVirtualChain(line string) []virtualChainPart {
 		b.Reset()
 	}
 	for i := 0; i < len(line); i++ {
-		r := rune(line[i])
+		c := line[i]
 		if escaped {
-			b.WriteByte(line[i])
+			b.WriteByte(c)
+			if quote == 0 {
+				word.WriteByte(c)
+			}
 			escaped = false
 			continue
 		}
-		if r == '\\' {
+		if c == '\\' {
 			escaped = true
-			b.WriteByte(line[i])
+			b.WriteByte(c)
 			continue
 		}
 		if quote != 0 {
-			b.WriteByte(line[i])
-			if r == quote {
+			b.WriteByte(c)
+			if c == quote {
 				quote = 0
 			}
 			continue
 		}
-		if r == '\'' || r == '"' {
-			quote = r
-			b.WriteByte(line[i])
+		if c == '\'' || c == '"' {
+			quote = c
+			b.WriteByte(c)
 			continue
 		}
-		switch r {
+		switch c {
 		case '(':
 			parenDepth++
-			b.WriteByte(line[i])
-			continue
 		case ')':
 			if parenDepth > 0 {
 				parenDepth--
 			}
-			b.WriteByte(line[i])
-			continue
 		case '{':
 			braceDepth++
-			b.WriteByte(line[i])
-			continue
 		case '}':
 			if braceDepth > 0 {
 				braceDepth--
 			}
-			b.WriteByte(line[i])
-			continue
 		}
 		if parenDepth == 0 && braceDepth == 0 {
-			if line[i] == '&' && i+1 < len(line) && line[i+1] == '&' {
+			if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
+				processWord()
+				b.WriteByte(c)
+				continue
+			}
+			if c == ';' {
+				processWord()
+				if caseDepth > 0 || ifDepth > 0 || loopDepth > 0 {
+					b.WriteByte(c)
+					continue
+				}
+				flush(";")
+				continue
+			}
+			if c == '&' && i+1 < len(line) && line[i+1] == '&' {
+				processWord()
+				if caseDepth > 0 || ifDepth > 0 || loopDepth > 0 {
+					b.WriteString("&&")
+					i++
+					continue
+				}
 				flush("&&")
 				i++
 				continue
 			}
-			if line[i] == '|' && i+1 < len(line) && line[i+1] == '|' {
+			if c == '|' && i+1 < len(line) && line[i+1] == '|' {
+				processWord()
+				if caseDepth > 0 || ifDepth > 0 || loopDepth > 0 {
+					b.WriteString("||")
+					i++
+					continue
+				}
 				flush("||")
 				i++
 				continue
 			}
-			if line[i] == ';' {
-				flush(";")
-				continue
-			}
-			if line[i] == '&' {
-				// &> and n>&m are redirection operators, not background separators.
-				if (i+1 < len(line) && line[i+1] == '>') || (i > 0 && (line[i-1] == '>' || line[i-1] == '<')) {
-					b.WriteByte(line[i])
+			if c == '&' && !((i+1 < len(line) && line[i+1] == '>') || (i > 0 && (line[i-1] == '>' || line[i-1] == '<'))) {
+				processWord()
+				if caseDepth > 0 || ifDepth > 0 || loopDepth > 0 {
+					b.WriteByte(c)
 					continue
 				}
 				flush(";")
@@ -451,8 +562,15 @@ func splitVirtualChain(line string) []virtualChainPart {
 				}
 				continue
 			}
+			if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '-' {
+				word.WriteByte(c)
+			} else {
+				if word.Len() > 0 {
+					processWord()
+				}
+			}
 		}
-		b.WriteByte(line[i])
+		b.WriteByte(c)
 	}
 	flush("")
 	return out
@@ -466,7 +584,26 @@ func (w *virtualSSHWorld) executePipeline(line string, initialInput ...string) v
 	}
 	best := virtualSSHResult{Status: 0, Family: "other", Risk: 70, Message: "virtual pipeline processed"}
 	for i, part := range parts {
-		clean, redirect := parseVirtualRedirection(strings.TrimSpace(part))
+		stage := strings.TrimSpace(part)
+		// Redirections inside a grouped command belong to the individual commands
+		// in that group. Do not hoist an inner `2>/dev/null` to the whole group,
+		// otherwise valid stdout from earlier commands would disappear when the
+		// final optional probe fails.
+		if inner, grouped := unwrapVirtualGroup(stage); grouped {
+			res := w.executeGrouped(inner)
+			input = res.Output
+			if i == 0 || res.Depth >= best.Depth {
+				best = res
+			} else {
+				best.Status = res.Status
+				best.Exit = res.Exit
+			}
+			if res.Exit || res.Interactive != "" {
+				break
+			}
+			continue
+		}
+		clean, redirect := parseVirtualRedirection(stage)
 		if redirect.syntaxError {
 			return virtualSSHResult{Output: "bash: syntax error near unexpected token `newline'", Status: 2, Family: "shell", CommandName: path.Base(firstNonOption(virtualWords(clean))), Depth: maxInt(2, w.depth), Risk: 80, Persona: "interactive-shell", Message: "virtual redirection syntax error"}
 		}
@@ -496,6 +633,14 @@ func (w *virtualSSHWorld) executePipeline(line string, initialInput ...string) v
 			}
 		}
 		res := w.executeOne(clean, stageInput)
+		if redirect.suppressStderr && res.Status != 0 {
+			// The virtual result has a combined text field; for failed commands the
+			// diagnostics represented there are stderr in the cases we model.
+			res.Output = ""
+		}
+		if redirect.suppressStdout {
+			res.Output = ""
+		}
 		if emptyRedirectedStdin && res.Output == "\x00ZL_EMPTY_STDIN\x00" {
 			res.Output = ""
 		}
@@ -515,7 +660,7 @@ func (w *virtualSSHWorld) executePipeline(line string, initialInput ...string) v
 					ok = w.setVirtualFile(resolvedOut, content)
 				}
 				if !ok {
-					res.Output, res.Status = "bash: "+redirect.stdout+": No space left on device", 1
+					res.Output, res.Status = "bash: "+redirect.stdout+": "+w.virtualWriteFailure(resolvedOut), 1
 				} else {
 					res.Output = ""
 					words := virtualWords(clean)
@@ -561,19 +706,38 @@ func (w *virtualSSHWorld) executePipeline(line string, initialInput ...string) v
 }
 
 type virtualRedirection struct {
-	stdin       string
-	stdout      string
-	append      bool
-	syntaxError bool
+	stdin          string
+	stdout         string
+	append         bool
+	suppressStderr bool
+	suppressStdout bool
+	syntaxError    bool
 }
 
 func parseVirtualRedirection(line string) (string, virtualRedirection) {
 	var r virtualRedirection
-	// Common stderr-only shell redirections are accepted but remain entirely
-	// virtual. They are stripped before stdout parsing so 2>/dev/null cannot be
-	// mistaken for a normal output file.
-	for _, token := range []string{"2>/dev/null", "2> /dev/null", "2>&1", "1>&2", "&>/dev/null", "&> /dev/null", "1>/dev/null", "1> /dev/null"} {
+	// Keep stderr/stdout semantics separate enough for common automation probes.
+	for _, token := range []string{"&>/dev/null", "&> /dev/null"} {
+		if strings.Contains(line, token) {
+			r.suppressStdout, r.suppressStderr = true, true
+			line = strings.ReplaceAll(line, token, "")
+		}
+	}
+	for _, token := range []string{"2>/dev/null", "2> /dev/null"} {
+		if strings.Contains(line, token) {
+			r.suppressStderr = true
+			line = strings.ReplaceAll(line, token, "")
+		}
+	}
+	// 2>&1 merges stderr into stdout and is therefore intentionally not suppressed.
+	for _, token := range []string{"2>&1", "1>&2"} {
 		line = strings.ReplaceAll(line, token, "")
+	}
+	for _, token := range []string{"1>/dev/null", "1> /dev/null", ">/dev/null", "> /dev/null"} {
+		if strings.Contains(line, token) {
+			r.suppressStdout = true
+			line = strings.ReplaceAll(line, token, "")
+		}
 	}
 	if pos, width := findVirtualRedirect(line, '>', true); pos >= 0 {
 		r.append = width == 2
@@ -693,41 +857,56 @@ func splitOutsideQuotes(v string, delim rune) []string {
 func virtualWords(v string) []string {
 	var out []string
 	var b strings.Builder
-	var quote rune
-	escaped := false
+	var quote byte
 	flush := func() {
 		if b.Len() > 0 {
 			out = append(out, b.String())
 			b.Reset()
 		}
 	}
-	for _, r := range strings.TrimSpace(v) {
-		if escaped {
-			b.WriteRune(r)
-			escaped = false
-			continue
-		}
-		if r == '\\' && quote != '\'' {
-			escaped = true
-			continue
-		}
-		if quote != 0 {
-			if r == quote {
+	v = strings.TrimSpace(v)
+	for i := 0; i < len(v); i++ {
+		c := v[i]
+		if quote == '\'' {
+			if c == '\'' {
 				quote = 0
 			} else {
-				b.WriteRune(r)
+				b.WriteByte(c)
 			}
 			continue
 		}
-		if r == '\'' || r == '"' {
-			quote = r
+		if quote == '"' {
+			if c == '"' {
+				quote = 0
+				continue
+			}
+			if c == '\\' && i+1 < len(v) {
+				n := v[i+1]
+				if n == '$' || n == '`' || n == '"' || n == '\\' || n == '\n' {
+					b.WriteByte(n)
+					i++
+					continue
+				}
+				b.WriteByte('\\')
+				continue
+			}
+			b.WriteByte(c)
 			continue
 		}
-		if r == ' ' || r == '\t' {
+		if c == '\'' || c == '"' {
+			quote = c
+			continue
+		}
+		if c == '\\' && i+1 < len(v) {
+			b.WriteByte(v[i+1])
+			i++
+			continue
+		}
+		if c == ' ' || c == '\t' {
 			flush()
 			continue
 		}
-		b.WriteRune(r)
+		b.WriteByte(c)
 	}
 	flush()
 	return out
@@ -807,10 +986,27 @@ func splitVirtualAssignment(raw string) (string, string, bool) {
 
 func unquoteVirtualAssignmentValue(value string) string {
 	value = strings.TrimSpace(value)
-	if len(value) >= 2 {
-		if (value[0] == '"' && value[len(value)-1] == '"') || (value[0] == '\'' && value[len(value)-1] == '\'') {
-			return value[1 : len(value)-1]
+	if len(value) < 2 {
+		return value
+	}
+	if value[0] == '\'' && value[len(value)-1] == '\'' {
+		return value[1 : len(value)-1]
+	}
+	if value[0] == '"' && value[len(value)-1] == '"' {
+		v := value[1 : len(value)-1]
+		var b strings.Builder
+		for i := 0; i < len(v); i++ {
+			if v[i] == '\\' && i+1 < len(v) {
+				n := v[i+1]
+				if n == '$' || n == '`' || n == '"' || n == '\\' {
+					b.WriteByte(n)
+					i++
+					continue
+				}
+			}
+			b.WriteByte(v[i])
 		}
+		return b.String()
 	}
 	return value
 }
@@ -824,11 +1020,7 @@ func (w *virtualSSHWorld) executeVirtualCapturedAssignment(raw string) (virtualS
 	if !ok {
 		return virtualSSHResult{}, false
 	}
-	trimmed := strings.TrimSpace(value)
-	unquoted := trimmed
-	if len(unquoted) >= 2 && ((unquoted[0] == '"' && unquoted[len(unquoted)-1] == '"') || (unquoted[0] == '\'' && unquoted[len(unquoted)-1] == '\'')) {
-		unquoted = unquoted[1 : len(unquoted)-1]
-	}
+	unquoted := unquoteVirtualAssignmentValue(value)
 	// Only intercept values that contain command substitution. Plain
 	// NAME=value command prefixes (LC_ALL=C lscpu) are handled below.
 	if !strings.Contains(unquoted, "$(") {
@@ -859,9 +1051,14 @@ func (w *virtualSSHWorld) executeGrouped(inner string) virtualSSHResult {
 			res = captured
 		} else {
 			cmd := strings.TrimSpace(w.expandVirtualLine(part.command))
-			res = w.executePipeline(cmd)
+			if control, ok := w.executeVirtualControlFlow(cmd, ""); ok {
+				res = control
+			} else {
+				res = w.executePipeline(cmd)
+			}
 		}
 		lastStatus = res.Status
+		w.lastStatus = lastStatus
 		if res.Output != "" {
 			out.WriteString(res.Output)
 			if !strings.HasSuffix(res.Output, "\n") {
@@ -946,6 +1143,9 @@ func (w *virtualSSHWorld) executeOneDepth(raw, input string, aliasDepth int) vir
 		_, isSystemBinary := w.fileMeta[resolved]
 		isSystemBinary = isSystemBinary && w.fileMeta[resolved].Kind == "elf" && virtualCommandPath(cmd) != "" && (strings.HasPrefix(resolved, "/bin/") || strings.HasPrefix(resolved, "/usr/bin/") || strings.HasPrefix(resolved, "/sbin/") || strings.HasPrefix(resolved, "/usr/sbin/"))
 		if content, ok := w.virtualReadFile(words[0]); ok && content != "" && !isSystemBinary {
+			if w.virtualFileMode(resolved)&0o111 == 0 {
+				return virtualSSHResult{Output: "bash: " + words[0] + ": Permission denied", Status: 126, Family: "execution", CommandName: path.Base(words[0]), Depth: maxInt(5, w.depth), Risk: 94, Persona: "payload-preparation", Message: "virtual executable permission denied"}
+			}
 			return w.fakeExecute(words[0])
 		}
 		if strings.HasPrefix(words[0], "./") && !virtualCommandExists(path.Base(words[0])) {
@@ -994,7 +1194,8 @@ func (w *virtualSSHWorld) executeOneDepth(raw, input string, aliasDepth int) vir
 		if w.user == "root" {
 			r.Output = "uid=0(root) gid=0(root) groups=0(root)"
 		} else {
-			r.Output = "uid=1000(" + w.user + ") gid=1000(" + w.user + ") groups=1000(" + w.user + "),27(sudo),998(docker)"
+			uid := virtualUserID(w.user)
+			r.Output = fmt.Sprintf("uid=%d(%s) gid=%d(%s) groups=%d(%s),27(sudo),999(docker)", uid, w.user, uid, w.user, uid, w.user)
 		}
 		return r
 	case "hostname":
@@ -1010,42 +1211,7 @@ func (w *virtualSSHWorld) executeOneDepth(raw, input string, aliasDepth int) vir
 		return r
 	case "uname":
 		r := base("recon", 3, 84, "system-recon", "kernel discovery")
-		if len(args) == 0 {
-			r.Output = "Linux"
-			return r
-		}
-		if containsArg(args, "-a") {
-			r.Output = "Linux " + w.hostname + " 6.8.0-64-generic #67-Ubuntu SMP PREEMPT_DYNAMIC x86_64 x86_64 x86_64 GNU/Linux"
-			return r
-		}
-		var fields []string
-		for _, a := range args {
-			if !strings.HasPrefix(a, "-") {
-				continue
-			}
-			for _, f := range strings.TrimPrefix(a, "-") {
-				switch f {
-				case 's':
-					fields = append(fields, "Linux")
-				case 'n':
-					fields = append(fields, w.hostname)
-				case 'r':
-					fields = append(fields, "6.8.0-64-generic")
-				case 'v':
-					fields = append(fields, "#67-Ubuntu SMP PREEMPT_DYNAMIC")
-				case 'm':
-					fields = append(fields, "x86_64")
-				case 'p', 'i':
-					fields = append(fields, "x86_64")
-				case 'o':
-					fields = append(fields, "GNU/Linux")
-				}
-			}
-		}
-		if len(fields) == 0 {
-			fields = []string{"Linux"}
-		}
-		r.Output = strings.Join(fields, " ")
+		r.Output = virtualGNUUname(w.hostname, args)
 		return r
 	case "date":
 		r := base("recon", 3, 78, "system-recon", "system time discovery")
@@ -1132,50 +1298,8 @@ func (w *virtualSSHWorld) executeOneDepth(raw, input string, aliasDepth int) vir
 		r.Delay = 350 * time.Millisecond
 		return r
 	case "grep", "egrep", "fgrep":
-		r := base("filesystem", 4, 88, "file-discovery", "content search")
-		pattern := ""
-		files := []string{}
-		for _, a := range args {
-			if strings.HasPrefix(a, "-") {
-				continue
-			}
-			if pattern == "" {
-				pattern = a
-			} else {
-				files = append(files, a)
-			}
-		}
-		text := input
-		if text == "" && len(files) > 0 {
-			for _, f := range files {
-				if content, ok := w.virtualReadFile(f); ok {
-					text += content
-				}
-			}
-		}
-		if containsArg(args, "-v") || containsArg(args, "--invert-match") {
-			matched := make(map[string]bool)
-			for _, line := range strings.Split(grepVirtual(text, pattern), "\n") {
-				if line != "" {
-					matched[line] = true
-				}
-			}
-			var kept []string
-			for _, line := range strings.Split(strings.TrimSuffix(text, "\n"), "\n") {
-				if !matched[line] {
-					kept = append(kept, line)
-				}
-			}
-			r.Output = strings.Join(kept, "\n")
-		} else {
-			r.Output = grepVirtual(text, pattern)
-		}
-		if r.Output == "" {
-			r.Status = 1
-		}
-		if containsArg(args, "-q") || containsArg(args, "--quiet") || containsArg(args, "--silent") {
-			r.Output = ""
-		}
+		r := w.virtualGrep(args, input)
+		r.CommandName = cmd
 		return r
 	case "stat":
 		r := base("filesystem", 4, 87, "file-discovery", "file metadata discovery")
@@ -1198,7 +1322,8 @@ func (w *virtualSSHWorld) executeOneDepth(raw, input string, aliasDepth int) vir
 		return r
 	case "df":
 		r := base("recon", 3, 84, "system-recon", "filesystem capacity discovery")
-		r.Output = "Filesystem      Size  Used Avail Use% Mounted on\n/dev/vda2        96G   31G   61G  34% /\n/dev/vdb1       480G  312G  144G  69% /srv/archive"
+		snap := w.system.snapshot()
+		r.Output = fmt.Sprintf("Filesystem      Size  Used Avail Use%% Mounted on\n/dev/vda2       %.0fG  %.0fG   %.0fG  %d%% /\n/dev/vdb1       %.0fG  %.0fG  %.0fG  %d%% /srv/archive", snap.RootTotalGiB, snap.RootUsedGiB, snap.RootAvailGiB, snap.RootUsePct, snap.ArchiveTotalGiB, snap.ArchiveUsedGiB, snap.ArchiveAvailGiB, snap.ArchiveUsePct)
 		return r
 	case "free":
 		r := base("recon", 3, 83, "system-recon", "memory discovery")
@@ -1267,20 +1392,20 @@ func (w *virtualSSHWorld) executeOneDepth(raw, input string, aliasDepth int) vir
 			r.Output = "Matching Defaults entries for " + w.user + " on " + w.hostname + ":\n    env_reset, mail_badpass, secure_path=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n\nUser " + w.user + " may run the following commands on " + w.hostname + ":\n    (ALL) NOPASSWD: /usr/bin/docker, /usr/local/bin/backupctl"
 			return r
 		}
-		if args[0] == "-i" || args[0] == "su" || args[0] == "bash" || args[0] == "sh" {
+		innerArgs, _ := virtualSudoCommandArgs(args)
+		if len(innerArgs) == 0 {
+			return r
+		}
+		interactiveShell := (innerArgs[0] == "bash" || innerArgs[0] == "sh") && !containsArg(innerArgs[1:], "-c")
+		if innerArgs[0] == "-i" || innerArgs[0] == "su" || interactiveShell {
 			w.setVirtualUser("root")
-			r.Output = ""
 			r.LoopInc = 1
 			return r
 		}
-		inner := strings.Join(args, " ")
+		inner := strings.Join(innerArgs, " ")
 		res := w.executeOne(inner, input)
-		if res.Depth < 5 {
-			res.Depth = 5
-		}
-		if res.Risk < 95 {
-			res.Risk = 95
-		}
+		res.Depth = maxInt(res.Depth, 5)
+		res.Risk = maxInt(res.Risk, 95)
 		res.Persona = "privilege-escalation"
 		return res
 	case "su":
@@ -1306,7 +1431,19 @@ func (w *virtualSSHWorld) executeOneDepth(raw, input string, aliasDepth int) vir
 		return r
 	case "crontab":
 		r := base("persistence", 6, 97, "persistence", "scheduled task discovery or modification")
-		if containsArg(args, "-r") {
+		if containsArg(args, "-e") {
+			spool := "/var/spool/cron/crontabs/" + safeVirtualName(w.user)
+			_ = w.setVirtualDir("/var/spool")
+			_ = w.setVirtualDir("/var/spool/cron")
+			_ = w.setVirtualDir("/var/spool/cron/crontabs")
+			if _, ok := w.files[spool]; !ok {
+				_ = w.setVirtualFile(spool, w.crontabContent)
+				w.fileModes[spool] = 0o600
+			}
+			r.Interactive = "crontab-edit"
+			r.Target = spool
+			r.LoopInc = 1
+		} else if containsArg(args, "-r") {
 			w.crontabExists = false
 			w.crontabContent = ""
 			w.system.setPeerCrontab(w.peerKey, false, "")
@@ -1358,14 +1495,7 @@ func (w *virtualSSHWorld) executeOneDepth(raw, input string, aliasDepth int) vir
 	case "ssh":
 		return w.fakeNestedSSH(args)
 	case "scp":
-		r := base("file-transfer", 6, 97, "lateral-movement", "simulated SCP transfer")
-		r.Delay = 500 * time.Millisecond
-		if len(args) >= 2 {
-			r.Output = path.Base(args[0]) + "                                      100%  8421     1.2MB/s   00:00"
-		} else {
-			r.Output, r.Status = "usage: scp [-346ABCOpqRrsTv] source ... target", 1
-		}
-		return r
+		return w.fakeSCP(args)
 	case "ping":
 		r := base("network", 5, 94, "network-recon", "simulated network reachability probe")
 		host := lastNonOption(args)
@@ -1405,13 +1535,26 @@ func (w *virtualSSHWorld) executeOneDepth(raw, input string, aliasDepth int) vir
 		return r
 	case "chmod", "chown":
 		r := base("execution", 6, 97, "payload-preparation", "payload permission/ownership change")
-		if cmd == "chmod" {
-			target := lastNonOption(args)
-			if target != "" {
-				resolved := w.resolve(target)
-				if _, ok := w.virtualReadFile(resolved); !ok && w.looksLikeStagedPayload(target) {
-					_ = w.setVirtualFile(resolved, "\x7fELF\x02\x01\x01VIRTUAL-STAGED-PAYLOAD\n")
+		if cmd == "chmod" && len(args) >= 2 {
+			modeArg := args[0]
+			for _, target := range args[1:] {
+				if strings.HasPrefix(target, "-") {
+					continue
 				}
+				resolved := w.resolve(target)
+				if _, ok := w.virtualReadFile(resolved); !ok {
+					r.Output, r.Status = "chmod: cannot access '"+target+"': No such file or directory", 1
+					continue
+				}
+				m := w.virtualFileMode(resolved)
+				if strings.Contains(modeArg, "+x") {
+					m |= 0o111
+				} else if strings.Contains(modeArg, "-x") {
+					m &^= 0o111
+				} else if n, err := strconv.ParseUint(modeArg, 8, 12); err == nil {
+					m = uint32(n)
+				}
+				w.fileModes[resolved] = m
 			}
 		}
 		r.LoopInc = 1
@@ -1443,6 +1586,12 @@ func (w *virtualSSHWorld) executeOneDepth(raw, input string, aliasDepth int) vir
 		r := base("filesystem", 5, 93, "file-manipulation", "virtual file removal")
 		for _, a := range args {
 			if !strings.HasPrefix(a, "-") {
+				resolved := w.resolve(a)
+				if w.virtualFileImmutable(resolved) {
+					r.Output = "rm: cannot remove '" + a + "': Operation not permitted"
+					r.Status = 1
+					continue
+				}
 				w.removeVirtualPattern(a)
 			}
 		}
@@ -1468,6 +1617,25 @@ func (w *virtualSSHWorld) executeOneDepth(raw, input string, aliasDepth int) vir
 		r := base("filesystem", 4, 88, "file-manipulation", "virtual shell output/redirection")
 		r.Output = virtualEchoOutput(cmd, args)
 		return r
+	case "shutdown", "reboot", "poweroff", "halt":
+		r := base("system", 6, 96, "system-control", "system power control requested")
+		if w.user != "root" {
+			r.Output, r.Status = cmd+": must be superuser.", 1
+			return r
+		}
+		r.Output = "Broadcast message from root@" + w.hostname + " (pts/0):\n\nThe system will power off now!"
+		if cmd == "reboot" {
+			r.Output = "Broadcast message from root@" + w.hostname + " (pts/0):\n\nThe system will reboot now!"
+		}
+		r.Exit = true
+		return r
+	case "htop":
+		if !w.packageInstalled("htop") {
+			return virtualSSHResult{Output: "bash: htop: command not found", Status: 127, Family: "software", CommandName: "htop", Depth: 4, Risk: 84, Persona: "tool-discovery", Message: "missing package command"}
+		}
+		r := base("recon", 4, 86, "system-recon", "interactive process monitor")
+		r.Interactive = "top"
+		return r
 	case "bash", "sh", "dash", "python", "python3", "perl", "php":
 		if containsArg(args, "--version") || containsArg(args, "-V") || (cmd == "perl" && containsArg(args, "-v")) || (cmd == "php" && containsArg(args, "-v")) {
 			return w.fakeInterpreterVersion(cmd)
@@ -1486,8 +1654,9 @@ func (w *virtualSSHWorld) executeOneDepth(raw, input string, aliasDepth int) vir
 			return w.fakeExecute("stdin-script")
 		}
 		if len(args) > 0 {
-			if content, ok := w.virtualReadFile(lastNonOption(args)); ok && content != "" {
-				return w.fakeExecute(lastNonOption(args))
+			script := firstNonOption(args)
+			if content, ok := w.virtualReadFile(script); ok && content != "" {
+				return w.fakeExecute(script)
 			}
 			return w.fakeInterpreter(cmd, args)
 		}
@@ -1749,7 +1918,7 @@ func (w *virtualSSHWorld) fakeNestedSSH(args []string) virtualSSHResult {
 	lastLogin := w.system.snapshot().Now.Add(-2*time.Hour - 3*time.Minute)
 	version := "Ubuntu 22.04.5 LTS (GNU/Linux 5.15.0-139-generic x86_64)"
 	if h.Role == "operations" {
-		version = "Ubuntu 24.04.3 LTS (GNU/Linux 6.8.0-64-generic x86_64)"
+		version = virtualOSName + " (GNU/Linux " + virtualKernelRelease + " " + virtualMachineArch + ")"
 	}
 	r.Output = "Warning: Permanently added '" + host + "' (ED25519) to the list of known hosts.\nWelcome to " + version + "\nLast login: " + lastLogin.Format("Mon Jan _2 15:04:05 2006") + " from 10.10.30.21"
 	return r
@@ -1801,6 +1970,10 @@ func (w *virtualSSHWorld) setVirtualDir(target string) bool {
 }
 
 func (w *virtualSSHWorld) setVirtualFile(target, content string) bool {
+	target = path.Clean(target)
+	if w.virtualFileImmutable(target) {
+		return false
+	}
 	if _, exists := w.files[target]; !exists && len(w.files) >= maxVirtualFiles {
 		return false
 	}
@@ -1811,10 +1984,17 @@ func (w *virtualSSHWorld) setVirtualFile(target, content string) bool {
 	w.files[target] = stored
 	now := w.system.snapshot().Now
 	w.fileMeta[target] = virtualFileMeta{Size: int64(len(content)), ModTime: now, Kind: inferVirtualFileKind(target, stored)}
+	if w.fileModes[target] == 0 {
+		w.fileModes[target] = 0o644
+	}
 	return true
 }
 
 func (w *virtualSSHWorld) appendVirtualFile(target, content string) bool {
+	target = path.Clean(target)
+	if w.virtualFileImmutable(target) {
+		return false
+	}
 	old, exists := w.files[target]
 	if !exists && len(w.files) >= maxVirtualFiles {
 		return false
@@ -1827,6 +2007,9 @@ func (w *virtualSSHWorld) appendVirtualFile(target, content string) bool {
 	w.files[target] = stored
 	now := w.system.snapshot().Now
 	w.fileMeta[target] = virtualFileMeta{Size: int64(len(combined)), ModTime: now, Kind: inferVirtualFileKind(target, stored)}
+	if w.fileModes[target] == 0 {
+		w.fileModes[target] = 0o644
+	}
 	return true
 }
 
@@ -1847,6 +2030,8 @@ func (w *virtualSSHWorld) virtualStorageBytes() int {
 func (w *virtualSSHWorld) deleteVirtualFile(target string) {
 	delete(w.files, target)
 	delete(w.fileMeta, target)
+	delete(w.fileModes, target)
+	delete(w.fileAttrs, target)
 }
 
 func limitVirtualContent(v string) string {
@@ -1886,7 +2071,7 @@ func (w *virtualSSHWorld) listDir(target string, long, showAll bool) (string, in
 				meta.Size = int64(len(content))
 			}
 			owner, group := virtualFileOwner(target)
-			return fmt.Sprintf("-rw-r----- 1 %-8s %-8s %8d %s %s", owner, group, meta.Size, virtualLSDate(now, meta.ModTime), path.Base(target)), 0
+			return fmt.Sprintf("%s 1 %-8s %-8s %8d %s %s", virtualModeString(w.virtualFileMode(target), false), owner, group, meta.Size, virtualLSDate(now, meta.ModTime), path.Base(target)), 0
 		}
 		return path.Base(target), 0
 	}
@@ -1917,15 +2102,18 @@ func (w *virtualSSHWorld) listDir(target string, long, showAll bool) (string, in
 	}
 	rows := []string{"total 48"}
 	if showAll {
+		owner, group := virtualFileOwner(target)
+		parentOwner, parentGroup := virtualFileOwner(path.Dir(target))
 		rows = append(rows,
-			fmt.Sprintf("drwxr-xr-x  5 root     root         4096 %s .", virtualLSDate(now, now.Add(-48*time.Hour))),
-			fmt.Sprintf("drwxr-xr-x 18 root     root         4096 %s ..", virtualLSDate(now, w.system.snapshot().BootTime.Add(3*time.Minute))),
+			fmt.Sprintf("%s  5 %-8s %-8s %8d %s .", virtualModeString(virtualDirMode(target), true), owner, group, 4096, virtualLSDate(now, now.Add(-48*time.Hour))),
+			fmt.Sprintf("%s 18 %-8s %-8s %8d %s ..", virtualModeString(virtualDirMode(path.Dir(target)), true), parentOwner, parentGroup, 4096, virtualLSDate(now, w.system.snapshot().BootTime.Add(3*time.Minute))),
 		)
 	}
 	for _, n := range names {
 		full := path.Join(target, n)
 		if seen[n] {
-			rows = append(rows, fmt.Sprintf("drwxr-xr-x  3 root     root         4096 %s %s", virtualLSDate(now, now.Add(-time.Duration(2+stableSSHHash(full)%168)*time.Hour)), n))
+			owner, group := virtualFileOwner(full)
+			rows = append(rows, fmt.Sprintf("%s  3 %-8s %-8s %8d %s %s", virtualModeString(virtualDirMode(full), true), owner, group, 4096, virtualLSDate(now, now.Add(-time.Duration(2+stableSSHHash(full)%168)*time.Hour)), n))
 		} else {
 			meta := w.fileMeta[full]
 			sz := meta.Size
@@ -1933,12 +2121,7 @@ func (w *virtualSSHWorld) listDir(target string, long, showAll bool) (string, in
 				sz = int64(len(w.files[full]))
 			}
 			owner, group := virtualFileOwner(full)
-			mode := "-rw-r-----"
-			if meta.Kind == "elf" && (strings.HasPrefix(full, "/bin/") || strings.HasPrefix(full, "/usr/bin/") || strings.HasPrefix(full, "/sbin/") || strings.HasPrefix(full, "/usr/sbin/")) {
-				mode = "-rwxr-xr-x"
-			} else if strings.HasPrefix(n, ".") || strings.Contains(n, "id_ed25519") {
-				mode = "-rw-------"
-			}
+			mode := virtualModeString(w.virtualFileMode(full), false)
 			rows = append(rows, fmt.Sprintf("%s  1 %-8s %-8s %8d %s %s", mode, owner, group, sz, virtualLSDate(now, meta.ModTime), n))
 		}
 	}

@@ -416,6 +416,8 @@ type SSHEvent struct {
 	StdinKind        string         `json:"stdin_kind,omitempty"`
 	PayloadStage     string         `json:"payload_stage,omitempty"`
 	PayloadPath      string         `json:"payload_path,omitempty"`
+	NetworkTarget    string         `json:"network_target,omitempty"`
+	NetworkPort      int            `json:"network_port,omitempty"`
 }
 
 type SSHOverview struct {

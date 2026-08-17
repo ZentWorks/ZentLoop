@@ -201,6 +201,7 @@ type SSHRecurrence struct {
 	Connections   int
 	MedianSeconds int64
 	JitterSeconds int64
+	Rapid         bool
 	LowAndSlow    bool
 }
 
@@ -241,7 +242,7 @@ func (s *Store) sshRecurrenceLocked(ip string, now time.Time) SSHRecurrence {
 	}
 	sort.Slice(dev, func(i, j int) bool { return dev[i] < dev[j] })
 	jitter := dev[len(dev)/2]
-	return SSHRecurrence{Connections: len(ts), MedianSeconds: med, JitterSeconds: jitter, LowAndSlow: len(ts) >= 6 && med >= 20 && med <= 3600 && jitter <= max64(20, med/5)}
+	return SSHRecurrence{Connections: len(ts), MedianSeconds: med, JitterSeconds: jitter, Rapid: len(ts) >= 8 && med >= 0 && med < 20 && jitter <= max64(3, med/3), LowAndSlow: len(ts) >= 6 && med >= 20 && med <= 3600 && jitter <= max64(20, med/5)}
 }
 
 func max64(a, b int64) int64 {

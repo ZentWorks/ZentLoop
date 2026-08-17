@@ -13,6 +13,7 @@
     <div class="target-control"><label for="dateFilter">DATE</label><select id="dateFilter"><option value="live">LIVE</option><option value="all">All dates</option></select></div>
     <div class="target-control"><label for="targetFilter">TARGET</label><select id="targetFilter"><option value="">All targets</option></select></div>
     <div class="topbar-tools">
+      <button id="toggleLiveView" class="view-switch" type="button" aria-label="Open ZentLoop live view" title="Live View"><span class="view-switch-dot"></span><span id="toggleLiveViewLabel">LIVE</span></button>
       <button id="openSettings" class="settings-button" type="button" aria-label="ZentLoop settings" title="Settings">⚙</button>
       <button id="openHelp" class="settings-button help-button" type="button" aria-label="ZentLoop help" title="Quick help">?</button>
     </div>
@@ -20,6 +21,7 @@
   </header>
 
   <main>
+    <div id="dashboardView" class="view-pane">
     <section class="hero-grid">
       <article class="metric danger"><span>HOSTILE</span><strong id="hostile">0</strong><small><b class="rangeWindow">LIVE · 24h</b></small></article>
       <article class="metric warn"><span>SUSPICIOUS</span><strong id="suspicious">0</strong><small><b class="rangeWindow">LIVE · 24h</b></small></article>
@@ -126,7 +128,7 @@
       </section>
 
       <section class="panel sessions-panel">
-        <div class="panel-title"><h2>Live SSH sessions</h2><div class="ssh-session-tools"><span id="sshSessionCount">0 active</span><button id="openSSHLiveFeed" class="compact-action" type="button">Open SSH Live Feed <small id="sshLiveFeedLauncherSummary">0 live</small></button></div></div>
+        <div class="panel-title"><h2>Live SSH sessions</h2><div class="ssh-session-tools"><span id="sshSessionCount">0 active</span><button id="openLiveViewFromSSH" class="compact-action" type="button">Open Live View <small id="liveViewLauncherSummary">0 live</small></button></div></div>
         <div class="table-wrap"><table>
           <thead><tr><th>LAST</th><th>IP</th><th>CC</th><th>USER</th><th>CLIENT</th><th>AUTH</th><th>CMD</th><th>DEPTH</th><th>LOOP</th><th>CWD</th><th>CURRENT</th></tr></thead>
           <tbody id="sshSessionsBody"></tbody>
@@ -250,7 +252,47 @@
       </article>
     </section>
 
-    <footer><span id="version">ZentLoop 0.2.13</span><span>Proxy: <b id="proxyMode">direct</b> · GeoIP: <b id="geoStatus">local</b> · Official bots: <b id="botStatus">waiting</b> · <a href="https://db-ip.com" target="_blank" rel="noopener noreferrer">IP Geolocation by DB-IP</a> · no telemetry</span></footer>
+    </div>
+
+    <section id="liveView" class="live-view" hidden aria-label="ZentLoop realtime live view">
+      <div class="live-view-head">
+        <div><small>REALTIME OBSERVATORY</small><h1>Live View</h1><p>Active SSH and Web sessions in one compact operator view. Select a session to open its detailed live timeline.</p></div>
+        <div class="live-view-head-actions"><span id="liveStreamState" class="live-stream-state"><span class="dot"></span><b id="liveStreamStateText">CONNECTING</b></span><button id="liveBackDashboard" class="compact-action" type="button">Dashboard</button></div>
+      </div>
+
+      <section class="live-summary-grid">
+        <article class="live-summary-card ssh"><span>SSH LIVE</span><strong id="liveSSHCount">0</strong><small>active trap sessions</small></article>
+        <article class="live-summary-card web"><span>WEB LIVE</span><strong id="liveWebCount">0</strong><small>active Web sessions</small></article>
+      </section>
+
+      <section class="panel live-session-panel">
+        <div class="panel-title"><div><h2>SSH Live Sessions</h2><span>virtual SSH trap · select for transcript</span></div><span id="liveSSHSessionCount">0 active</span></div>
+        <div id="liveSSHSessions" class="live-session-grid"></div>
+      </section>
+
+      <section class="panel live-session-panel">
+        <div class="panel-title"><div><h2>Web Live Sessions</h2><span>HTTP activity · select for request timeline</span></div><span id="liveWebSessionCount">0 active</span></div>
+        <div id="liveWebSessions" class="live-session-grid"></div>
+      </section>
+
+      <section class="panel live-feed-panel">
+        <div class="live-feed-page-head">
+          <div><small>SSH REALTIME ACTIVITY</small><h2>SSH Live Feed</h2><span id="sshLiveFeedSummary">0 live</span></div>
+          <div class="live-feed-page-actions">
+            <div id="sshLiveFeedFilters" class="feed-filters" role="group" aria-label="SSH live feed filter">
+              <button type="button" data-feed-filter="all" class="active">All</button>
+              <button type="button" data-feed-filter="live">Live</button>
+              <button type="button" data-feed-filter="left">Recently left</button>
+            </div>
+            <button id="sshLiveFollow" class="feed-follow active" type="button" aria-pressed="true">● Live follow</button>
+          </div>
+        </div>
+        <div class="feed-statusline"><span><span class="dot"></span> active + 10s recently left</span><span>Select “View session” for the full transcript</span></div>
+        <div id="sshLiveFeed" class="ssh-live-feed live-page-ssh-feed"></div>
+      </section>
+    </section>
+
+    <footer><span id="version">ZentLoop 0.2.14</span><span>Proxy: <b id="proxyMode">direct</b> · GeoIP: <b id="geoStatus">local</b> · Official bots: <b id="botStatus">waiting</b> · <a href="https://db-ip.com" target="_blank" rel="noopener noreferrer">IP Geolocation by DB-IP</a> · no telemetry</span></footer>
   </main>
 
   <div id="settingsBackdrop" class="modal-backdrop settings-backdrop" aria-hidden="true"></div>
@@ -274,6 +316,7 @@ example.net"></textarea>
     <div class="settings-modal-body help-modal-body">
       <div class="help-block"><h3>Trusted Domains</h3><p>Domains that belong to your own infrastructure. Adding a root domain also covers its subdomains. Trusted domains appear as normal targets and are included in the regular target statistics.</p></div>
       <div class="help-block"><h3>Date &amp; Target filters</h3><p>LIVE is the rolling last 24 hours and keeps receiving new Web and SSH events. Selecting a day or All dates switches to a historical view: live streams are paused and lazy loading stays inside the selected time window. The Target filter can be combined with any time view and groups trusted subdomains under their configured root domain.</p></div>
+      <div class="help-block"><h3>Live View</h3><p>The LIVE button opens a compact realtime page with active SSH sessions first, active Web sessions second and the SSH activity feed below. Selecting any session opens the same detailed live drawer used by the dashboard. The view reuses the existing SSE streams and is optimized for phones as well as desktop screens.</p></div>
       <div class="help-block"><h3>Untrusted hosts</h3><p>Hosts shown in parentheses were requested by a visitor but are not trusted as one of your own domains. They are evaluated separately so they do not distort your normal target statistics. If you trust one later, its retained history is reclassified automatically.</p></div>
       <div class="help-block"><h3>Host sweeps</h3><p>ZentLoop can recognize when one visitor rapidly tries many different host names. These attempts stay in the untrusted-host view and may be guided into a generic Web Trap instead of being treated as real targets.</p></div>
       <div class="help-block"><h3>Integration / Proxy</h3><p>When ZentLoop is used behind a compatible proxy or upstream integration, the original public target and visitor information can be preserved. Verified, explicit proxy routes may also provide trusted targets automatically.</p></div>
@@ -319,26 +362,6 @@ example.net"></textarea>
       <h4>User agent</h4><pre id="dUa"></pre>
     </div>
   </aside>
-
-  <div id="sshLiveFeedBackdrop" class="modal-backdrop" aria-hidden="true"></div>
-  <section id="sshLiveFeedModal" class="live-feed-modal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="sshLiveFeedTitle">
-    <div class="live-feed-modal-head">
-      <div><small>REALTIME OBSERVATORY</small><h2 id="sshLiveFeedTitle">SSH Live Feed</h2><span id="sshLiveFeedSummary">0 live</span></div>
-      <div class="live-feed-modal-actions">
-        <div id="sshLiveFeedFilters" class="feed-filters" role="group" aria-label="SSH live feed filter">
-          <button type="button" data-feed-filter="all" class="active">All</button>
-          <button type="button" data-feed-filter="live">Live</button>
-          <button type="button" data-feed-filter="left">Recently left</button>
-        </div>
-        <button id="sshLiveFollow" class="feed-follow active" type="button" aria-pressed="true">● Live follow</button>
-        <button id="closeSSHLiveFeed" class="modal-close" type="button" aria-label="Close SSH live feed">×</button>
-      </div>
-    </div>
-    <div class="live-feed-modal-body">
-      <div class="feed-statusline"><span><span class="dot"></span> realtime · active + 10s recently left</span><span>View session opens above this feed</span></div>
-      <div id="sshLiveFeed" class="ssh-live-feed ssh-live-feed-modal-grid"></div>
-    </div>
-  </section>
 
   <aside id="sshDrawer" class="drawer" aria-hidden="true">
     <div class="drawer-head ssh-drawer-head"><div><small>SSH SESSION <span id="sdLiveState" class="ssh-live-state ended">ENDED</span></small><h3 id="sdId">—</h3></div><div class="drawer-actions"><a id="sshExportJSON" class="export-link" href="#">JSON</a><a id="sshExportTXT" class="export-link" href="#">TXT</a><button id="closeSSHDrawer">×</button></div></div>

@@ -11,12 +11,14 @@ import (
 
 func (w *virtualSSHWorld) seedFileMetadata() {
 	s := w.system.snapshot()
+	// Static decoy files belong to one virtual machine, so their mtimes must not
+	// slide forward on every new SSH connection. Anchor them to the persistent
+	// virtual boot/deployment timeline instead of the current wall clock.
 	for name, content := range w.files {
 		h := stableSSHHash(fmt.Sprintf("%d|%s", w.system.seed, name))
-		age := time.Duration(2+int(h%240)) * time.Hour
-		mod := s.Now.Add(-age).Truncate(time.Second)
-		if mod.Before(s.BootTime) {
-			mod = s.BootTime.Add(time.Duration(h%7200) * time.Second)
+		mod := s.BootTime.Add(20*time.Minute + time.Duration(h%216)*time.Hour + time.Duration((h>>12)%3600)*time.Second).Truncate(time.Second)
+		if !mod.Before(s.Now) {
+			mod = s.BootTime.Add(time.Duration(h%7200) * time.Second).Truncate(time.Second)
 		}
 		w.fileMeta[name] = virtualFileMeta{Size: int64(len(content)), ModTime: mod, Kind: inferVirtualFileKind(name, content)}
 	}
@@ -27,15 +29,27 @@ func (w *virtualSSHWorld) seedFileMetadata() {
 	}
 	for _, name := range []string{"/opt/app/.env", "/opt/app/current/config.yaml", "/opt/app/current/.env.production"} {
 		m := w.fileMeta[name]
-		m.ModTime = s.Now.Add(-time.Duration(5+stableSSHHash(name)%48) * time.Hour).Truncate(time.Second)
+		m.ModTime = s.BootTime.Add(36*time.Hour + time.Duration(stableSSHHash(name)%36)*time.Hour).Truncate(time.Second)
+		if !m.ModTime.Before(s.Now) {
+			m.ModTime = s.BootTime.Add(2 * time.Hour).Truncate(time.Second)
+		}
 		w.fileMeta[name] = m
 	}
 	for _, name := range []string{"/srv/archive/nightly/customers-2026-08-14.sql.gz", "/srv/archive/nightly/config-prod.tar.gz"} {
 		m := w.fileMeta[name]
-		m.ModTime = s.Now.Add(-time.Duration(6+stableSSHHash(name)%30) * time.Hour).Truncate(time.Second)
-		if strings.Contains(name, "customers") {
+		if strings.Contains(name, "customers-2026-08-14") {
+			if fixed, err := time.Parse(time.RFC3339, "2026-08-14T02:13:00Z"); err == nil {
+				m.ModTime = fixed
+			}
 			m.Size = 18_391_040
 		} else {
+			// This path represents the current nightly configuration archive. Its
+			// mtime moves once per UTC day rather than on every command/connection.
+			day := s.Now.UTC().Truncate(24 * time.Hour)
+			m.ModTime = day.Add(2*time.Hour + 7*time.Minute)
+			if m.ModTime.After(s.Now) {
+				m.ModTime = m.ModTime.Add(-24 * time.Hour)
+			}
 			m.Size = 4_842_112
 		}
 		m.Kind = "gzip"
@@ -86,11 +100,8 @@ func (w *virtualSSHWorld) virtualReadFile(name string) (string, bool) {
 func (w *virtualSSHWorld) virtualDynamicFile(name string) (string, bool) {
 	s := w.system.snapshot()
 	if name == "/proc/self/status" {
-		uid := 0
+		uid := virtualUserID(w.user)
 		procName := "bash"
-		if w.user != "root" {
-			uid = 1000
-		}
 		return fmt.Sprintf("Name:\t%s\nUmask:\t0022\nState:\tS (sleeping)\nTgid:\t24117\nPid:\t24117\nPPid:\t24092\nUid:\t%d\t%d\t%d\t%d\nGid:\t%d\t%d\t%d\t%d\nThreads:\t1\nNoNewPrivs:\t0\nSeccomp:\t2\n", procName, uid, uid, uid, uid, uid, uid, uid, uid), true
 	}
 	if strings.HasPrefix(name, "/proc/") && strings.HasSuffix(name, "/status") {
@@ -106,11 +117,11 @@ func (w *virtualSSHWorld) virtualDynamicFile(name string) (string, bool) {
 		return w.hostname + "\n", true
 
 	case "/proc/version":
-		return "Linux version 6.8.0-64-generic (buildd@lcy02-amd64-042) (x86_64-linux-gnu-gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0, GNU ld (GNU Binutils for Ubuntu) 2.42) #67-Ubuntu SMP PREEMPT_DYNAMIC Fri Jul 11 15:25:18 UTC 2026\n", true
+		return "Linux version " + virtualKernelRelease + " (buildd@lcy02-amd64-042) (x86_64-linux-gnu-gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0, GNU ld (GNU Binutils for Ubuntu) 2.42) " + virtualKernelVersion + " Fri Jul 11 15:25:18 UTC 2026\n", true
 	case "/proc/cpuinfo":
 		var b strings.Builder
-		for i := 0; i < 4; i++ {
-			fmt.Fprintf(&b, "processor\t: %d\nvendor_id\t: GenuineIntel\ncpu family\t: 6\nmodel\t\t: 158\nmodel name\t: Intel(R) Xeon(R) CPU E-2288G @ 3.70GHz\nstepping\t: 13\ncpu MHz\t\t: %.3f\ncache size\t: 16384 KB\nflags\t\t: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ss ht syscall nx lm constant_tsc rep_good nopl xtopology cpuid tsc_known_freq pni pclmulqdq ssse3 fma cx16 sse4_1 sse4_2 x2apic movbe popcnt aes xsave avx f16c rdrand hypervisor lahf_lm abm 3dnowprefetch cpuid_fault invpcid_single pti ssbd ibrs ibpb stibp tpr_shadow flexpriority ept vpid ept_ad\n\n", i, 3696.000+float64(i)*1.7)
+		for i := 0; i < virtualCPUCount; i++ {
+			fmt.Fprintf(&b, "processor\t: %d\nvendor_id\t: GenuineIntel\ncpu family\t: 6\nmodel\t\t: 158\nmodel name\t: "+virtualCPUModel+"\nstepping\t: 13\ncpu MHz\t\t: %.3f\ncache size\t: 16384 KB\nflags\t\t: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ss ht syscall nx lm constant_tsc rep_good nopl xtopology cpuid tsc_known_freq pni pclmulqdq ssse3 fma cx16 sse4_1 sse4_2 x2apic movbe popcnt aes xsave avx f16c rdrand hypervisor lahf_lm abm 3dnowprefetch cpuid_fault invpcid_single pti ssbd ibrs ibpb stibp tpr_shadow flexpriority ept vpid ept_ad\n\n", i, 3696.000+float64(i)*1.7)
 		}
 		return b.String(), true
 	case "/proc/mounts":
@@ -118,7 +129,8 @@ func (w *virtualSSHWorld) virtualDynamicFile(name string) (string, bool) {
 	case "/proc/1/cgroup":
 		return "0::/init.scope\n", true
 	case "/proc/self/cgroup":
-		return "0::/user.slice/user-0.slice/session-42.scope\n", true
+		uid := virtualUserID(w.user)
+		return fmt.Sprintf("0::/user.slice/user-%d.slice/session-%d.scope\n", uid, 42+int(stableSSHHash(w.peerKey)%700)), true
 	case "/proc/uptime":
 		secs := s.Uptime.Seconds()
 		idle := secs*3.44 + 1731
@@ -132,7 +144,7 @@ func (w *virtualSSHWorld) virtualDynamicFile(name string) (string, bool) {
 	case "/proc/meminfo":
 		return fmt.Sprintf("MemTotal:        %d kB\nMemFree:         %d kB\nMemAvailable:    %d kB\nBuffers:          168432 kB\nCached:          %d kB\nSwapCached:            0 kB\nSwapTotal:       2097148 kB\nSwapFree:        2097148 kB\n", int64(s.MemTotalMiB*1024), int64(s.MemFreeMiB*1024), int64(s.MemAvailMiB*1024), int64(s.MemCacheMiB*1024)), true
 	case "/proc/stat":
-		ticks := int64(s.Uptime.Seconds() * 100 * 4)
+		ticks := int64(s.Uptime.Seconds() * 100 * virtualCPUCount)
 		user := int64(float64(ticks) * s.CPUUser / 100)
 		sys := int64(float64(ticks) * s.CPUSystem / 100)
 		idle := ticks - user - sys
@@ -208,9 +220,9 @@ func (w *virtualSSHWorld) virtualWho(cmd string, args []string) string {
 	backupLogin := s.Now.Add(-2*time.Hour - 3*time.Minute)
 	if cmd == "last" {
 		if len(args) > 0 && args[0] == "reboot" {
-			return fmt.Sprintf("reboot   system boot  6.8.0-64-generic %s   still running\n\nwtmp begins %s", s.BootTime.Format("Mon Jan _2 15:04"), s.BootTime.Format("Mon Jan _2 15:04:05 2006"))
+			return fmt.Sprintf("reboot   system boot  "+virtualKernelRelease+" %s   still running\n\nwtmp begins %s", s.BootTime.Format("Mon Jan _2 15:04"), s.BootTime.Format("Mon Jan _2 15:04:05 2006"))
 		}
-		return fmt.Sprintf("admin    pts/0        10.10.20.44     %s   still logged in\nsvc-backup pts/1      10.10.30.12     %s - %s  (00:03)\nreboot   system boot  6.8.0-64-generic %s   still running", adminLogin.Format("Mon Jan _2 15:04"), backupLogin.Format("Mon Jan _2 15:04"), backupLogin.Add(3*time.Minute).Format("15:04"), s.BootTime.Format("Mon Jan _2 15:04"))
+		return fmt.Sprintf("admin    pts/0        10.10.20.44     %s   still logged in\nsvc-backup pts/1      10.10.30.12     %s - %s  (00:03)\nreboot   system boot  "+virtualKernelRelease+" %s   still running", adminLogin.Format("Mon Jan _2 15:04"), backupLogin.Format("Mon Jan _2 15:04"), backupLogin.Add(3*time.Minute).Format("15:04"), s.BootTime.Format("Mon Jan _2 15:04"))
 	}
 	if cmd == "w" {
 		return fmt.Sprintf(" %s up %s,  2 users,  load average: %.2f, %.2f, %.2f\nUSER     TTY      FROM             LOGIN@   IDLE   JCPU   PCPU WHAT\nadmin    pts/0    10.10.20.44      %s   1:22   0.08s  0.02s -bash\nsvc-bac+ pts/1    10.10.30.12      %s   2:01m  0.03s  0.01s -bash", s.Now.Format("15:04:05"), virtualUptimeHuman(s.Uptime), s.Load1, s.Load5, s.Load15, adminLogin.Format("15:04"), backupLogin.Format("15:04"))
@@ -302,15 +314,15 @@ func (w *virtualSSHWorld) virtualFileStat(name string) (string, int) {
 		meta.Size = int64(len(content))
 	}
 	mode := "regular file"
-	perm := "0640/-rw-r-----"
-	uid := "997/ svc-web"
-	gid := "997/ svc-web"
-	if meta.Kind == "elf" && (strings.HasPrefix(p, "/bin/") || strings.HasPrefix(p, "/usr/bin/") || strings.HasPrefix(p, "/sbin/") || strings.HasPrefix(p, "/usr/sbin/")) {
-		perm = "0755/-rwxr-xr-x"
-		uid, gid = "0/ root", "0/ root"
-	}
+	vmode := w.virtualFileMode(p)
+	perm := fmt.Sprintf("%04o/%s", vmode, virtualModeString(vmode, false))
+	owner, group := virtualFileOwner(p)
+	ownerID, groupID := virtualIdentityID(owner), virtualIdentityID(group)
+	uid := fmt.Sprintf("%d/ %s", ownerID, owner)
+	gid := fmt.Sprintf("%d/ %s", groupID, group)
 	if w.dirs[p] {
-		mode, perm, uid, gid, meta.Size = "directory", "0755/drwxr-xr-x", "0/ root", "0/ root", 4096
+		vmode = virtualDirMode(p)
+		mode, perm, meta.Size = "directory", fmt.Sprintf("%04o/%s", vmode, virtualModeString(vmode, true)), 4096
 	}
 	return fmt.Sprintf("  File: %s\n  Size: %d\tBlocks: %d          IO Block: 4096 %s\nAccess: (%s)  Uid: (  %s)   Gid: (  %s)\nAccess: %s +0000\nModify: %s +0000\nChange: %s +0000", p, meta.Size, maxInt64(8, (meta.Size+511)/512), mode, perm, uid, gid, meta.ModTime.Add(4*time.Minute).Format("2006-01-02 15:04:05.000000000"), meta.ModTime.Format("2006-01-02 15:04:05.000000000"), meta.ModTime.Add(2*time.Second).Format("2006-01-02 15:04:05.000000000")), 0
 }
@@ -333,20 +345,43 @@ func virtualLSDate(now, mod time.Time) string {
 }
 
 func virtualFileOwner(name string) (string, string) {
+	name = path.Clean(name)
 	base := path.Base(name)
-	if strings.HasPrefix(name, "/bin/") || strings.HasPrefix(name, "/usr/bin/") || strings.HasPrefix(name, "/sbin/") || strings.HasPrefix(name, "/usr/sbin/") {
+	if name == "/" || name == "/root" || strings.HasPrefix(name, "/root/") || strings.Contains(base, "id_ed25519") {
 		return "root", "root"
 	}
-	if strings.Contains(name, "/root/") || strings.Contains(base, "id_ed25519") || base == ".env" && strings.HasPrefix(name, "/root") {
-		return "root", "root"
+	if strings.HasPrefix(name, "/home/") {
+		rel := strings.TrimPrefix(name, "/home/")
+		user := strings.SplitN(rel, "/", 2)[0]
+		if user != "" {
+			return user, user
+		}
 	}
-	if strings.Contains(name, "/home/admin/") {
-		return "admin", "admin"
-	}
-	if strings.Contains(name, "/var/lib/backup/") || strings.Contains(name, "/opt/backup/") {
+	if strings.HasPrefix(name, "/var/lib/backup") || strings.HasPrefix(name, "/opt/backup") {
 		return "svc-backup", "svc-backup"
 	}
+	if strings.HasPrefix(name, "/opt/app") {
+		return "svc-web", "svc-web"
+	}
+	if name == "/bin" || name == "/sbin" || name == "/usr" || name == "/usr/bin" || name == "/usr/sbin" || name == "/etc" || name == "/proc" || name == "/srv" || name == "/var" || name == "/var/log" || name == "/tmp" || name == "/var/tmp" || name == "/dev" || name == "/dev/shm" || name == "/home" || name == "/opt" || strings.HasPrefix(name, "/bin/") || strings.HasPrefix(name, "/usr/bin/") || strings.HasPrefix(name, "/sbin/") || strings.HasPrefix(name, "/usr/sbin/") || strings.HasPrefix(name, "/etc/") || strings.HasPrefix(name, "/proc/") || strings.HasPrefix(name, "/srv/") || strings.HasPrefix(name, "/var/log/") {
+		return "root", "root"
+	}
 	return "svc-web", "svc-web"
+}
+
+func virtualIdentityID(name string) int {
+	switch name {
+	case "root":
+		return 0
+	case "svc-web":
+		return 997
+	case "svc-backup":
+		return 998
+	case "admin":
+		return 1000
+	default:
+		return virtualUserID(name)
+	}
 }
 
 func virtualActivityWeight(r virtualSSHResult) float64 {
@@ -372,18 +407,54 @@ func virtualActivityWeight(r virtualSSHResult) float64 {
 }
 
 func (w *virtualSSHWorld) virtualPSCompactOutput() string {
-	lines := []string{
-		"    PID %CPU COMMAND",
-		"    844  1.3 web",
-		"   1842  0.1 backup-agent",
-		"   1021  0.0 dockerd",
-		"    612  0.0 sshd",
-		"      1  0.0 systemd",
-	}
+	s := w.system.snapshot()
+	lines := []string{"    PID %CPU COMMAND", fmt.Sprintf("    844 %4.1f web", 0.1+s.Load1*0.55), "   1842  0.1 backup-agent", "   1021  0.0 dockerd", "    612  0.0 sshd", "      1  0.0 systemd"}
 	for _, p := range w.processes {
 		if p != nil && p.Alive {
-			lines = append(lines, fmt.Sprintf("%7d %4.1f %s", p.PID, p.CPU, path.Base(strings.Fields(p.Command)[0])))
+			fields := strings.Fields(p.Command)
+			name := "worker"
+			if len(fields) > 0 {
+				name = path.Base(fields[0])
+			}
+			lines = append(lines, fmt.Sprintf("%7d %4.1f %s", p.PID, p.CPU, name))
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+func virtualModeString(mode uint32, dir bool) string {
+	prefix := byte('-')
+	if dir {
+		prefix = 'd'
+	}
+	b := []byte{prefix, '-', '-', '-', '-', '-', '-', '-', '-', '-'}
+	bits := []uint32{0o400, 0o200, 0o100, 0o040, 0o020, 0o010, 0o004, 0o002, 0o001}
+	chars := []byte{'r', 'w', 'x', 'r', 'w', 'x', 'r', 'w', 'x'}
+	for i, bit := range bits {
+		if mode&bit != 0 {
+			b[i+1] = chars[i]
+		}
+	}
+	if mode&0o4000 != 0 {
+		if b[3] == 'x' {
+			b[3] = 's'
+		} else {
+			b[3] = 'S'
+		}
+	}
+	if mode&0o2000 != 0 {
+		if b[6] == 'x' {
+			b[6] = 's'
+		} else {
+			b[6] = 'S'
+		}
+	}
+	if mode&0o1000 != 0 {
+		if b[9] == 'x' {
+			b[9] = 't'
+		} else {
+			b[9] = 'T'
+		}
+	}
+	return string(b)
 }

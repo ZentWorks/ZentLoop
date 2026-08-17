@@ -36,7 +36,7 @@ The production image is published to GitHub Container Registry:
 ghcr.io/zentworks/zentloop:latest
 ```
 
-Versioned images can also be published from semantic Git tags such as `v0.2.13`.
+Versioned images can also be published from semantic Git tags such as `v0.2.14`.
 
 ## Quick start with Docker Compose
 

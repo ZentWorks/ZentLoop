@@ -45,7 +45,7 @@ func (w *virtualSSHWorld) virtualPayloadForURL(raw string) virtualDownloadPayloa
 
 	script := "#!/bin/sh\n# bootstrap worker\nARCH=$(uname -m)\necho installing worker for $ARCH\necho starting worker\n"
 	switch {
-	case strings.HasSuffix(lower, ".sh"), strings.HasSuffix(lower, ".bash"), strings.HasSuffix(lower, ".run"), strings.Contains(lower, "bootstrap"), strings.Contains(lower, "install"):
+	case strings.HasSuffix(lower, ".sh"), strings.HasSuffix(lower, ".bash"), strings.HasSuffix(lower, ".run"), lower == "/sh", lower == "/setup", lower == "/update", lower == "/loader", strings.Contains(lower, "bootstrap"), strings.Contains(lower, "install"):
 		payload.Body, payload.ContentType, payload.Kind, payload.Size, payload.Binary = script, "text/x-shellscript", "shell", int64(len(script)), false
 	case strings.HasSuffix(lower, ".json"), strings.Contains(lower, "/api/"), strings.HasSuffix(lower, "/status"):
 		body := "{\"status\":\"ok\",\"release\":\"2026.08\",\"node\":\"edge-02\",\"region\":\"eu-central\"}\n"
@@ -54,23 +54,23 @@ func (w *virtualSSHWorld) virtualPayloadForURL(raw string) virtualDownloadPayloa
 		body := "network,continent,country\n1.0.0.0/24,OC,AU\n1.0.1.0/24,AS,CN\n1.0.2.0/23,AS,CN\n"
 		payload.Body, payload.ContentType, payload.Kind, payload.Size, payload.Binary = body, "text/csv", "csv", 4_224_197, false
 	case strings.HasSuffix(lower, ".csv.gz"):
-		body := "\x1f\x8b\x08\x00virtual-gzip-country-database\n"
+		body := "\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\x03DBIP-COUNTRY-DATABASE\n"
 		payload.Body, payload.ContentType, payload.Kind, payload.Size, payload.Binary = body, "application/gzip", "gzip", 4_089_614, true
 		if strings.Contains(strings.ToLower(raw), "dbip-country-lite") {
 			payload.Size = 4_176_922
 		}
 	case strings.HasSuffix(lower, ".tar.gz"), strings.HasSuffix(lower, ".tgz"):
-		payload.Body, payload.ContentType, payload.Kind, payload.Size, payload.Binary = "\x1f\x8b\x08\x00virtual-tar-gzip\n", "application/gzip", "tar-gzip", 2_941_872, true
+		payload.Body, payload.ContentType, payload.Kind, payload.Size, payload.Binary = "\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\x03TAR-ARCHIVE\n", "application/gzip", "tar-gzip", 2_941_872, true
 	case strings.HasSuffix(lower, ".gz"):
-		payload.Body, payload.ContentType, payload.Kind, payload.Size, payload.Binary = "\x1f\x8b\x08\x00virtual-gzip-data\n", "application/gzip", "gzip", 1_842_771, true
+		payload.Body, payload.ContentType, payload.Kind, payload.Size, payload.Binary = "\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\x03COMPRESSED-DATA\n", "application/gzip", "gzip", 1_842_771, true
 	case strings.HasSuffix(lower, ".zip"):
-		payload.Body, payload.ContentType, payload.Kind, payload.Size, payload.Binary = "PK\x03\x04virtual-zip-data\n", "application/zip", "zip", 3_214_640, true
+		payload.Body, payload.ContentType, payload.Kind, payload.Size, payload.Binary = "PK\x03\x04\x14\x00\x00\x00ARCHIVE-DATA\n", "application/zip", "zip", 3_214_640, true
 	case strings.HasSuffix(lower, ".deb"):
 		payload.Body, payload.ContentType, payload.Kind, payload.Size, payload.Binary = "!<arch>\ndebian-binary/\n", "application/vnd.debian.binary-package", "deb", 7_924_816, true
 	case strings.HasSuffix(lower, ".rpm"):
-		payload.Body, payload.ContentType, payload.Kind, payload.Size, payload.Binary = "\xed\xab\xee\xdbvirtual-rpm\n", "application/x-rpm", "rpm", 8_614_204, true
+		payload.Body, payload.ContentType, payload.Kind, payload.Size, payload.Binary = "\xed\xab\xee\xdbRPM-PAYLOAD\n", "application/x-rpm", "rpm", 8_614_204, true
 	case strings.HasSuffix(lower, ".so"), strings.HasSuffix(lower, ".bin"):
-		payload.Body, payload.ContentType, payload.Kind, payload.Size, payload.Binary = "\x7fELF\x02\x01\x01virtual-binary\n", "application/octet-stream", "elf", 1_274_944, true
+		payload.Body, payload.ContentType, payload.Kind, payload.Size, payload.Binary = "\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00GLIBC_2.34\x00worker\n", "application/octet-stream", "elf", 1_274_944, true
 	case strings.HasSuffix(lower, ".conf"), strings.HasSuffix(lower, ".ini"), strings.HasSuffix(lower, ".env"), strings.HasSuffix(lower, ".yaml"), strings.HasSuffix(lower, ".yml"):
 		body := "environment=production\nendpoint=https://api.internal\nworkers=4\n"
 		payload.Body, payload.ContentType, payload.Kind, payload.Size, payload.Binary = body, "text/plain", "text", int64(len(body)), false

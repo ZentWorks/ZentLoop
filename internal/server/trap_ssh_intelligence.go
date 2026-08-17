@@ -29,8 +29,10 @@ func sshBehaviorFingerprint(result virtualSSHResult, command string) string {
 		return "ssh:process-killer"
 	case (strings.Contains(low, "for ") && strings.Contains(low, "; do ")) || (strings.Contains(low, "if ") && strings.Contains(low, "; then ")):
 		return "ssh:shell-control-flow"
-	case strings.Contains(low, "history -c") || strings.Contains(low, ".bash_history"):
+	case strings.Contains(low, "history -c") || strings.Contains(low, "unset histfile") || strings.Contains(low, "histfile=/dev/null") || (strings.Contains(low, ".bash_history") && (strings.Contains(low, "rm ") || strings.Contains(low, "truncate ") || strings.Contains(low, "shred ") || strings.Contains(low, "> /dev/null"))):
 		return "ssh:history-evasion"
+	case strings.Contains(low, ".bash_history") || strings.HasPrefix(strings.TrimSpace(low), "history"):
+		return "ssh:history-discovery"
 	case isHoneypotProbeCommand(command) || result.Persona == "anti-fingerprint":
 		return "ssh:honeypot-probe"
 	case result.Family == "lateral" || strings.HasPrefix(low, "ssh "):
@@ -89,13 +91,18 @@ func (w *virtualSSHWorld) sshInstallerSequenceFingerprint(result virtualSSHResul
 
 func recordSSHIntelligence(st *store.Store, base model.SSHEvent, command string, canaries []string) {
 	tool, technique := commandTechnique(command)
-	urls := intelURLPattern.FindAllString(command, 6)
+	urls := intelURLPattern.FindAllString(command, 12)
+	seenURLs := make(map[string]struct{})
 	for _, raw := range urls {
 		raw = strings.TrimRight(raw, ").,;]")
 		safeURL, host, filename, ok := sanitizeIntelURL(raw)
 		if !ok {
 			continue
 		}
+		if _, exists := seenURLs[safeURL]; exists {
+			continue
+		}
+		seenURLs[safeURL] = struct{}{}
 		kind := "payload"
 		if technique == "" {
 			technique = "remote-resource"

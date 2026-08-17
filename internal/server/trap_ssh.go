@@ -208,7 +208,7 @@ func (s *TrapSSH) handleConn(conn net.Conn, auth sshAuthState) {
 	serverConn, channels, requests, err := ssh.NewServerConn(conn, sshCfg)
 	if err != nil {
 		base := model.SSHEvent{SessionID: auth.sessionID, IP: auth.ip, Country: auth.country, CountrySource: auth.countrySource}
-		s.recordSSHEvent(base, "handshake_error", "", "", "", "SSH handshake/authentication ended", 45, 0, 0, 0, model.ActorAutomated)
+		s.recordSSHEvent(base, "handshake_error", "", "", "", "SSH handshake/authentication ended", 45, 0, 0, 0, model.ActorUnknown)
 		return
 	}
 	defer serverConn.Close()
@@ -219,10 +219,29 @@ func (s *TrapSSH) handleConn(conn net.Conn, auth sshAuthState) {
 	user := cleanSSHField(serverConn.User(), 64)
 	actor := classifySSHActor(client, false)
 	base := model.SSHEvent{SessionID: auth.sessionID, IP: auth.ip, Country: auth.country, CountrySource: auth.countrySource, ClientVersion: client, Username: user}
+	shared := newVirtualSSHSharedState()
 
 	go s.handleGlobalSSHRequests(base, requests)
 	for ch := range channels {
 		if ch.ChannelType() != "session" {
+			if ch.ChannelType() == "direct-tcpip" {
+				var p struct {
+					Target     string
+					Port       uint32
+					Origin     string
+					OriginPort uint32
+				}
+				_ = ssh.Unmarshal(ch.ExtraData(), &p)
+				_ = ch.Reject(ssh.Prohibited, "administratively prohibited")
+				target := cleanSSHField(p.Target, 128)
+				origin := cleanSSHField(p.Origin, 128)
+				msg := fmt.Sprintf("SSH direct-tcpip rejected: %s:%d from %s:%d", target, p.Port, origin, p.OriginPort)
+				e := model.SSHEvent{ID: newID(6), At: time.Now(), SessionID: base.SessionID, IP: base.IP, Country: base.Country, CountrySource: base.CountrySource, ClientVersion: base.ClientVersion, Username: base.Username, Type: "request", CommandName: "direct-tcpip", CommandFamily: "network", Depth: 6, Frustration: 1, RiskScore: 94, Classification: model.ClassHostile, Actor: actor, Message: msg, Fingerprint: "ssh:port-forward-pivot", NetworkTarget: target, NetworkPort: int(p.Port)}
+				if err := s.store.AddSSHEvent(e); err != nil {
+					log.Printf("SSH event store: %v", err)
+				}
+				continue
+			}
 			_ = ch.Reject(ssh.Prohibited, "administratively prohibited")
 			s.recordSSHEvent(base, "request", "channel", "protocol", "", "non-session channel rejected: "+cleanSSHField(ch.ChannelType(), 64), 75, 3, 0, 0, actor)
 			continue
@@ -231,24 +250,29 @@ func (s *TrapSSH) handleConn(conn net.Conn, auth sshAuthState) {
 		if err != nil {
 			continue
 		}
-		go s.handleTrapSSHSession(conn, channel, reqs, base)
+		go s.handleTrapSSHSession(conn, channel, reqs, base, shared)
 	}
 	s.recordSSHEvent(base, "disconnect", "", "", "", "SSH connection closed", 70, 0, 0, 0, actor)
 }
 
 func (s *TrapSSH) handleGlobalSSHRequests(base model.SSHEvent, requests <-chan *ssh.Request) {
 	for req := range requests {
-		ok := req.Type == "keepalive@openssh.com"
-		replySSHRequest(req, ok)
-		if !ok {
-			s.recordSSHEvent(base, "request", "forwarding", "network", "", "SSH global request rejected: "+cleanSSHField(req.Type, 64), 90, 6, 0, 1, model.ActorAutomated)
+		switch req.Type {
+		case "keepalive@openssh.com", "keepalive@libssh2.org", "keepalive@putty.projects.tartarus.org":
+			replySSHRequest(req, true)
+		case "tcpip-forward", "cancel-tcpip-forward":
+			replySSHRequest(req, false)
+			s.recordSSHEvent(base, "request", "forwarding", "network", "", "SSH port forwarding request rejected: "+cleanSSHField(req.Type, 64), 92, 6, 0, 1, classifySSHActor(base.ClientVersion, false))
+		default:
+			replySSHRequest(req, false)
+			s.recordSSHEvent(base, "request", "protocol", "protocol", "", "SSH global request rejected: "+cleanSSHField(req.Type, 64), 76, 3, 0, 0, classifySSHActor(base.ClientVersion, false))
 		}
 	}
 }
 
-func (s *TrapSSH) handleTrapSSHSession(conn net.Conn, channel ssh.Channel, requests <-chan *ssh.Request, base model.SSHEvent) {
+func (s *TrapSSH) handleTrapSSHSession(conn net.Conn, channel ssh.Channel, requests <-chan *ssh.Request, base model.SSHEvent, shared *virtualSSHSharedState) {
 	defer channel.Close()
-	world := newVirtualSSHWorldForSource(base.SessionID, base.Username, base.IP, s.system)
+	world := newVirtualSSHWorldForSourceShared(base.SessionID, base.Username, base.IP, s.system, shared)
 	started := false
 	done := make(chan struct{}, 1)
 	for {
@@ -315,12 +339,22 @@ func (s *TrapSSH) handleTrapSSHSession(conn net.Conn, channel ssh.Channel, reque
 				replySSHRequest(req, true)
 				command := cleanSSHCommand(payload.Command, maxSSHExecCommandBytes)
 				world.addHistory(command)
+				if isVirtualSCPSink(command) {
+					shared.mu.Lock()
+					result := world.runVirtualSCPSink(channel, command)
+					shared.mu.Unlock()
+					s.recordSSHCommand(base, "exec", command, world, result, classifySSHActor(base.ClientVersion, false))
+					_, _ = channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{uint32(result.Status)}))
+					return
+				}
 				var stdin []byte
 				var stdinTruncated bool
 				if commandMayConsumeExecStdin(command) {
 					stdin, stdinTruncated = readVirtualExecStdin(channel)
 				}
+				shared.mu.Lock()
 				result := world.ExecuteWithInput(command, string(stdin))
+				shared.mu.Unlock()
 				annotateVirtualExecStdin(&result, stdin, stdinTruncated)
 				switch result.Interactive {
 				case "ping":
@@ -340,15 +374,15 @@ func (s *TrapSSH) handleTrapSSHSession(conn net.Conn, channel ssh.Channel, reque
 				if result.Output != "" {
 					_, _ = fmt.Fprint(channel, normalizeSSHOutput(result.Output))
 				}
-				s.recordSSHCommand(base, "exec", command, world, result, model.ActorAutomated)
+				s.recordSSHCommand(base, "exec", command, world, result, classifySSHActor(base.ClientVersion, false))
 				_, _ = channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{uint32(result.Status)}))
 				return
 			case "subsystem":
 				replySSHRequest(req, false)
-				s.recordSSHEvent(base, "request", "subsystem", "file-transfer", "", "subsystem/SFTP rejected", 88, 5, 0, 1, model.ActorAutomated)
+				s.recordSSHEvent(base, "request", "subsystem", "file-transfer", "", "subsystem/SFTP rejected", 88, 5, 0, 1, classifySSHActor(base.ClientVersion, false))
 			case "auth-agent-req@openssh.com", "x11-req":
 				replySSHRequest(req, false)
-				s.recordSSHEvent(base, "request", "forwarding", "network", "", "forwarding request rejected: "+cleanSSHField(req.Type, 64), 90, 6, 0, 1, model.ActorAutomated)
+				s.recordSSHEvent(base, "request", "forwarding", "network", "", "forwarding request rejected: "+cleanSSHField(req.Type, 64), 90, 6, 0, 1, classifySSHActor(base.ClientVersion, false))
 			default:
 				replySSHRequest(req, false)
 			}
@@ -377,7 +411,13 @@ func (s *TrapSSH) runVirtualSSHShell(conn net.Conn, channel ssh.Channel, base mo
 			continue
 		}
 		world.addHistory(command)
+		if world.shared != nil {
+			world.shared.mu.Lock()
+		}
 		result := world.Execute(command)
+		if world.shared != nil {
+			world.shared.mu.Unlock()
+		}
 		if result.Delay > 0 {
 			time.Sleep(result.Delay)
 		}
@@ -393,6 +433,15 @@ func (s *TrapSSH) runVirtualSSHShell(conn net.Conn, channel ssh.Channel, base mo
 			world.runVirtualPing(reader, channel, result.Target, result.StreamCount)
 		case "traceroute":
 			world.runVirtualTraceroute(channel, result.Target)
+		case "passwd":
+			world.runVirtualPasswd(reader, channel, result.Target)
+		case "crontab-edit":
+			world.runVirtualNano(reader, channel, result.Target)
+			if content, ok := world.virtualReadFile(result.Target); ok {
+				world.crontabExists = true
+				world.crontabContent = content
+				world.system.setPeerCrontab(world.peerKey, true, content)
+			}
 		case "vim":
 			world.runVirtualVim(reader, channel, result.Target)
 		case "nano":
@@ -404,6 +453,32 @@ func (s *TrapSSH) runVirtualSSHShell(conn net.Conn, channel ssh.Channel, base mo
 			return
 		}
 	}
+}
+
+func (w *virtualSSHWorld) runVirtualPasswd(reader *virtualSSHLineReader, channel ssh.Channel, target string) {
+	if target == "" {
+		target = w.user
+	}
+	_, _ = fmt.Fprint(channel, "New password: ")
+	first, err := reader.ReadSecretLine(channel, 256)
+	if err != nil {
+		return
+	}
+	_, _ = fmt.Fprint(channel, "Retype new password: ")
+	second, err := reader.ReadSecretLine(channel, 256)
+	if err != nil {
+		return
+	}
+	if first == "" || first != second {
+		_, _ = fmt.Fprint(channel, "Sorry, passwords do not match.\r\npasswd: Authentication token manipulation error\r\npasswd: password unchanged\r\n")
+		return
+	}
+	if w.shared != nil {
+		w.shared.mu.Lock()
+		defer w.shared.mu.Unlock()
+	}
+	w.updateVirtualShadowPassword(target, first)
+	_, _ = fmt.Fprint(channel, "passwd: password updated successfully\r\n")
 }
 
 func (s *TrapSSH) recordSSHAuth(auth sshAuthState, client, user, method string, accepted bool, passwordLen int, fingerprint string) {
@@ -466,12 +541,14 @@ func (s *TrapSSH) recordSSHEvent(base model.SSHEvent, typ, name, family, cwd, me
 
 func classifySSHActor(client string, interactive bool) model.ActorType {
 	v := strings.ToLower(client)
-	for _, marker := range []string{"paramiko", "libssh", "golang", "go-ssh", "masscan", "nmap"} {
+	for _, marker := range []string{"masscan", "nmap", "zgrab", "sshscan", "scanner"} {
 		if strings.Contains(v, marker) {
 			return model.ActorAutomated
 		}
 	}
-	if interactive && strings.Contains(v, "openssh") {
+	// libssh/libssh2, Paramiko and Go SSH are libraries, not proof of a bot.
+	// An interactive library-backed client (Termius is one example) is a human hint.
+	if interactive && (strings.Contains(v, "openssh") || strings.Contains(v, "libssh") || strings.Contains(v, "paramiko")) {
 		return model.ActorHuman
 	}
 	return model.ActorUnknown

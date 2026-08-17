@@ -125,8 +125,10 @@ func (s *Store) applySSHEventLocked(e model.SSHEvent) {
 	if e.Classification != "" {
 		ss.Classification = e.Classification
 	}
-	if e.Actor != "" {
-		ss.Actor = e.Actor
+	if e.Actor != "" && e.Actor != model.ActorUnknown {
+		if ss.Actor != model.ActorAutomated || e.Actor == model.ActorAutomated {
+			ss.Actor = e.Actor
+		}
 	}
 	if e.RiskScore > ss.RiskScore {
 		ss.RiskScore = e.RiskScore
@@ -187,6 +189,9 @@ func (s *Store) applySSHEventLocked(e model.SSHEvent) {
 		}
 	case "exec":
 		ss.ExecRequests++
+		if !ss.ShellOpened && ss.ExecRequests >= 3 && !ss.FirstSeen.IsZero() && e.At.Sub(ss.FirstSeen) >= 0 && e.At.Sub(ss.FirstSeen) <= 2*time.Second {
+			ss.Actor = model.ActorAutomated
+		}
 		fallthrough
 	case "command":
 		ss.CommandCount++

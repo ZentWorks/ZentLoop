@@ -331,6 +331,36 @@ func (r *virtualSSHLineReader) ReadLine(out io.Writer, prompt string, max int) (
 	}
 }
 
+func (r *virtualSSHLineReader) ReadSecretLine(out io.Writer, max int) (string, error) {
+	buf := make([]byte, 0, 64)
+	for {
+		b, err := r.readByte()
+		if err != nil {
+			return "", err
+		}
+		switch b {
+		case 13: // CR
+			r.discardLF = true
+			_, _ = io.WriteString(out, "\r\n")
+			return string(buf), nil
+		case 10: // LF
+			_, _ = io.WriteString(out, "\r\n")
+			return string(buf), nil
+		case 3: // Ctrl+C
+			_, _ = io.WriteString(out, "\r\n")
+			return "", io.EOF
+		case 8, 127:
+			if len(buf) > 0 {
+				buf = buf[:len(buf)-1]
+			}
+		default:
+			if b >= 0x20 && len(buf) < max {
+				buf = append(buf, b)
+			}
+		}
+	}
+}
+
 func (r *virtualSSHLineReader) readEscapeSequence() (string, error) {
 	b, err := r.readByte()
 	if err != nil {
@@ -400,7 +430,7 @@ var virtualSSHCommands = []string{
 	"lsb_release", "lsmod", "lsof", "make", "man", "mariadb", "mysql", "md5sum", "mkdir", "mktemp", "more", "mount", "mv", "nano", "nc", "ncat", "netcat", "nft", "node", "npm",
 	"netstat", "nproc", "nvidia-smi", "nohup", "openssl", "passwd", "perl", "php", "ping", "pkill", "printenv", "printf", "ps", "psql", "readelf", "redis-cli", "rsync",
 	"pwd", "python", "python3", "readlink", "realpath", "reset", "rm", "route", "scp", "sftp", "socat", "screen", "sed", "service", "set", "source",
-	"sha256sum", "sh", "sleep", "sort", "ss", "ssh", "stat", "strace", "strings", "su", "sudo", "sysctl", "systemctl", "systemd-detect-virt", "virt-what", "dmidecode", "stty", "tty", "tail", "tar", "tracepath", "traceroute",
+	"sha256sum", "sh", "shutdown", "reboot", "poweroff", "halt", "sleep", "sort", "ss", "ssh", "stat", "strace", "strings", "su", "sudo", "sysctl", "systemctl", "systemd-detect-virt", "virt-what", "dmidecode", "stty", "tty", "tail", "tar", "tracepath", "traceroute",
 	"tee", "telnet", "tmux", "top", "touch", "tr", "true", "type", "ulimit", "umask", "uname", "ufw", "uniq", "unzip", "unset",
 	"timedatectl", "uptime", "vi", "vim", "w", "wc", "wget", "whereis", "which", "who", "dig", "host", "nslookup", "ldd", "objdump", "whoami", "xargs", "xxd", "zcat", "zip",
 }

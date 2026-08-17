@@ -315,7 +315,7 @@ func (s *AdminServer) info(w http.ResponseWriter, r *http.Request) {
 	_, geoErr := os.Stat(s.cfg.GeoIPDB)
 	_, botCacheErr := os.Stat(s.cfg.OfficialBotsCache)
 	writeJSON(w, map[string]any{
-		"brand": s.cfg.Brand, "version": "0.2.13", "proxy_mode": s.cfg.ProxyMode, "proxy_rules": s.cfg.ProxyRules,
+		"brand": s.cfg.Brand, "version": "0.2.14", "proxy_mode": s.cfg.ProxyMode, "proxy_rules": s.cfg.ProxyRules,
 		"hostile_threshold": s.cfg.HostileThreshold, "suspicious_threshold": s.cfg.SuspiciousThreshold,
 		"live_session_minutes": s.cfg.LiveSessionMinutes, "resume_window_hours": s.cfg.ResumeWindowHours,
 		"geo_enrichment": true, "geoip_ready": geoErr == nil, "geoip_db": s.cfg.GeoIPDB, "integration_protocol": 1, "integration_secret_configured": s.cfg.IntegrationSecret != "", "telemetry": false,
@@ -568,7 +568,7 @@ func (s *AdminServer) sshSession(w http.ResponseWriter, r *http.Request) {
 	}
 	switch parts[1] {
 	case "export.json":
-		ex, ok := s.store.SSHSessionExport(id, "0.2.13")
+		ex, ok := s.store.SSHSessionExport(id, "0.2.14")
 		if !ok {
 			http.NotFound(w, r)
 			return
@@ -576,7 +576,7 @@ func (s *AdminServer) sshSession(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="zentloop-ssh-%s.json"`, safeFilename(id)))
 		writeJSON(w, ex)
 	case "export.txt":
-		ex, ok := s.store.SSHSessionExport(id, "0.2.13")
+		ex, ok := s.store.SSHSessionExport(id, "0.2.14")
 		if !ok {
 			http.NotFound(w, r)
 			return
@@ -911,7 +911,7 @@ func (s *AdminServer) integrationCapabilities(w http.ResponseWriter, r *http.Req
 	}
 	writeJSON(w, map[string]any{
 		"product":          "ZentLoop",
-		"version":          "0.2.13",
+		"version":          "0.2.14",
 		"protocol_version": 1,
 		"capabilities": []string{
 			"catch_all", "forwarded_ip", "target_host", "multi_target", "signed_ingress", "catch_all_statistics", "health_verification", "integration_peers",

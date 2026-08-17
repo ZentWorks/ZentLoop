@@ -35,15 +35,55 @@ var virtualSystemBinaries = []virtualSystemBinary{
 func (w *virtualSSHWorld) seedSystemBinaries() {
 	now := w.system.snapshot().BootTime.Add(5 * time.Minute)
 	for _, b := range virtualSystemBinaries {
-		content := virtualELFContent(b)
-		w.files[b.Path] = content
-		w.fileMeta[b.Path] = virtualFileMeta{Size: b.Size, ModTime: now.Add(-time.Duration(stableSSHHash(b.Path)%3000) * time.Hour), Kind: "elf"}
-		// Ubuntu usrmerge: /bin and /sbin tools resolve to the same userspace tools.
-		if strings.HasPrefix(b.Path, "/usr/bin/") {
-			alias := "/bin/" + path.Base(b.Path)
-			w.files[alias] = content
-			w.fileMeta[alias] = virtualFileMeta{Size: b.Size, ModTime: w.fileMeta[b.Path].ModTime, Kind: "elf"}
+		w.seedVirtualCommandBinary(b.Path, b.Size, virtualELFContent(b), now)
+	}
+	// Keep command discovery and filesystem discovery aligned. The virtual shell
+	// intentionally implements a bounded command surface; every non-builtin it
+	// advertises also has a small synthetic ELF surface for ls/file/stat/strings.
+	for _, name := range virtualSSHCommands {
+		if virtualBuiltin(name) {
+			continue
 		}
+		cmdPath := "/usr/bin/" + path.Base(name)
+		if _, exists := w.files[cmdPath]; exists {
+			continue
+		}
+		w.ensureVirtualCommandBinary(name)
+	}
+}
+
+func (w *virtualSSHWorld) seedVirtualCommandBinary(cmdPath string, size int64, content string, base time.Time) {
+	cmdPath = path.Clean(cmdPath)
+	w.files[cmdPath] = content
+	w.fileMeta[cmdPath] = virtualFileMeta{Size: size, ModTime: base.Add(-time.Duration(stableSSHHash(cmdPath)%3000) * time.Hour), Kind: "elf"}
+	w.fileModes[cmdPath] = 0o755
+	if strings.HasPrefix(cmdPath, "/usr/bin/") {
+		alias := "/bin/" + path.Base(cmdPath)
+		w.files[alias] = content
+		w.fileMeta[alias] = w.fileMeta[cmdPath]
+		w.fileModes[alias] = 0o755
+	}
+}
+
+func (w *virtualSSHWorld) ensureVirtualCommandBinary(name string) {
+	name = path.Base(strings.TrimSpace(name))
+	if name == "" || virtualBuiltin(name) {
+		return
+	}
+	cmdPath := "/usr/bin/" + name
+	if _, exists := w.files[cmdPath]; exists {
+		return
+	}
+	h := stableSSHHash("bin|" + name)
+	size := int64(32*1024 + h%(896*1024))
+	b := virtualSystemBinary{Path: cmdPath, Size: size, Strings: []string{name, "GLIBC_2.34", "libc.so.6", "Usage: " + name}}
+	w.seedVirtualCommandBinary(cmdPath, size, virtualELFContent(b), w.system.snapshot().BootTime.Add(5*time.Minute))
+}
+
+func (w *virtualSSHWorld) removeVirtualCommandBinary(name string) {
+	name = path.Base(strings.TrimSpace(name))
+	for _, p := range []string{"/usr/bin/" + name, "/bin/" + name} {
+		w.deleteVirtualFile(p)
 	}
 }
 
@@ -53,7 +93,7 @@ func virtualELFContent(b virtualSystemBinary) string {
 	header := "\x7fELF\x02\x01\x01\x00" + strings.Repeat("\x00", 8)
 	body := "\x03\x00>\x00\x01\x00\x00\x00" + strings.Repeat("\x00", 24)
 	markers := strings.Join(b.Strings, "\x00") + "\x00"
-	return header + body + fmt.Sprintf("VIRTUAL:%s\x00", b.Path) + markers
+	return header + body + fmt.Sprintf("%s\x00", path.Base(b.Path)) + markers
 }
 
 func virtualBuiltin(name string) bool {

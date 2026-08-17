@@ -76,7 +76,7 @@ func (w *virtualSSHWorld) executeExtraCommand(cmd string, args []string, raw, in
 		return w.executeOne(inner, input), true
 	case "lspci":
 		r := base("recon", 3, 82, "system-recon", "PCI device discovery")
-		r.Output = "00:00.0 Host bridge: Intel Corporation 440FX - 82441FX PMC [Natoma]\n00:01.0 ISA bridge: Intel Corporation 82371SB PIIX3 ISA [Natoma/Triton II]\n00:03.0 Ethernet controller: Red Hat, Inc. Virtio network device\n00:04.0 VGA compatible controller: Red Hat, Inc. Virtio GPU\n00:05.0 3D controller: NVIDIA Corporation TU104GL [Tesla T4] (rev a1)"
+		r.Output = "00:00.0 Host bridge: Intel Corporation 440FX - 82441FX PMC [Natoma]\n00:01.0 ISA bridge: Intel Corporation 82371SB PIIX3 ISA [Natoma/Triton II]\n00:03.0 Ethernet controller: Red Hat, Inc. Virtio network device\n00:04.0 VGA compatible controller: Red Hat, Inc. Virtio GPU\n00:05.0 3D controller: NVIDIA Corporation TU104GL [" + strings.TrimPrefix(virtualGPUName, "NVIDIA ") + "] (rev a1)"
 		return r, true
 	case "which", "whereis", "type":
 		r := base("recon", 3, 82, "tool-discovery", "binary/tool discovery")
@@ -86,6 +86,9 @@ func (w *virtualSSHWorld) executeExtraCommand(cmd string, args []string, raw, in
 		}
 		name := path.Base(args[len(args)-1])
 		binPath := virtualCommandPath(name)
+		if name == "htop" && w.packageInstalled("htop") {
+			binPath = "/usr/bin/htop"
+		}
 		if virtualBuiltin(name) && cmd == "type" {
 			r.Output = name + " is a shell builtin"
 		} else if binPath != "" {
@@ -109,6 +112,8 @@ func (w *virtualSSHWorld) executeExtraCommand(cmd string, args []string, raw, in
 			name := path.Base(args[1])
 			if virtualBuiltin(name) {
 				r.Output = name
+			} else if name == "htop" && w.packageInstalled("htop") {
+				r.Output = "/usr/bin/htop"
 			} else if binPath := virtualCommandPath(name); binPath != "" {
 				r.Output = binPath
 			} else {
@@ -189,7 +194,35 @@ func (w *virtualSSHWorld) executeExtraCommand(cmd string, args []string, raw, in
 		}
 		switch args[0] {
 		case "passwd":
-			r.Output = strings.TrimSuffix(w.files["/etc/passwd"], "\n")
+			if len(args) > 1 {
+				wanted := args[1] + ":"
+				for _, line := range strings.Split(w.files["/etc/passwd"], "\n") {
+					if strings.HasPrefix(line, wanted) {
+						r.Output = line
+						break
+					}
+				}
+				if r.Output == "" {
+					r.Status = 2
+				}
+			} else {
+				r.Output = strings.TrimSuffix(w.files["/etc/passwd"], "\n")
+			}
+		case "group":
+			if len(args) > 1 {
+				wanted := args[1] + ":"
+				for _, line := range strings.Split(w.files["/etc/group"], "\n") {
+					if strings.HasPrefix(line, wanted) {
+						r.Output = line
+						break
+					}
+				}
+				if r.Output == "" {
+					r.Status = 2
+				}
+			} else {
+				r.Output = strings.TrimSuffix(w.files["/etc/group"], "\n")
+			}
 		case "hosts", "ahosts":
 			name := "backup-01"
 			if len(args) > 1 {
@@ -206,23 +239,24 @@ func (w *virtualSSHWorld) executeExtraCommand(cmd string, args []string, raw, in
 		return r, true
 	case "lsb_release":
 		r := base("recon", 3, 82, "system-recon", "distribution discovery")
-		r.Output = "Distributor ID:\tUbuntu\nDescription:\tUbuntu 24.04.3 LTS\nRelease:\t24.04\nCodename:\tnoble"
+		r.Output = "Distributor ID:\tUbuntu\nDescription:\t" + virtualOSName + "\nRelease:\t24.04\nCodename:\tnoble"
 		return r, true
 	case "hostnamectl":
 		r := base("recon", 3, 83, "system-recon", "host metadata discovery")
-		r.Output = " Static hostname: " + w.hostname + "\n       Icon name: computer-vm\n         Chassis: vm\n      Machine ID: " + w.system.machineID() + "\n         Boot ID: " + w.system.bootID() + "\n  Virtualization: kvm\nOperating System: Ubuntu 24.04.3 LTS\n          Kernel: Linux 6.8.0-64-generic\n    Architecture: x86-64"
+		r.Output = " Static hostname: " + w.hostname + "\n       Icon name: computer-vm\n         Chassis: vm\n      Machine ID: " + w.system.machineID() + "\n         Boot ID: " + w.system.bootID() + "\n  Virtualization: kvm\nOperating System: " + virtualOSName + "\n          Kernel: Linux " + virtualKernelRelease + "\n    Architecture: x86-64"
 		return r, true
 	case "arch":
 		r := base("recon", 3, 80, "system-recon", "architecture discovery")
-		r.Output = "x86_64"
+		r.Output = virtualMachineArch
 		return r, true
 	case "nproc":
 		r := base("recon", 3, 80, "system-recon", "CPU discovery")
-		r.Output = "4"
+		r.Output = strconv.Itoa(virtualCPUCount)
 		return r, true
 	case "nvidia-smi":
 		r := base("recon", 3, 82, "system-recon", "GPU discovery")
-		const gpuName = "NVIDIA Tesla T4"
+		gpuName := virtualGPUName
+		now := w.system.snapshot().Now
 		switch {
 		case containsArg(args, "--version"):
 			r.Output = "NVIDIA-SMI 550.120"
@@ -252,14 +286,16 @@ func (w *virtualSSHWorld) executeExtraCommand(cmd string, args []string, raw, in
 			}
 			r.Output = strings.Join(values, ", ")
 		case containsArg(args, "-q") || containsArg(args, "--query"):
-			r.Output = "==============NVSMI LOG==============\n\nTimestamp                                 : " + time.Now().UTC().Format("Mon Jan 2 15:04:05 2006") + "\nDriver Version                            : 550.120\nCUDA Version                              : 12.4\nAttached GPUs                             : 1\nGPU 00000000:00:05.0\n    Product Name                          : " + gpuName
+			r.Output = "==============NVSMI LOG==============\n\nTimestamp                                 : " + now.Format("Mon Jan 2 15:04:05 2006") + "\nDriver Version                            : 550.120\nCUDA Version                              : 12.4\nAttached GPUs                             : 1\nGPU 00000000:00:05.0\n    Product Name                          : " + gpuName
 		default:
-			r.Output = time.Now().UTC().Format("Mon Jan 2 15:04:05 2006") + "\n+-----------------------------------------------------------------------------+\n| NVIDIA-SMI 550.120              Driver Version: 550.120      CUDA Version: 12.4 |\n|-------------------------------+----------------------+----------------------+\n|   0  Tesla T4             Off | 00000000:00:05.0 Off |                    0 |\n+-------------------------------+----------------------+----------------------+"
+			shortGPU := strings.TrimPrefix(gpuName, "NVIDIA ")
+			r.Output = fmt.Sprintf("%s\n+-----------------------------------------------------------------------------+\n| NVIDIA-SMI 550.120              Driver Version: 550.120      CUDA Version: 12.4 |\n|-------------------------------+----------------------+----------------------+\n|   0  %-20s Off | 00000000:00:05.0 Off |                    0 |\n+-------------------------------+----------------------+----------------------+", now.Format("Mon Jan 2 15:04:05 2006"), shortGPU)
+
 		}
 		return r, true
 	case "lscpu":
 		r := base("recon", 3, 84, "system-recon", "CPU discovery")
-		r.Output = "Architecture:                         x86_64\nCPU(s):                               4\nVendor ID:                            GenuineIntel\nModel name:                           Intel(R) Xeon(R) CPU E-2288G @ 3.70GHz\nVirtualization:                       VT-x\nHypervisor vendor:                    KVM"
+		r.Output = fmt.Sprintf("Architecture:                         %s\nCPU(s):                               %d\nVendor ID:                            GenuineIntel\nModel name:                           %s\nVirtualization:                       VT-x\nHypervisor vendor:                    KVM", virtualMachineArch, virtualCPUCount, virtualCPUModel)
 		return r, true
 	case "lsblk":
 		r := base("recon", 4, 86, "system-recon", "block device discovery")
@@ -275,7 +311,7 @@ func (w *virtualSSHWorld) executeExtraCommand(cmd string, args []string, raw, in
 		return r, true
 	case "dmesg":
 		r := base("recon", 4, 87, "system-recon", "kernel log discovery")
-		r.Output = "[    0.000000] Linux version 6.8.0-64-generic\n[    0.881214] virtio_net virtio0 eth0: renamed from ens3\n[    1.201044] EXT4-fs (vda2): mounted filesystem with ordered data mode\n[    4.321881] systemd[1]: Reached target multi-user.target"
+		r.Output = "[    0.000000] Linux version " + virtualKernelRelease + "\n[    0.881214] virtio_net virtio0 eth0: renamed from ens3\n[    1.201044] EXT4-fs (vda2): mounted filesystem with ordered data mode\n[    4.321881] systemd[1]: Reached target multi-user.target"
 		return r, true
 	case "lsmod":
 		r := base("recon", 4, 85, "system-recon", "kernel module discovery")
@@ -311,33 +347,62 @@ func (w *virtualSSHWorld) executeExtraCommand(cmd string, args []string, raw, in
 		return r, true
 	case "lsattr":
 		r := base("filesystem", 4, 87, "file-discovery", "extended attribute discovery")
-		file := lastNonOption(args)
-		if file == "" {
-			file = "."
+		var rows []string
+		for _, file := range args {
+			if strings.HasPrefix(file, "-") {
+				continue
+			}
+			resolved := w.resolve(file)
+			if _, ok := w.virtualReadFile(resolved); !ok {
+				r.Status = 1
+				rows = append(rows, "lsattr: No such file or directory while trying to stat "+file)
+				continue
+			}
+			attrs := w.fileAttrs[resolved]
+			if attrs == "" {
+				attrs = "--------------e-------"
+			}
+			rows = append(rows, attrs+" "+file)
 		}
-		resolved := w.resolve(file)
-		if _, ok := w.virtualReadFile(resolved); !ok {
-			r.Output, r.Status = "lsattr: No such file or directory while trying to stat "+file, 1
-			return r, true
+		if len(rows) == 0 {
+			r.Status = 1
 		}
-		attrs := w.fileAttrs[resolved]
-		if attrs == "" {
-			attrs = "--------------e-------"
-		}
-		r.Output = attrs + " " + file
+		r.Output = strings.Join(rows, "\n")
 		return r, true
 	case "chattr":
 		r := base("persistence", 6, 98, "persistence", "immutable/extended attribute modification")
-		file := lastNonOption(args)
-		if file != "" {
+		mode := ""
+		var files []string
+		for _, a := range args {
+			if (strings.HasPrefix(a, "+") || strings.HasPrefix(a, "-")) && strings.ContainsAny(a, "iae") {
+				mode = a
+			} else if !strings.HasPrefix(a, "-") {
+				files = append(files, a)
+			}
+		}
+		var errs []string
+		for _, file := range files {
 			resolved := w.resolve(file)
 			if _, ok := w.virtualReadFile(resolved); !ok {
-				// Malware cleanup commands routinely target optional remnants; errors are often redirected.
-				r.Output, r.Status = "chattr: No such file or directory while trying to stat "+file, 1
+				r.Status = 1
+				errs = append(errs, "chattr: No such file or directory while trying to stat "+file)
+				continue
+			}
+			attrs := w.fileAttrs[resolved]
+			immutable := strings.Contains(attrs, "i")
+			if strings.HasPrefix(mode, "+") && strings.Contains(mode, "i") {
+				immutable = true
+			}
+			if strings.HasPrefix(mode, "-") && strings.Contains(mode, "i") {
+				immutable = false
+			}
+			if immutable {
+				w.fileAttrs[resolved] = "----i---------e-------"
 			} else {
 				w.fileAttrs[resolved] = "--------------e-------"
 			}
 		}
+		r.Output = strings.Join(errs, "\n")
 		r.LoopInc = 1
 		return r, true
 	case "readlink", "realpath":
@@ -488,6 +553,13 @@ func (w *virtualSSHWorld) executeExtraCommand(cmd string, args []string, raw, in
 		}
 		words := len(strings.Fields(data))
 		bytes := len([]byte(data))
+		if input == "" && containsArg(args, "-c") {
+			if file := lastNonOption(args); file != "" {
+				if meta, ok := w.fileMeta[w.resolve(file)]; ok && meta.Size > 0 {
+					bytes = int(meta.Size)
+				}
+			}
+		}
 		switch {
 		case containsArg(args, "-l"):
 			r.Output = strconv.Itoa(lines)
@@ -577,15 +649,73 @@ func (w *virtualSSHWorld) executeExtraCommand(cmd string, args []string, raw, in
 		return r, true
 	case "sed":
 		r := base("filesystem", 4, 87, "file-discovery", "stream editing")
-		data := virtualTextInput(w, args, input)
-		expr := firstNonOption(args)
+		inPlace := containsCombinedFlag(args, 'i')
+		expr := ""
+		file := ""
+		for _, a := range args {
+			if strings.HasPrefix(a, "-") {
+				continue
+			}
+			if expr == "" {
+				expr = a
+			} else {
+				file = a
+			}
+		}
+		data := input
+		if data == "" && file != "" {
+			data, _ = w.virtualReadFile(file)
+		}
 		r.Output = simpleVirtualSed(data, expr)
+		if inPlace && file != "" {
+			resolved := w.resolve(file)
+			if !w.setVirtualFile(resolved, r.Output+func() string {
+				if strings.HasSuffix(data, "\n") {
+					return "\n"
+				}
+				return ""
+			}()) {
+				r.Output = "sed: couldn't edit " + file + ": " + w.virtualWriteFailure(resolved)
+				r.Status = 4
+			} else {
+				r.Output = ""
+			}
+		}
 		return r, true
 	case "awk":
 		r := base("filesystem", 4, 88, "file-discovery", "text processing")
-		data := virtualTextInput(w, args, input)
-		program := firstNonOption(args)
-		r.Output = simpleVirtualAwk(data, program)
+		program := ""
+		fieldSep := ""
+		var files []string
+		for i := 0; i < len(args); i++ {
+			a := args[i]
+			if a == "-F" && i+1 < len(args) {
+				fieldSep = args[i+1]
+				i++
+				continue
+			}
+			if strings.HasPrefix(a, "-F") {
+				fieldSep = strings.TrimPrefix(a, "-F")
+				continue
+			}
+			if strings.HasPrefix(a, "-") {
+				continue
+			}
+			if program == "" {
+				program = a
+			} else {
+				files = append(files, a)
+			}
+		}
+		data := input
+		if data == "" && len(files) > 0 {
+			for _, f := range files {
+				if c, ok := w.virtualReadFile(f); ok {
+					data += c
+				}
+			}
+		}
+		r.Output = simpleVirtualAwk(data, program, fieldSep)
 		return r, true
 	case "tee":
 		r := base("filesystem", 5, 91, "file-manipulation", "pipeline output written to virtual file")
@@ -637,7 +767,7 @@ func (w *virtualSSHWorld) executeExtraCommand(cmd string, args []string, raw, in
 			if archive == "" {
 				archive = "archive.tar.gz"
 			}
-			if !w.setVirtualFile(w.resolve(archive), "\x1f\x8bFAKE-VIRTUAL-TAR-ARCHIVE\n") {
+			if !w.setVirtualFile(w.resolve(archive), "\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\x03ARCHIVE-DATA\n") {
 				r.Output, r.Status = "tar: "+archive+": Cannot write: No space left on device", 2
 			}
 			return r, true
@@ -652,7 +782,7 @@ func (w *virtualSSHWorld) executeExtraCommand(cmd string, args []string, raw, in
 		if file == "" {
 			if decompress {
 				plain := strings.TrimPrefix(input, "\x1f\x8b")
-				if strings.Contains(plain, "virtual-gzip-country-database") {
+				if strings.Contains(plain, "DBIP-COUNTRY-DATABASE") {
 					plain = "network,continent,country\n1.0.0.0/24,OC,AU\n1.0.1.0/24,AS,CN\n1.0.2.0/23,AS,CN\n"
 				}
 				r.Output = plain
@@ -699,7 +829,7 @@ func (w *virtualSSHWorld) executeExtraCommand(cmd string, args []string, raw, in
 			_ = w.setVirtualDir(w.resolve("config"))
 			_ = w.setVirtualFile(w.resolve("config/.env"), w.files["/opt/app/.env"])
 		} else if len(args) > 0 {
-			_ = w.setVirtualFile(w.resolve(args[0]), "PK\x03\x04FAKE-VIRTUAL-ZIP\n")
+			_ = w.setVirtualFile(w.resolve(args[0]), "PK\x03\x04\x14\x00\x00\x00CONFIG-ARCHIVE\n")
 			r.Output = "  adding: " + strings.Join(args[1:], " ") + " (deflated 42%)"
 		}
 		return r, true
@@ -710,7 +840,11 @@ func (w *virtualSSHWorld) executeExtraCommand(cmd string, args []string, raw, in
 	case "dpkg":
 		r := base("recon", 4, 86, "tool-discovery", "package inventory discovery")
 		if containsArg(args, "-l") {
-			r.Output = "Desired=Unknown/Install/Remove/Purge/Hold\n||/ Name           Version              Architecture Description\nii  curl           8.5.0-2ubuntu10.6   amd64        command line tool for transferring data\nii  openssh-server 1:9.6p1-3ubuntu13.13 amd64        secure shell server\nii  docker-ce      5:27.5.1-1~ubuntu.24 amd64        Docker container engine\nii  vim            2:9.1.0016-1ubuntu7  amd64        Vi IMproved"
+			rows := []string{"Desired=Unknown/Install/Remove/Purge/Hold", "||/ Name           Version              Architecture Description", "ii  curl           8.5.0-2ubuntu10.6   amd64        command line tool for transferring data", "ii  openssh-server 1:9.6p1-3ubuntu13.13 amd64        secure shell server", "ii  docker-ce      5:27.5.1-1~ubuntu.24 amd64        Docker container engine", "ii  vim            2:9.1.0016-1ubuntu7  amd64        Vi IMproved"}
+			if w.installedPackages["htop"] {
+				rows = append(rows, "ii  htop           3.3.0-4build1         amd64        interactive processes viewer")
+			}
+			r.Output = strings.Join(rows, "\n")
 		}
 		return r, true
 	case "openssl":
@@ -952,14 +1086,14 @@ func (w *virtualSSHWorld) executeExtraCommand(cmd string, args []string, raw, in
 			if out == "" {
 				out = "a.out"
 			}
-			_ = w.setVirtualFile(w.resolve(out), "\x7fELF\x02\x01\x01virtual-compiled-binary\n")
+			_ = w.setVirtualFile(w.resolve(out), "\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00GLIBC_2.34\x00worker\n")
 			r.LoopInc = 1
 		}
 		return r, true
 	case "make":
 		r := base("execution", 5, 92, "payload-preparation", "build tool use")
 		r.Output = "cc -O2 -Wall -o worker worker.c\nstrip worker"
-		_ = w.setVirtualFile(w.resolve("worker"), "\x7fELF\x02\x01\x01virtual-worker\n")
+		_ = w.setVirtualFile(w.resolve("worker"), "\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00GLIBC_2.34\x00worker\n")
 		return r, true
 	case "ldd":
 		r := base("recon", 4, 87, "binary-analysis", "shared library discovery")
@@ -975,7 +1109,31 @@ func (w *virtualSSHWorld) executeExtraCommand(cmd string, args []string, raw, in
 		return r, true
 	case "passwd":
 		r := base("credentials", 6, 98, "credential-manipulation", "password modification attempt")
-		r.Output = "passwd: password updated successfully"
+		target := w.user
+		for _, a := range args {
+			if !strings.HasPrefix(a, "-") {
+				target = safeVirtualName(a)
+				break
+			}
+		}
+		if containsArg(args, "-S") || containsArg(args, "--status") {
+			if !w.virtualUserExists(target) {
+				r.Output, r.Status = "passwd: user '"+target+"' does not exist", 1
+				return r, true
+			}
+			r.Output = target + " P " + w.system.snapshot().Now.Format("01/02/2006") + " 0 99999 7 -1"
+			return r, true
+		}
+		if !w.virtualUserExists(target) {
+			r.Output, r.Status = "passwd: user '"+target+"' does not exist", 1
+			return r, true
+		}
+		if w.user != "root" && target != w.user {
+			r.Output, r.Status = "passwd: You may not view or modify password information for "+target+".", 1
+			return r, true
+		}
+		r.Interactive = "passwd"
+		r.Target = target
 		r.LoopInc = 1
 		return r, true
 	}
@@ -1077,65 +1235,6 @@ func virtualPrintableStrings(v string) string {
 	return strings.Join(out, "\n")
 }
 
-func simpleVirtualSed(data, expr string) string {
-	if !strings.HasPrefix(expr, "s") || len(expr) < 4 {
-		return data
-	}
-	delim := expr[1]
-	parts := strings.Split(expr[2:], string(delim))
-	if len(parts) < 2 {
-		return data
-	}
-	old, new := parts[0], parts[1]
-	if len(parts) >= 3 && strings.Contains(parts[2], "g") {
-		return strings.ReplaceAll(data, old, new)
-	}
-	return strings.Replace(data, old, new, 1)
-}
-
-func simpleVirtualAwk(data, program string) string {
-	program = strings.TrimSpace(program)
-	// Observed collector pattern: uptime | awk -F'( up |,|load)' '{... print $2}'
-	if strings.Contains(program, "print $2") && strings.Contains(data, " up ") && strings.Contains(data, "load average") {
-		if _, after, ok := strings.Cut(data, " up "); ok {
-			if before, _, ok := strings.Cut(after, ","); ok {
-				return strings.TrimSpace(before)
-			}
-		}
-	}
-	if strings.Contains(program, "Model name") && (strings.Contains(program, "print $2") || strings.Contains(program, "print $ 2")) {
-		for _, row := range strings.Split(strings.TrimSuffix(data, "\n"), "\n") {
-			if !strings.Contains(strings.ToLower(row), "model name") {
-				continue
-			}
-			if _, value, ok := strings.Cut(row, ":"); ok {
-				return strings.TrimSpace(value)
-			}
-		}
-		return ""
-	}
-	// Small but useful subset for collector pipelines such as awk '{print $4}'.
-	for field := 1; field <= 16; field++ {
-		needle1 := fmt.Sprintf("print $%d", field)
-		needle2 := fmt.Sprintf("printf $%d", field)
-		if !strings.Contains(program, needle1) && !strings.Contains(program, needle2) {
-			continue
-		}
-		var out []string
-		for _, row := range strings.Split(strings.TrimSuffix(data, "\n"), "\n") {
-			fields := strings.Fields(row)
-			if len(fields) >= field {
-				out = append(out, fields[field-1])
-			}
-			if strings.Contains(program, "exit") && len(out) > 0 {
-				break
-			}
-		}
-		return strings.Join(out, "\n")
-	}
-	return data
-}
-
 func containsCombinedFlag(args []string, flag byte) bool {
 	for _, a := range args {
 		if strings.HasPrefix(a, "-") && strings.ContainsRune(a, rune(flag)) {
@@ -1210,11 +1309,27 @@ func (w *virtualSSHWorld) fakeApt(cmd string, args []string) virtualSSHResult {
 		if pkg == "install" || pkg == "" {
 			pkg = "package"
 		}
-		r.Output = "Reading package lists... Done\nBuilding dependency tree... Done\nThe following NEW packages will be installed:\n  " + pkg + "\n0 upgraded, 1 newly installed, 0 to remove and 0 not upgraded.\nSetting up " + pkg + " (1.0-1ubuntu1) ..."
+		w.installedPackages[strings.ToLower(pkg)] = true
+		w.ensureVirtualCommandBinary(pkg)
+		version := "1.0-1ubuntu1"
+		if strings.EqualFold(pkg, "htop") {
+			version = "3.3.0-4build1"
+		}
+		r.Output = "Reading package lists... Done\nBuilding dependency tree... Done\nThe following NEW packages will be installed:\n  " + pkg + "\n0 upgraded, 1 newly installed, 0 to remove and 0 not upgraded.\nSetting up " + pkg + " (" + version + ") ..."
 		r.LoopInc = 1
 		r.Delay = 500 * time.Millisecond
+	case "remove", "purge":
+		pkg := lastNonOption(args)
+		delete(w.installedPackages, strings.ToLower(pkg))
+		w.removeVirtualCommandBinary(pkg)
+		r.Output = "Removing " + pkg + " ..."
+		r.LoopInc = 1
 	case "list":
-		r.Output = "curl/noble-updates,now 8.5.0-2ubuntu10.6 amd64 [installed]\nopenssh-server/noble-updates,now 1:9.6p1-3ubuntu13.13 amd64 [installed]\nvim/noble,now 2:9.1.0016-1ubuntu7 amd64 [installed]"
+		rows := []string{"curl/noble-updates,now 8.5.0-2ubuntu10.6 amd64 [installed]", "openssh-server/noble-updates,now 1:9.6p1-3ubuntu13.13 amd64 [installed]", "vim/noble,now 2:9.1.0016-1ubuntu7 amd64 [installed]"}
+		if w.installedPackages["htop"] {
+			rows = append(rows, "htop/noble,now 3.3.0-4build1 amd64 [installed]")
+		}
+		r.Output = strings.Join(rows, "\n")
 	default:
 		r.Output = "Reading package lists... Done"
 	}
@@ -1422,38 +1537,6 @@ func virtualLineCount(args []string, fallback int) int {
 	return fallback
 }
 
-func virtualEchoOutput(cmd string, args []string) string {
-	if cmd == "printf" {
-		if len(args) == 0 {
-			return ""
-		}
-		format := args[0]
-		values := args[1:]
-		format = strings.ReplaceAll(format, "\\n", "\n")
-		format = strings.ReplaceAll(format, "\\t", "\t")
-		format = strings.ReplaceAll(format, "\\r", "\r")
-		for _, v := range values {
-			if strings.Contains(format, "%s") {
-				format = strings.Replace(format, "%s", v, 1)
-			} else if strings.Contains(format, "%q") {
-				format = strings.Replace(format, "%q", strconv.Quote(v), 1)
-			}
-		}
-		return format
-	}
-	newline := true
-	start := 0
-	if len(args) > 0 && args[0] == "-n" {
-		newline = false
-		start = 1
-	}
-	out := strings.Join(args[start:], " ")
-	if newline {
-		return out
-	}
-	return out
-}
-
 func (w *virtualSSHWorld) fakeInterpreterVersion(cmd string) virtualSSHResult {
 	r := virtualBaseResult(cmd, "recon", 3, 82, "tool-discovery", "interpreter version discovery")
 	switch cmd {
@@ -1476,7 +1559,7 @@ func (w *virtualSSHWorld) virtualTopOutput() string {
 	webCPU := 0.4 + s.Load1*1.8
 	dockerCPU := 0.1 + s.Load1*0.7
 	base := fmt.Sprintf("top - %s up %s,  2 users,  load average: %.2f, %.2f, %.2f\n"+
-		"Tasks: 143 total,   1 running, 142 sleeping,   0 stopped,   0 zombie\n"+
+		"Tasks: %d total,   1 running, %d sleeping,   0 stopped,   0 zombie\n"+
 		"%%Cpu(s): %4.1f us, %4.1f sy,  0.0 ni, %4.1f id, %4.1f wa,  0.0 hi,  0.0 si,  0.0 st\n"+
 		"MiB Mem : %8.1f total, %8.1f free, %8.1f used, %8.1f buff/cache\n"+
 		"MiB Swap:   2048.0 total,   2048.0 free,      0.0 used. %8.1f avail Mem\n\n"+
@@ -1485,7 +1568,7 @@ func (w *virtualSSHWorld) virtualTopOutput() string {
 		"   1021 root      20   0 1127840  62412  29120 S  %4.1f   0.8   3:07.44 dockerd\n"+
 		"    612 root      20   0   15420   8200   6144 S   0.0   0.1   0:04.33 sshd\n"+
 		"   1842 svc-bac+   20   0   18240   7800   5120 S   0.1   0.1   0:12.41 backup-agent",
-		s.Now.Format("15:04:05"), virtualUptimeHuman(s.Uptime), s.Load1, s.Load5, s.Load15,
+		s.Now.Format("15:04:05"), virtualUptimeHuman(s.Uptime), s.Load1, s.Load5, s.Load15, w.virtualProcessCount(), maxInt(0, w.virtualProcessCount()-1),
 		s.CPUUser, s.CPUSystem, s.CPUIdle, s.CPUWait,
 		s.MemTotalMiB, s.MemFreeMiB, s.MemUsedMiB, s.MemCacheMiB, s.MemAvailMiB, webCPU, dockerCPU)
 	var extra strings.Builder

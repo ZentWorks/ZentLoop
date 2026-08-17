@@ -15,6 +15,16 @@ import (
 
 const virtualSSHSystemStateFile = "ssh-system.json"
 
+const (
+	virtualOSName        = "Ubuntu 24.04.3 LTS"
+	virtualKernelRelease = "6.8.0-64-generic"
+	virtualKernelVersion = "#67-Ubuntu SMP PREEMPT_DYNAMIC"
+	virtualMachineArch   = "x86_64"
+	virtualCPUCount      = 4
+	virtualCPUModel      = "Intel(R) Xeon(R) CPU E-2288G @ 3.70GHz"
+	virtualGPUName       = "NVIDIA Tesla T4"
+)
+
 type virtualSSHSystemDisk struct {
 	BootTime time.Time `json:"boot_time"`
 	Seed     uint64    `json:"seed"`
@@ -38,21 +48,29 @@ type virtualSSHSystem struct {
 }
 
 type virtualSSHSystemSnapshot struct {
-	Now         time.Time
-	BootTime    time.Time
-	Uptime      time.Duration
-	Load1       float64
-	Load5       float64
-	Load15      float64
-	CPUUser     float64
-	CPUSystem   float64
-	CPUWait     float64
-	CPUIdle     float64
-	MemTotalMiB float64
-	MemUsedMiB  float64
-	MemFreeMiB  float64
-	MemCacheMiB float64
-	MemAvailMiB float64
+	Now             time.Time
+	BootTime        time.Time
+	Uptime          time.Duration
+	Load1           float64
+	Load5           float64
+	Load15          float64
+	CPUUser         float64
+	CPUSystem       float64
+	CPUWait         float64
+	CPUIdle         float64
+	MemTotalMiB     float64
+	MemUsedMiB      float64
+	MemFreeMiB      float64
+	MemCacheMiB     float64
+	MemAvailMiB     float64
+	RootTotalGiB    float64
+	RootUsedGiB     float64
+	RootAvailGiB    float64
+	RootUsePct      int
+	ArchiveTotalGiB float64
+	ArchiveUsedGiB  float64
+	ArchiveAvailGiB float64
+	ArchiveUsePct   int
 }
 
 func loadVirtualSSHSystem(dataDir string) *virtualSSHSystem {
@@ -160,11 +178,19 @@ func (s *virtualSSHSystem) snapshot() virtualSSHSystemSnapshot {
 		idle = 70
 	}
 
+	rootTotal := 96.0
+	rootUsed := 30.2 + 0.9*math.Sin(minute/37+phase) + math.Min(1.4, s.load1*0.12)
+	rootAvail := math.Max(1, rootTotal-rootUsed-4.0)
+	archiveTotal := 480.0
+	archiveUsed := 309.0 + 4.5*math.Sin(minute/71+phase/3)
+	archiveAvail := math.Max(1, archiveTotal-archiveUsed-24.0)
 	return virtualSSHSystemSnapshot{
 		Now: now, BootTime: s.bootTime, Uptime: now.Sub(s.bootTime),
 		Load1: s.load1, Load5: s.load5, Load15: s.load15,
 		CPUUser: user, CPUSystem: system, CPUWait: wait, CPUIdle: idle,
 		MemTotalMiB: memTotal, MemUsedMiB: memUsed, MemFreeMiB: free, MemCacheMiB: memCache, MemAvailMiB: avail,
+		RootTotalGiB: rootTotal, RootUsedGiB: rootUsed, RootAvailGiB: rootAvail, RootUsePct: int(math.Round(rootUsed / (rootUsed + rootAvail) * 100)),
+		ArchiveTotalGiB: archiveTotal, ArchiveUsedGiB: archiveUsed, ArchiveAvailGiB: archiveAvail, ArchiveUsePct: int(math.Round(archiveUsed / (archiveUsed + archiveAvail) * 100)),
 	}
 }
 

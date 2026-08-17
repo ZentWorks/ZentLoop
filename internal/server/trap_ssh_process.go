@@ -53,11 +53,14 @@ func (w *virtualSSHWorld) ensureVirtualPayloadProcess(target string) *virtualSSH
 }
 
 func (w *virtualSSHWorld) startVirtualProcess(command string, asJob bool) *virtualSSHProcess {
-	pid := w.nextPID
-	if pid < 2000 {
-		pid = 2841
+	pid := 2841
+	if w.shared != nil {
+		pid = w.shared.nextPID
+		if pid < 2000 {
+			pid = 2841
+		}
+		w.shared.nextPID = pid + 1
 	}
-	w.nextPID = pid + 1
 	p := &virtualSSHProcess{PID: pid, User: w.user, Command: strings.TrimSpace(command), Started: w.system.snapshot().Now, CPU: 172.4, Mem: 3.1, Alive: true}
 	if asJob {
 		p.JobID = w.nextJob
@@ -80,7 +83,17 @@ func (w *virtualSSHWorld) backgroundResult(command string, res virtualSSHResult)
 	}
 	first := words[0]
 	if strings.HasPrefix(first, "./") || strings.HasPrefix(first, "/tmp/") || strings.HasPrefix(first, "/var/tmp/") || strings.HasPrefix(first, "/dev/shm/") || first == "nohup" {
-		p := w.startVirtualProcess(command, true)
+		var p *virtualSSHProcess
+		if res.Message == "virtual staged payload started" && first != "nohup" {
+			p = w.ensureVirtualPayloadProcess(w.resolve(first))
+			if p.JobID == 0 {
+				p.JobID = w.nextJob
+				w.nextJob++
+				w.jobs[p.JobID] = p.PID
+			}
+		} else {
+			p = w.startVirtualProcess(command, true)
+		}
 		res.Output = fmt.Sprintf("[%d] %d", p.JobID, p.PID)
 		res.Status = 0
 		res.Family, res.Depth, res.Risk, res.Persona, res.Message = "execution", 7, 100, "payload-execution", "virtual background payload started"
@@ -183,31 +196,86 @@ func (w *virtualSSHWorld) dynamicProcessLines() string {
 	return b.String()
 }
 
-func (w *virtualSSHWorld) removeVirtualPattern(raw string) {
+func (w *virtualSSHWorld) removeVirtualPattern(raw string) bool {
 	resolved := w.resolve(raw)
+	removed := false
 	if !strings.ContainsAny(resolved, "*?") {
-		w.deleteVirtualFile(resolved)
+		if _, ok := w.files[resolved]; ok {
+			if w.virtualFileImmutable(resolved) {
+				return false
+			}
+			w.deleteVirtualFile(resolved)
+			removed = true
+		}
 		prefix := strings.TrimSuffix(resolved, "/") + "/"
 		for f := range w.files {
-			if strings.HasPrefix(f, prefix) {
+			if strings.HasPrefix(f, prefix) && !w.virtualFileImmutable(f) {
 				w.deleteVirtualFile(f)
+				removed = true
 			}
 		}
 		for d := range w.dirs {
 			if d == resolved || strings.HasPrefix(d, prefix) {
 				delete(w.dirs, d)
+				removed = true
 			}
 		}
-		return
+		return removed
 	}
 	for f := range w.files {
-		if ok, _ := path.Match(resolved, f); ok {
+		if ok, _ := path.Match(resolved, f); ok && !w.virtualFileImmutable(f) {
 			w.deleteVirtualFile(f)
+			removed = true
 		}
 	}
 	for d := range w.dirs {
 		if ok, _ := path.Match(resolved, d); ok {
 			delete(w.dirs, d)
+			removed = true
+		}
+	}
+	return removed
+}
+
+func (w *virtualSSHWorld) seedDropperExecutionTargets(command string) {
+	// Only called after a multi-signal miner/dropper cleanup sequence was
+	// recognized. If that sequence later chmods/executes a local ./name, seed the
+	// expected pre-existing staged artifact in the selected temporary directory.
+	baseDir := w.cwd
+	for _, candidate := range []string{"/dev/shm", "/var/tmp", "/tmp"} {
+		if strings.Contains(command, "cd "+candidate) || strings.Contains(command, "cd "+candidate+"/") {
+			baseDir = candidate
+			break
+		}
+	}
+	for offset := 0; ; {
+		i := strings.Index(command[offset:], "./")
+		if i < 0 {
+			break
+		}
+		i += offset + 2
+		j := i
+		for j < len(command) {
+			c := command[j]
+			if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.' {
+				j++
+				continue
+			}
+			break
+		}
+		if j > i {
+			name := command[i:j]
+			if name != "." && name != ".." && len(name) <= 48 {
+				target := path.Join(baseDir, name)
+				if _, exists := w.files[target]; !exists {
+					_ = w.setVirtualFile(target, "\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00GLIBC_2.34\x00worker\n")
+					w.fileModes[target] = 0o644
+				}
+			}
+		}
+		offset = j
+		if offset <= i {
+			offset = i + 1
 		}
 	}
 }
@@ -259,4 +327,14 @@ func (w *virtualSSHWorld) virtualProcExe(pid int) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+func (w *virtualSSHWorld) virtualProcessCount() int {
+	n := 143
+	for _, p := range w.processes {
+		if p != nil && p.Alive {
+			n++
+		}
+	}
+	return n
 }
