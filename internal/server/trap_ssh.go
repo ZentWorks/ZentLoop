@@ -31,6 +31,7 @@ type TrapSSH struct {
 	geo         *geoResolver
 	system      *virtualSSHSystem
 	sem         chan struct{}
+	tarpitSem   chan struct{}
 	mu          sync.Mutex
 	perIP       map[string]int
 	close       sync.Once
@@ -72,9 +73,16 @@ func NewTrapSSH(cfg config.Config, st *store.Store) (*TrapSSH, error) {
 	if err != nil {
 		return nil, err
 	}
+	tarpitSlots := cfg.SSHMaxConcurrent / 8
+	if tarpitSlots < 1 {
+		tarpitSlots = 1
+	}
+	if tarpitSlots > 8 {
+		tarpitSlots = 8
+	}
 	return &TrapSSH{
 		cfg: cfg, store: st, listener: ln, signer: signer, geo: newGeoResolver(cfg.GeoIPDB), system: loadVirtualSSHSystem(cfg.DataDir),
-		sem: make(chan struct{}, cfg.SSHMaxConcurrent), perIP: make(map[string]int), authTimeout: defaultSSHAuthTimeout,
+		sem: make(chan struct{}, cfg.SSHMaxConcurrent), tarpitSem: make(chan struct{}, tarpitSlots), perIP: make(map[string]int), authTimeout: defaultSSHAuthTimeout,
 	}, nil
 }
 
@@ -122,6 +130,7 @@ func (s *TrapSSH) acceptConn(conn net.Conn) {
 	if err := s.store.AddSSHEvent(base); err != nil {
 		log.Printf("SSH event store: %v", err)
 	}
+	s.applyAdaptiveSSHTarpit(conn, ip)
 	s.handleConn(conn, sshAuthState{sessionID: sessionID, ip: ip, country: country, countrySource: countrySource})
 }
 

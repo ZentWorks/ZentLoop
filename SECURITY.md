@@ -9,6 +9,7 @@ ZentLoop is designed to receive untrusted Internet traffic. Treat every public t
 - Keep the web admin private. The generic Compose profile binds it to `127.0.0.1:9090` on the Docker host.
 - Use a VPN or authenticated TLS reverse proxy for remote web administration.
 - Set a strong unique admin password when a stable credential is desired. If `ZENTLOOP_ADMIN_PASSWORD` is empty, ZentLoop generates a random password at startup and prints it once to the container log; it changes again on the next restart unless explicitly configured.
+- The Web Admin login creates an in-memory 12-hour session with an HttpOnly SameSite=Strict cookie (Secure on HTTPS). Write actions require a per-session CSRF token. Logout invalidates the server-side session immediately; sessions also disappear on ZentLoop restart.
 - Select `ZENTLOOP_PROXY_MODE=cloudflare` only for a Cloudflare-proxied hostname or Cloudflare Tunnel. ZentLoop then trusts `CF-Connecting-IP` for visitor attribution.
 - Select `ZENTLOOP_PROXY_MODE=generic` only when direct access to the HTTP trap is blocked and your trusted reverse proxy is the only ingress path. Generic mode trusts forwarded-IP headers.
 - Keep `ZENTLOOP_PROXY_MODE=direct` for direct-IP HTTP deployments.
@@ -25,6 +26,7 @@ The optional `ZENTLOOP_SSH_ENABLED` listener is a deception service, not an oper
 - Simulated `curl`, `wget`, `ssh`, `scp`, `ping`, `nc` and related behavior never opens an attacker-directed outbound connection. Content-aware download bodies, headers, sizes and file metadata are generated locally.
 - TCP/remote forwarding, agent forwarding, X11 and SFTP/subsystems are rejected.
 - Global concurrent sessions, per-IP sessions, authentication attempts, idle time, total session time, input length and stored output are bounded.
+- Clearly aggressive repeat SSH sources may receive a small adaptive banner delay. The delay is capped at three seconds, uses a separate maximum-eight-slot semaphore and is skipped when that budget is occupied; it does not change authentication acceptance or the 60-second human-pacing auth timeout.
 - SSH passwords are not persisted. Authentication logs retain password-presence/length metadata only.
 - Attacker-controlled strings are sanitized before terminal/TUI rendering to remove terminal control/escape sequences.
 
@@ -49,6 +51,8 @@ ZentLoop may delay or alter responses served by ZentLoop itself. It must not sca
 HTTP events record source IP addresses, request paths, methods, user agents and derived behavior scores. HTTP request bodies and cookies are not persisted by the MVP. SSH events record source IP/country, client banner, username, authentication metadata, virtual commands/results and derived behavior. Raw SSH passwords are not persisted. `/data/intel-events.jsonl` contains only passive remote-resource indicators and decoy-token reuse metadata; common password/token/secret/OTP form fields are excluded before HTTP indicator extraction. `/data/ssh-system.json` contains synthetic decoy boot/seed state only and no attacker credentials or host telemetry.
 
 Cross-protocol actor correlation uses the observed source IP as a correlation key. Treat it as operational attribution, not proof of a person: NAT, reverse proxies and address rotation can affect the mapping. Deterministic decoy tokens are synthetic values derived only for deception/correlation and must never be accepted by a real service.
+
+The Admin IP Intelligence view and its JSON export expose only data ZentLoop already retains for that observed source. Possible campaign peers are heuristic correlations derived from timing, fingerprints, SSH client families, username overlap and revisit cadence; confidence scores are not identity attribution. Keep exports protected like the Admin interface because they can contain source IPs, requested paths, usernames, virtual commands and passive indicators.
 
 Persistent `events.jsonl`, `ssh-events.jsonl` and `intel-events.jsonl` use `ZENTLOOP_RETENTION_DAYS` with a default of 30 days and a hard 30-day maximum. Values above 30 are clamped to 30. ZentLoop compacts these logs at startup and periodically while running. Critical aggregate storage pressure also triggers bounded tail compaction that preserves the newest complete JSONL records instead of allowing retained event files to grow indefinitely. Operators remain responsible for selecting any shorter retention period and for meeting the legal/privacy requirements that apply to their own deployment.
 
@@ -85,7 +89,7 @@ SSH background jobs introduced in 0.2.8 are metadata-only simulation objects. `&
 
 ## SSH observability and exports
 
-SSH live observability reuses retained SSH events and, since 0.2.15, the single authenticated same-origin Admin WebSocket shared with HTTP live deltas. The fixed 60-second recently-left window is presentation metadata only. JSON/TXT exports are available only through the authenticated admin interface and contain only data ZentLoop already retains; plaintext passwords are not added to events or exports.
+SSH live observability reuses retained SSH events and, since 0.2.15, the single authenticated same-origin Admin WebSocket shared with HTTP live deltas. Since 0.2.20 the WebSocket is authenticated by the same browser Admin session; same-origin validation remains mandatory. The fixed 60-second recently-left window is presentation metadata only. JSON/TXT exports are available only through the authenticated admin interface and contain only data ZentLoop already retains; plaintext passwords are not added to events or exports.
 
 
 ## 0.2.10 scanner-fed protocol handling

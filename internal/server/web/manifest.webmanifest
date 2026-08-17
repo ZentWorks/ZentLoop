@@ -1,0 +1,14 @@
+{
+  "name": "ZentLoop Admin",
+  "short_name": "ZentLoop",
+  "description": "ZentLoop realtime security observatory and operator interface.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0a0d10",
+  "theme_color": "#0a0d10",
+  "icons": [
+    {"src": "/zentloop-logo.png", "sizes": "160x160", "type": "image/png", "purpose": "any maskable"},
+    {"src": "/favicon.png", "sizes": "64x64", "type": "image/png", "purpose": "any"}
+  ]
+}

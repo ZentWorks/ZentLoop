@@ -18,8 +18,9 @@ It combines an HTTP deception trap, an optional fully virtual SSH **Rabbit Hole*
 - Optional SSH deception listener with a fully virtual filesystem and command environment
 - Shared synthetic world across HTTP and SSH
 - Actor intelligence and cross-protocol correlation
+- Dedicated per-IP intelligence view with Web/SSH statistics, heuristic campaign correlation and one JSON export
 - SSH highlights and unified Web/SSH realtime session observability
-- Web administration interface
+- Responsive Web administration interface with first-party login sessions, Live/Intelligence drawers and iPhone/iPad home-screen Web App metadata
 - Optional read-only management SSH view for the live TUI
 - Reverse-proxy catch-all / sink-backend integration
 - Cloudflare, generic reverse-proxy and direct-IP attribution modes
@@ -60,6 +61,8 @@ ZENTLOOP_ADMIN_PASSWORD=replace-with-a-long-random-password
 ```
 
 If `ZENTLOOP_ADMIN_PASSWORD` is empty or unset, ZentLoop generates a cryptographically random administrator password on every start and prints it to the container log. Set the variable yourself if the password should remain stable across restarts.
+
+The browser Admin UI presents its own login page instead of the browser Basic-Auth popup. A successful login creates a temporary in-memory HttpOnly session; use a TLS reverse proxy or trusted VPN for remote administration.
 
 Start ZentLoop:
 
@@ -116,6 +119,8 @@ ZENTLOOP_SSH_HOST_KEY_PATH=/data/ssh_trap_host_ed25519_key
 The generic Docker bridge example uses host TCP/2222 so it does not accidentally replace the Docker host's real SSH service on TCP/22. With a dedicated ZentLoop IP, the trap can instead listen on TCP/22 on that address.
 
 ZentLoop's SSH environment is synthetic. It simulates reconnaissance, files, processes, services, shell state, downloads and common operator workflows while keeping execution inside the deception engine. TCP forwarding, agent forwarding, X11 and SFTP/subsystems are rejected.
+
+Clearly aggressive repeat SSH sources may receive a small bounded, jittered banner delay. This adaptive tarpit is capped at three seconds, uses a separate small semaphore and never changes credential acceptance or exposes a real shell.
 
 SSH passwords are not persisted. Authentication telemetry records metadata such as username, authentication method, password presence/length and client banner.
 

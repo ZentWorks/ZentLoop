@@ -272,6 +272,17 @@ func (s *Store) GetSSHSession(id string) (model.SSHSession, bool) {
 	return cloneSSHSession(ss), true
 }
 
+func (s *Store) AllSSHSessions() []model.SSHSession {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]model.SSHSession, 0, len(s.sshSessions))
+	for _, ss := range s.sshSessions {
+		out = append(out, cloneSSHSession(ss))
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].LastSeen.After(out[j].LastSeen) })
+	return out
+}
+
 func (s *Store) SSHSessions(activeWithin time.Duration, limit int) []model.SSHSession {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

@@ -10,18 +10,32 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	"zentloop/internal/config"
 	"zentloop/internal/server"
 	"zentloop/internal/store"
+	"zentloop/internal/support"
 	"zentloop/internal/tui"
 )
 
-const version = "0.2.16"
+const version = "0.2.20"
 
 func main() {
+	if filepath.Base(os.Args[0]) == "support" {
+		dataDir := strings.TrimSpace(os.Getenv("ZENTLOOP_DATA_DIR"))
+		if dataDir == "" {
+			dataDir = "/data"
+		}
+		if err := support.RunCommand(os.Stdin, os.Stdout, dataDir, version, time.Now()); err != nil {
+			fmt.Fprintf(os.Stderr, "Support export failed: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "top":

@@ -13,6 +13,7 @@ RUN apk add --no-cache tzdata ca-certificates libmaxminddb su-exec \
     && mkdir -p /data /site /app \
     && chown -R zentloop:zentloop /data /site /app
 COPY --from=build /out/zentloop /app/zentloop
+RUN ln -s /app/zentloop /usr/local/bin/support
 COPY --chmod=755 docker-entrypoint.sh /app/docker-entrypoint.sh
 COPY --chown=zentloop:zentloop site/ /site/
 EXPOSE 22 22222 8080 9090

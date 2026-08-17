@@ -82,6 +82,13 @@ type SessionDetail struct {
 	Events  []Event `json:"events"`
 }
 
+type WebSessionExport struct {
+	ExportedAt time.Time `json:"exported_at"`
+	Version    string    `json:"version"`
+	Session    Session   `json:"session"`
+	Events     []Event   `json:"events"`
+}
+
 type Event struct {
 	ID                  string         `json:"id"`
 	At                  time.Time      `json:"at"`
@@ -301,11 +308,84 @@ type ActorProfile struct {
 	Fingerprints            []string       `json:"fingerprints,omitempty"`
 	SSHMedianRevisitSeconds int64          `json:"ssh_median_revisit_seconds,omitempty"`
 	SSHRevisitJitterSeconds int64          `json:"ssh_revisit_jitter_seconds,omitempty"`
+	SSHAuthAccepted         int64          `json:"ssh_auth_accepted,omitempty"`
+	SSHAuthRejected         int64          `json:"ssh_auth_rejected,omitempty"`
+	SSHUniqueUsers          int            `json:"ssh_unique_users,omitempty"`
+	SSHPeakConcurrent       int            `json:"ssh_peak_concurrent,omitempty"`
+	SSHPeakAttemptsPerMin   int            `json:"ssh_peak_attempts_per_minute,omitempty"`
 }
 
 type ActorDetail struct {
 	Actor    ActorProfile    `json:"actor"`
 	Timeline []ActorActivity `json:"timeline"`
+}
+
+type IPActivityBucket struct {
+	At   time.Time `json:"at"`
+	HTTP int64     `json:"http"`
+	SSH  int64     `json:"ssh"`
+}
+
+type IPTopValue struct {
+	Value string `json:"value"`
+	Count int64  `json:"count"`
+}
+
+type IPCampaignPeer struct {
+	IP         string    `json:"ip"`
+	Country    string    `json:"country,omitempty"`
+	Confidence int       `json:"confidence"`
+	RiskScore  int       `json:"risk_score"`
+	LastSeen   time.Time `json:"last_seen"`
+	Reasons    []string  `json:"reasons"`
+}
+
+type IPIntelligenceSummary struct {
+	FirstSeen                 time.Time `json:"first_seen"`
+	LastSeen                  time.Time `json:"last_seen"`
+	RiskScore                 int       `json:"risk_score"`
+	Classification            string    `json:"classification"`
+	Actor                     string    `json:"actor"`
+	HTTPRequests              int64     `json:"http_requests"`
+	HTTPUniquePaths           int       `json:"http_unique_paths"`
+	HTTPUniqueTargets         int       `json:"http_unique_targets"`
+	HTTPPeakRequestsPerMinute int       `json:"http_peak_requests_per_minute"`
+	SSHConnections            int64     `json:"ssh_connections"`
+	SSHAuthAccepted           int64     `json:"ssh_auth_accepted"`
+	SSHAuthRejected           int64     `json:"ssh_auth_rejected"`
+	SSHUniqueUsers            int       `json:"ssh_unique_users"`
+	SSHUniqueClients          int       `json:"ssh_unique_clients"`
+	SSHCommands               int64     `json:"ssh_commands"`
+	SSHPeakConcurrent         int       `json:"ssh_peak_concurrent"`
+	SSHPeakAttemptsPerMinute  int       `json:"ssh_peak_attempts_per_minute"`
+	SSHMedianRevisitSeconds   int64     `json:"ssh_median_revisit_seconds"`
+	SSHRevisitJitterSeconds   int64     `json:"ssh_revisit_jitter_seconds"`
+	PayloadSignals            int64     `json:"payload_signals"`
+	CanaryTouches             int64     `json:"canary_touches"`
+	EngagementSeconds         int64     `json:"engagement_seconds"`
+	Depth                     int       `json:"depth"`
+	Reasons                   []string  `json:"reasons"`
+}
+
+type IPIntelligence struct {
+	ExportedAt    time.Time             `json:"exported_at"`
+	Version       string                `json:"version"`
+	IP            string                `json:"ip"`
+	Actor         ActorProfile          `json:"actor"`
+	Summary       IPIntelligenceSummary `json:"summary"`
+	Timeline      []IPActivityBucket    `json:"timeline"`
+	TopUsernames  []IPTopValue          `json:"top_usernames"`
+	TopSSHClients []IPTopValue          `json:"top_ssh_clients"`
+	TopCommands   []IPTopValue          `json:"top_commands"`
+	TopFamilies   []IPTopValue          `json:"top_command_families"`
+	TopPaths      []IPTopValue          `json:"top_paths"`
+	TopTargets    []IPTopValue          `json:"top_targets"`
+	CampaignPeers []IPCampaignPeer      `json:"possible_campaign_peers"`
+	HTTPSessions  []Session             `json:"http_sessions"`
+	HTTPEvents    []Event               `json:"http_events"`
+	SSHSessions   []SSHSession          `json:"ssh_sessions"`
+	SSHEvents     []SSHEvent            `json:"ssh_events"`
+	Intelligence  []IntelSignal         `json:"intelligence"`
 }
 
 type ActorOverview struct {
@@ -348,6 +428,7 @@ type HealthOverview struct {
 	HTTPRejected               int64  `json:"http_rejected"`
 	SSHRejectedGlobal          int64  `json:"ssh_rejected_global"`
 	SSHRejectedPerIP           int64  `json:"ssh_rejected_per_ip"`
+	SSHTarpitApplied           int64  `json:"ssh_tarpit_applied"`
 	SSHCommandBudgetHits       int64  `json:"ssh_command_budget_hits"`
 	SSHVirtualStorageHits      int64  `json:"ssh_virtual_storage_hits"`
 	SSHRecursionGuardHits      int64  `json:"ssh_recursion_guard_hits"`

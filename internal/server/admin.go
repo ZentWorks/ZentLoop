@@ -36,76 +36,70 @@ type AdminServer struct {
 
 	authMu       sync.Mutex
 	authFailures map[string]adminAuthFailure
+
+	sessionMu     sync.Mutex
+	adminSessions map[[32]byte]adminSession
 }
 
 func NewAdmin(cfg config.Config, st *store.Store) *AdminServer {
-	return &AdminServer{cfg: cfg, store: st, authFailures: make(map[string]adminAuthFailure)}
+	return &AdminServer{
+		cfg: cfg, store: st,
+		authFailures:  make(map[string]adminAuthFailure),
+		adminSessions: make(map[[32]byte]adminSession),
+	}
 }
 
 func (s *AdminServer) Handler() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/overview", s.overview)
-	mux.HandleFunc("/api/available-days", s.availableDays)
-	mux.HandleFunc("/api/sessions", s.sessions)
-	mux.HandleFunc("/api/history", s.history)
-	mux.HandleFunc("/api/sessions/", s.session)
-	mux.HandleFunc("/api/events", s.events)
-	mux.HandleFunc("/api/realtime", s.realtime)
-	mux.HandleFunc("/api/info", s.info)
-	mux.HandleFunc("/api/settings/trusted-domains", s.trustedDomains)
-	mux.HandleFunc("/api/untrusted-hosts", s.untrustedHosts)
-	mux.HandleFunc("/api/known-probes", s.knownProbes)
-	mux.HandleFunc("/api/known-probes.csv", s.knownProbesCSV)
-	mux.HandleFunc("/api/unknown-paths", s.unknownPaths)
-	mux.HandleFunc("/api/unknown-paths.csv", s.unknownPathsCSV)
-	mux.HandleFunc("/api/recent-paths", s.recentPaths)
-	mux.HandleFunc("/api/catchall-hosts", s.catchAllHosts)
-	mux.HandleFunc("/api/catchall-hosts.csv", s.catchAllHostsCSV)
-	mux.HandleFunc("/api/integration", s.integrationCapabilities)
-	mux.HandleFunc("/api/integration/peers", s.integrationPeers)
-	mux.HandleFunc("/api/actors/overview", s.actorOverview)
-	mux.HandleFunc("/api/bursts", s.scanBursts)
-	mux.HandleFunc("/api/actors", s.actors)
-	mux.HandleFunc("/api/actors/", s.actor)
-	mux.HandleFunc("/api/intelligence", s.intelligence)
-	mux.HandleFunc("/api/health", s.health)
-	mux.HandleFunc("/api/ssh/overview", s.sshOverview)
-	mux.HandleFunc("/api/ssh/sessions", s.sshSessions)
-	mux.HandleFunc("/api/ssh/live-sessions", s.sshLiveSessions)
-	mux.HandleFunc("/api/ssh/live-feed", s.sshLiveFeed)
-	mux.HandleFunc("/api/ssh/history", s.sshHistory)
-	mux.HandleFunc("/api/ssh/highlights", s.sshHighlights)
-	mux.HandleFunc("/api/ssh/sessions/", s.sshSession)
-	mux.HandleFunc("/api/ssh/events", s.sshEvents)
+	protected := http.NewServeMux()
+	protected.HandleFunc("/api/overview", s.overview)
+	protected.HandleFunc("/api/available-days", s.availableDays)
+	protected.HandleFunc("/api/sessions", s.sessions)
+	protected.HandleFunc("/api/history", s.history)
+	protected.HandleFunc("/api/sessions/", s.session)
+	protected.HandleFunc("/api/events", s.events)
+	protected.HandleFunc("/api/realtime", s.realtime)
+	protected.HandleFunc("/api/info", s.info)
+	protected.HandleFunc("/api/settings/trusted-domains", s.trustedDomains)
+	protected.HandleFunc("/api/untrusted-hosts", s.untrustedHosts)
+	protected.HandleFunc("/api/known-probes", s.knownProbes)
+	protected.HandleFunc("/api/known-probes.csv", s.knownProbesCSV)
+	protected.HandleFunc("/api/unknown-paths", s.unknownPaths)
+	protected.HandleFunc("/api/unknown-paths.csv", s.unknownPathsCSV)
+	protected.HandleFunc("/api/recent-paths", s.recentPaths)
+	protected.HandleFunc("/api/catchall-hosts", s.catchAllHosts)
+	protected.HandleFunc("/api/catchall-hosts.csv", s.catchAllHostsCSV)
+	protected.HandleFunc("/api/integration", s.integrationCapabilities)
+	protected.HandleFunc("/api/integration/peers", s.integrationPeers)
+	protected.HandleFunc("/api/actors/overview", s.actorOverview)
+	protected.HandleFunc("/api/bursts", s.scanBursts)
+	protected.HandleFunc("/api/actors", s.actors)
+	protected.HandleFunc("/api/actors/", s.actor)
+	protected.HandleFunc("/api/intelligence", s.intelligence)
+	protected.HandleFunc("/api/ip/", s.ipIntelligence)
+	protected.HandleFunc("/api/health", s.health)
+	protected.HandleFunc("/api/ssh/overview", s.sshOverview)
+	protected.HandleFunc("/api/ssh/sessions", s.sshSessions)
+	protected.HandleFunc("/api/ssh/live-sessions", s.sshLiveSessions)
+	protected.HandleFunc("/api/ssh/live-feed", s.sshLiveFeed)
+	protected.HandleFunc("/api/ssh/history", s.sshHistory)
+	protected.HandleFunc("/api/ssh/highlights", s.sshHighlights)
+	protected.HandleFunc("/api/ssh/sessions/", s.sshSession)
+	protected.HandleFunc("/api/ssh/events", s.sshEvents)
 
 	sub, _ := fs.Sub(webFS, "web")
-	mux.Handle("/", http.FileServer(http.FS(sub)))
-	return s.securityHeaders(s.basicAuth(mux))
-}
+	static := http.FileServer(http.FS(sub))
+	protected.Handle("/", static)
 
-func (s *AdminServer) basicAuth(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		u, p, ok := r.BasicAuth()
-		valid := ok && !subtleStringMismatch(u, s.cfg.AdminUser) && !subtleStringMismatch(p, s.cfg.AdminPassword)
-		ip := remoteIP(r.RemoteAddr)
-		if !valid {
-			delay := s.recordAdminAuthFailure(ip, time.Now())
-			if delay > 0 {
-				timer := time.NewTimer(delay)
-				defer timer.Stop()
-				select {
-				case <-timer.C:
-				case <-r.Context().Done():
-					return
-				}
-			}
-			w.Header().Set("WWW-Authenticate", `Basic realm="ZentLoop Admin", charset="UTF-8"`)
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
-		}
-		s.clearAdminAuthFailures(ip)
-		next.ServeHTTP(w, r)
-	})
+	public := http.NewServeMux()
+	public.HandleFunc("/api/auth/login", s.adminLogin)
+	public.HandleFunc("/api/auth/session", s.adminSessionInfo)
+	public.HandleFunc("/api/auth/logout", s.adminLogout)
+	public.HandleFunc("/login", s.adminLoginPage(sub))
+	for _, path := range []string{"/login.js", "/login.css", "/favicon.png", "/zentloop-logo.png", "/manifest.webmanifest"} {
+		public.Handle(path, static)
+	}
+	public.Handle("/", s.adminSessionAuth(protected))
+	return s.securityHeaders(public)
 }
 
 func (s *AdminServer) recordAdminAuthFailure(ip string, now time.Time) time.Duration {
@@ -237,27 +231,48 @@ func (s *AdminServer) session(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
-	id := strings.TrimPrefix(r.URL.Path, "/api/sessions/")
-	if id == "" || strings.Contains(id, "/") {
+	rest := strings.TrimPrefix(r.URL.Path, "/api/sessions/")
+	if rest == "" {
 		http.NotFound(w, r)
 		return
 	}
-	if r.URL.Query().Get("event_limit") == "" {
-		ss, ok := s.store.GetSessionView(id)
+	parts := strings.Split(rest, "/")
+	id := parts[0]
+	if id == "" {
+		http.NotFound(w, r)
+		return
+	}
+	if len(parts) == 1 {
+		if r.URL.Query().Get("event_limit") == "" {
+			ss, ok := s.store.GetSessionView(id)
+			if !ok {
+				http.NotFound(w, r)
+				return
+			}
+			writeJSON(w, ss)
+			return
+		}
+		detail, ok := s.store.SessionDetail(id, queryInt(r, "event_limit", 500, 1, 5000))
 		if !ok {
 			http.NotFound(w, r)
 			return
 		}
-		writeJSON(w, ss)
+		writeJSON(w, detail)
 		return
 	}
-	detail, ok := s.store.SessionDetail(id, queryInt(r, "event_limit", 500, 1, 5000))
+	if len(parts) != 2 || parts[1] != "export.json" {
+		http.NotFound(w, r)
+		return
+	}
+	ex, ok := s.store.WebSessionExport(id, currentZentLoopVersion)
 	if !ok {
 		http.NotFound(w, r)
 		return
 	}
-	writeJSON(w, detail)
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="zentloop-web-%s.json"`, safeFilename(id)))
+	writeJSON(w, ex)
 }
+
 func (s *AdminServer) events(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		methodNotAllowed(w)
@@ -328,7 +343,7 @@ func (s *AdminServer) info(w http.ResponseWriter, r *http.Request) {
 	_, geoErr := os.Stat(s.cfg.GeoIPDB)
 	_, botCacheErr := os.Stat(s.cfg.OfficialBotsCache)
 	writeJSON(w, map[string]any{
-		"brand": s.cfg.Brand, "version": "0.2.16", "proxy_mode": s.cfg.ProxyMode, "proxy_rules": s.cfg.ProxyRules,
+		"brand": s.cfg.Brand, "version": currentZentLoopVersion, "proxy_mode": s.cfg.ProxyMode, "proxy_rules": s.cfg.ProxyRules,
 		"hostile_threshold": s.cfg.HostileThreshold, "suspicious_threshold": s.cfg.SuspiciousThreshold,
 		"live_session_minutes": s.cfg.LiveSessionMinutes, "resume_window_hours": s.cfg.ResumeWindowHours,
 		"geo_enrichment": true, "geoip_ready": geoErr == nil, "geoip_db": s.cfg.GeoIPDB, "integration_protocol": 1, "integration_secret_configured": s.cfg.IntegrationSecret != "", "telemetry": false,
@@ -546,7 +561,7 @@ func (s *AdminServer) sshSession(w http.ResponseWriter, r *http.Request) {
 	}
 	switch parts[1] {
 	case "export.json":
-		ex, ok := s.store.SSHSessionExport(id, "0.2.16")
+		ex, ok := s.store.SSHSessionExport(id, currentZentLoopVersion)
 		if !ok {
 			http.NotFound(w, r)
 			return
@@ -554,7 +569,7 @@ func (s *AdminServer) sshSession(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="zentloop-ssh-%s.json"`, safeFilename(id)))
 		writeJSON(w, ex)
 	case "export.txt":
-		ex, ok := s.store.SSHSessionExport(id, "0.2.16")
+		ex, ok := s.store.SSHSessionExport(id, currentZentLoopVersion)
 		if !ok {
 			http.NotFound(w, r)
 			return
@@ -848,7 +863,7 @@ func (s *AdminServer) integrationCapabilities(w http.ResponseWriter, r *http.Req
 	}
 	writeJSON(w, map[string]any{
 		"product":          "ZentLoop",
-		"version":          "0.2.16",
+		"version":          currentZentLoopVersion,
 		"protocol_version": 1,
 		"capabilities": []string{
 			"catch_all", "forwarded_ip", "target_host", "multi_target", "signed_ingress", "catch_all_statistics", "health_verification", "integration_peers",

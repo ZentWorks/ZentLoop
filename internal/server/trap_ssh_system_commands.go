@@ -121,11 +121,11 @@ func (w *virtualSSHWorld) virtualDynamicFile(name string) (string, bool) {
 	case "/proc/cpuinfo":
 		var b strings.Builder
 		for i := 0; i < virtualCPUCount; i++ {
-			fmt.Fprintf(&b, "processor\t: %d\nvendor_id\t: GenuineIntel\ncpu family\t: 6\nmodel\t\t: 158\nmodel name\t: "+virtualCPUModel+"\nstepping\t: 13\ncpu MHz\t\t: %.3f\ncache size\t: 16384 KB\nflags\t\t: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ss ht syscall nx lm constant_tsc rep_good nopl xtopology cpuid tsc_known_freq pni pclmulqdq ssse3 fma cx16 sse4_1 sse4_2 x2apic movbe popcnt aes xsave avx f16c rdrand hypervisor lahf_lm abm 3dnowprefetch cpuid_fault invpcid_single pti ssbd ibrs ibpb stibp tpr_shadow flexpriority ept vpid ept_ad\n\n", i, 3696.000+float64(i)*1.7)
+			fmt.Fprintf(&b, "processor\t: %d\nvendor_id\t: GenuineIntel\ncpu family\t: 6\nmodel\t\t: 158\nmodel name\t: "+virtualCPUModel+"\nstepping\t: 13\nmicrocode\t: 0xf4\ncpu MHz\t\t: %.3f\ncache size\t: 16384 KB\nphysical id\t: 0\nsiblings\t: %d\ncore id\t\t: %d\ncpu cores\t: %d\napicid\t\t: %d\ninitial apicid\t: %d\nfpu\t\t: yes\nfpu_exception\t: yes\ncpuid level\t: 22\nwp\t\t: yes\nflags\t\t: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ss ht syscall nx lm constant_tsc rep_good nopl xtopology cpuid tsc_known_freq pni pclmulqdq ssse3 fma cx16 sse4_1 sse4_2 x2apic movbe popcnt aes xsave avx f16c rdrand hypervisor lahf_lm abm 3dnowprefetch cpuid_fault invpcid_single pti ssbd ibrs ibpb stibp tpr_shadow flexpriority ept vpid ept_ad\nbogomips\t: 7392.00\n\n", i, 3696.000+float64(i)*1.7, virtualCPUCount, i, virtualCPUCount, i, i)
 		}
 		return b.String(), true
 	case "/proc/mounts":
-		return "/dev/vda2 / ext4 rw,relatime,errors=remount-ro 0 0\nproc /proc proc rw,nosuid,nodev,noexec,relatime 0 0\nsysfs /sys sysfs rw,nosuid,nodev,noexec,relatime 0 0\n/dev/vdb1 /srv/archive ext4 rw,relatime 0 0\n", true
+		return "/dev/vda2 / ext4 rw,relatime,errors=remount-ro 0 0\nproc /proc proc rw,nosuid,nodev,noexec,relatime 0 0\nsysfs /sys sysfs rw,nosuid,nodev,noexec,relatime 0 0\n/dev/vdb1 /srv/archive ext4 rw,nosuid,nodev,relatime 0 0\n", true
 	case "/proc/1/cgroup":
 		return "0::/init.scope\n", true
 	case "/proc/self/cgroup":
@@ -147,8 +147,25 @@ func (w *virtualSSHWorld) virtualDynamicFile(name string) (string, bool) {
 		ticks := int64(s.Uptime.Seconds() * 100 * virtualCPUCount)
 		user := int64(float64(ticks) * s.CPUUser / 100)
 		sys := int64(float64(ticks) * s.CPUSystem / 100)
-		idle := ticks - user - sys
-		return fmt.Sprintf("cpu  %d 411 %d %d 923 0 1842 0 0 0\nintr 58321011 0 9 0 0\nctxt 104492311\nbtime %d\nprocesses 884331\nprocs_running 1\nprocs_blocked 0\n", user, sys, idle, s.BootTime.Unix()), true
+		iowait := int64(float64(ticks) * s.CPUWait / 100)
+		idle := ticks - user - sys - iowait
+		if idle < 0 {
+			idle = 0
+		}
+		var b strings.Builder
+		fmt.Fprintf(&b, "cpu  %d 411 %d %d %d 0 1842 0 0 0\n", user, sys, idle, iowait)
+		for i := 0; i < virtualCPUCount; i++ {
+			pu := user/int64(virtualCPUCount) + int64(i*17)
+			ps := sys/int64(virtualCPUCount) + int64(i*7)
+			pw := iowait / int64(virtualCPUCount)
+			pi := idle/int64(virtualCPUCount) - int64(i*24)
+			if pi < 0 {
+				pi = 0
+			}
+			fmt.Fprintf(&b, "cpu%d %d %d %d %d %d 0 %d 0 0 0\n", i, pu, 100+int64(i), ps, pi, pw, 400+int64(i)*11)
+		}
+		fmt.Fprintf(&b, "intr 58321011 0 9 0 0\nctxt 104492311\nbtime %d\nprocesses 884331\nprocs_running 1\nprocs_blocked 0\n", s.BootTime.Unix())
+		return b.String(), true
 	case "/proc/sys/kernel/random/boot_id":
 		return w.system.bootID() + "\n", true
 	case "/etc/machine-id":
@@ -159,10 +176,25 @@ func (w *virtualSSHWorld) virtualDynamicFile(name string) (string, bool) {
 	return "", false
 }
 
+func (w *virtualSSHWorld) virtualLoginTimeline(s virtualSSHSystemSnapshot) (adminLogin, backupLogin time.Time) {
+	// Login records must stay fixed when an actor repeats `last`, `w`, journalctl
+	// or auth.log probes. Derive today's plausible operator activity from the
+	// persistent machine seed instead of sliding every timestamp with "now".
+	day := time.Date(s.Now.Year(), s.Now.Month(), s.Now.Day(), 0, 0, 0, 0, time.UTC)
+	adminLogin = day.Add(time.Duration(8+int((w.system.seed>>5)%2))*time.Hour + time.Duration(8+int((w.system.seed>>13)%47))*time.Minute)
+	if adminLogin.After(s.Now.Add(-5 * time.Minute)) {
+		adminLogin = adminLogin.Add(-24 * time.Hour)
+	}
+	backupLogin = adminLogin.Add(-time.Duration(90+int((w.system.seed>>21)%95)) * time.Minute)
+	if backupLogin.Before(s.BootTime.Add(20 * time.Minute)) {
+		backupLogin = s.BootTime.Add(2*time.Hour + time.Duration((w.system.seed>>29)%120)*time.Minute)
+	}
+	return adminLogin.Truncate(time.Second), backupLogin.Truncate(time.Second)
+}
+
 func (w *virtualSSHWorld) virtualAuthLog(s virtualSSHSystemSnapshot) string {
 	boot := s.BootTime.Add(4*time.Minute + 11*time.Second)
-	backup := s.Now.Add(-2*time.Hour - 3*time.Minute)
-	login := s.Now.Add(-34*time.Minute - 12*time.Second)
+	login, backup := w.virtualLoginTimeline(s)
 	return fmt.Sprintf("%s %s systemd-logind[581]: New seat seat0.\n%s %s CRON[1842]: pam_unix(cron:session): session opened for user root(uid=0)\n%s %s sshd[1881]: Accepted publickey for svc-backup from 10.10.30.12 port 51244 ssh2\n%s %s sshd[23871]: Accepted publickey for admin from 10.10.20.44 port 55132 ssh2\n", syslogTime(boot), w.hostname, syslogTime(backup), w.hostname, syslogTime(backup.Add(2*time.Second)), w.hostname, syslogTime(login), w.hostname)
 }
 
@@ -216,8 +248,7 @@ func (w *virtualSSHWorld) virtualWho(cmd string, args []string) string {
 	if cmd == "who" && containsArg(args, "-b") {
 		return "         system boot  " + s.BootTime.Format("2006-01-02 15:04")
 	}
-	adminLogin := s.Now.Add(-34*time.Minute - 12*time.Second)
-	backupLogin := s.Now.Add(-2*time.Hour - 3*time.Minute)
+	adminLogin, backupLogin := w.virtualLoginTimeline(s)
 	if cmd == "last" {
 		if len(args) > 0 && args[0] == "reboot" {
 			return fmt.Sprintf("reboot   system boot  "+virtualKernelRelease+" %s   still running\n\nwtmp begins %s", s.BootTime.Format("Mon Jan _2 15:04"), s.BootTime.Format("Mon Jan _2 15:04:05 2006"))
@@ -240,18 +271,39 @@ func (w *virtualSSHWorld) virtualPSOutput() string {
 		return t.Format("15:04")
 	}
 	webCPU := 0.1 + s.Load1*0.55
-	base := fmt.Sprintf("USER         PID %%CPU %%MEM    VSZ   RSS TTY      STAT START   TIME COMMAND\nroot           1  0.0  0.2  22584 12140 ?        Ss   %s   0:18 /sbin/init\nroot         612  0.0  0.1  15420  8200 ?        Ss   %s   0:04 /usr/sbin/sshd -D\nsvc-web      844  %.1f  1.9 891244 154212 ?       Ssl  %s  51:32 /opt/app/current/web\nroot        1021  0.0  0.3 127820 24812 ?        Ssl  %s   3:07 /usr/bin/dockerd\nsvc-backup  1842  0.1  0.1  18240  7800 ?        Ss   %s   0:12 /usr/local/bin/backup-agent", start(31*time.Second), start(4*time.Minute), webCPU, start(6*time.Minute), start(8*time.Minute), start(11*time.Minute))
+	base := fmt.Sprintf("USER         PID %%CPU %%MEM    VSZ   RSS TTY      STAT START   TIME COMMAND\nroot           1  0.0  0.2  22584 12140 ?        Ss   %s   0:18 /sbin/init\nroot         612  0.0  0.1  15420  8200 ?        Ss   %s   0:04 /usr/sbin/sshd -D\nsvc-web      844  %.1f  1.9 891244 154212 ?       Ssl  %s  51:32 /opt/app/current/web\npostgres     901  0.2  1.1 303924  87320 ?        Ss   %s   9:41 postgres -D /var/lib/postgresql/data\nredis        932  0.1  0.2  67240  14880 ?        Ssl  %s   4:18 redis-server 10.10.30.32:6379\nroot        1021  0.0  0.3 127820  24812 ?        Ssl  %s   3:07 /usr/bin/dockerd\nroot        1102  0.0  0.1 112436   6412 ?        Sl   %s   0:33 /usr/bin/docker-proxy -proto tcp -host-ip 127.0.0.1 -host-port 5432\nsvc-backup  1842  0.1  0.1  18240   7800 ?        Ss   %s   0:12 /usr/local/bin/backup-agent", start(31*time.Second), start(4*time.Minute), webCPU, start(6*time.Minute), start(6*time.Minute+20*time.Second), start(6*time.Minute+34*time.Second), start(8*time.Minute), start(8*time.Minute+20*time.Second), start(11*time.Minute))
 	return base + w.dynamicProcessLines()
 }
 
-func (w *virtualSSHWorld) virtualFreeOutput() string {
+func (w *virtualSSHWorld) virtualFreeOutput(args []string) string {
 	s := w.system.snapshot()
-	return fmt.Sprintf("               total        used        free      shared  buff/cache   available\nMem:           %.1fGi       %.1fGi       %.1fGi       103Mi       %.1fGi       %.1fGi\nSwap:          2.0Gi          0B       2.0Gi", s.MemTotalMiB/1024, s.MemUsedMiB/1024, s.MemFreeMiB/1024, s.MemCacheMiB/1024, s.MemAvailMiB/1024)
+	sharedMiB := 103.0
+	swapMiB := 2048.0
+	switch {
+	case containsArg(args, "-h"), containsArg(args, "--human"):
+		return fmt.Sprintf("               total        used        free      shared  buff/cache   available\nMem:           %.1fGi       %.1fGi       %.1fGi       %.0fMi       %.1fGi       %.1fGi\nSwap:          2.0Gi          0B       2.0Gi", s.MemTotalMiB/1024, s.MemUsedMiB/1024, s.MemFreeMiB/1024, sharedMiB, s.MemCacheMiB/1024, s.MemAvailMiB/1024)
+	case containsArg(args, "-m"), containsArg(args, "--mebi"):
+		return fmt.Sprintf("               total        used        free      shared  buff/cache   available\nMem:            %.0f        %.0f        %.0f         %.0f        %.0f        %.0f\nSwap:           %.0f           0        %.0f", s.MemTotalMiB, s.MemUsedMiB, s.MemFreeMiB, sharedMiB, s.MemCacheMiB, s.MemAvailMiB, swapMiB, swapMiB)
+	case containsArg(args, "-g"), containsArg(args, "--gibi"):
+		return fmt.Sprintf("               total        used        free      shared  buff/cache   available\nMem:               %.0f           %.0f           %.0f           0           %.0f           %.0f\nSwap:              2           0           2", math.Floor(s.MemTotalMiB/1024), math.Floor(s.MemUsedMiB/1024), math.Floor(s.MemFreeMiB/1024), math.Floor(s.MemCacheMiB/1024), math.Floor(s.MemAvailMiB/1024))
+	default:
+		return fmt.Sprintf("               total        used        free      shared  buff/cache   available\nMem:         %8d    %8d    %8d      %6d    %8d    %8d\nSwap:        %8d           0    %8d", int64(s.MemTotalMiB*1024), int64(s.MemUsedMiB*1024), int64(s.MemFreeMiB*1024), int64(sharedMiB*1024), int64(s.MemCacheMiB*1024), int64(s.MemAvailMiB*1024), int64(swapMiB*1024), int64(swapMiB*1024))
+	}
+}
+
+func (w *virtualSSHWorld) virtualDFOutput(args []string) string {
+	s := w.system.snapshot()
+	if containsArg(args, "-h") || containsArg(args, "--human-readable") {
+		return fmt.Sprintf("Filesystem      Size  Used Avail Use%% Mounted on\n/dev/vda2       %.0fG  %.0fG   %.0fG  %d%% /\n/dev/vdb1       %.0fG  %.0fG  %.0fG  %d%% /srv/archive", s.RootTotalGiB, s.RootUsedGiB, s.RootAvailGiB, s.RootUsePct, s.ArchiveTotalGiB, s.ArchiveUsedGiB, s.ArchiveAvailGiB, s.ArchiveUsePct)
+	}
+	toKiB := func(gib float64) int64 { return int64(math.Round(gib * 1024 * 1024)) }
+	return fmt.Sprintf("Filesystem     1K-blocks      Used Available Use%% Mounted on\n/dev/vda2        %8d  %8d  %8d %3d%% /\n/dev/vdb1        %8d  %8d  %8d %3d%% /srv/archive", toKiB(s.RootTotalGiB), toKiB(s.RootUsedGiB), toKiB(s.RootAvailGiB), s.RootUsePct, toKiB(s.ArchiveTotalGiB), toKiB(s.ArchiveUsedGiB), toKiB(s.ArchiveAvailGiB), s.ArchiveUsePct)
 }
 
 func (w *virtualSSHWorld) virtualJournal() string {
 	s := w.system.snapshot()
-	return fmt.Sprintf("%s %s systemd[1]: Started backup-agent.service - Legacy Backup Agent.\n%s %s backup-agent[1842]: profile=legacy sync completed objects=184 duration=12.4s\n%s %s sshd[23871]: Accepted publickey for admin from 10.10.20.44 port 55132 ssh2", s.BootTime.Add(11*time.Minute).Format("Jan _2 15:04:05"), w.hostname, s.Now.Add(-2*time.Hour).Format("Jan _2 15:04:05"), w.hostname, s.Now.Add(-34*time.Minute).Format("Jan _2 15:04:05"), w.hostname)
+	adminLogin, backupLogin := w.virtualLoginTimeline(s)
+	return fmt.Sprintf("%s %s systemd[1]: Started backup-agent.service - Legacy Backup Agent.\n%s %s backup-agent[1842]: profile=legacy sync completed objects=184 duration=12.4s\n%s %s sshd[23871]: Accepted publickey for admin from 10.10.20.44 port 55132 ssh2", s.BootTime.Add(11*time.Minute).Format("Jan _2 15:04:05"), w.hostname, backupLogin.Add(3*time.Minute).Format("Jan _2 15:04:05"), w.hostname, adminLogin.Format("Jan _2 15:04:05"), w.hostname)
 }
 
 func (w *virtualSSHWorld) fileDescription(name string) (string, bool) {
@@ -408,7 +460,7 @@ func virtualActivityWeight(r virtualSSHResult) float64 {
 
 func (w *virtualSSHWorld) virtualPSCompactOutput() string {
 	s := w.system.snapshot()
-	lines := []string{"    PID %CPU COMMAND", fmt.Sprintf("    844 %4.1f web", 0.1+s.Load1*0.55), "   1842  0.1 backup-agent", "   1021  0.0 dockerd", "    612  0.0 sshd", "      1  0.0 systemd"}
+	lines := []string{"    PID %CPU COMMAND", fmt.Sprintf("    844 %4.1f web", 0.1+s.Load1*0.55), "    901  0.2 postgres", "    932  0.1 redis-server", "   1021  0.0 dockerd", "   1102  0.0 docker-proxy", "   1842  0.1 backup-agent", "    612  0.0 sshd", "      1  0.0 systemd"}
 	for _, p := range w.processes {
 		if p != nil && p.Alive {
 			fields := strings.Fields(p.Command)

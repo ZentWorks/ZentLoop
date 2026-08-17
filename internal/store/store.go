@@ -67,6 +67,7 @@ type Store struct {
 	actorFingerprints     map[string]int64
 	sshActorLastCommand   map[string]string
 	sshActorLastCommandAt map[string]time.Time
+	actorSSHUsers         map[string]map[string]struct{}
 	intelEvents           []model.IntelSignal
 	intelEventFile        *os.File
 	health                model.HealthOverview
@@ -87,6 +88,19 @@ func New(dataDir string) (*Store, error) {
 	return NewWithRetention(dataDir, 30)
 }
 
+func newStoreState(dataDir string, retentionDays int) *Store {
+	return &Store{
+		sessions: make(map[string]*model.Session), fingerprints: make(map[string]string),
+		realtimeSubs: make(map[*realtimeSubscriber]struct{}), pathCounts: make(map[string]int64), dayCounts: make(map[string]int64), targetCounts: make(map[string]int64), requestHostStats: make(map[string]*rawHostStat), unknownPaths: make(map[string]*model.UnknownPath), probeStats: make(map[string]*model.ProbeStat), catchAllHosts: make(map[string]*model.CatchAllHost), integrationCounts: make(map[string]int64),
+		actors: make(map[string]*model.ActorProfile), actorTimeline: make(map[string][]model.ActorActivity), actorSessionLast: make(map[string]time.Time), actorFingerprints: make(map[string]int64), sshActorLastCommand: make(map[string]string), sshActorLastCommandAt: make(map[string]time.Time), actorSSHUsers: make(map[string]map[string]struct{}),
+		sshSessions: make(map[string]*model.SSHSession), sshUserCounts: make(map[string]int64), sshCommandCounts: make(map[string]int64), sshFamilyCounts: make(map[string]int64), sshCountryCounts: make(map[string]int64), sshClientCounts: make(map[string]int64), sshDayConnections: make(map[string]int64), sshDayAuth: make(map[string]int64), sshDayShells: make(map[string]int64), sshDayCommands: make(map[string]int64),
+		integrationPeers: make(map[string]*model.IntegrationPeer), integrationPersist: make(map[string]time.Time),
+		trustedManual: make(map[string]model.TrustedDomain), trustedProxy: make(map[string]model.TrustedDomain),
+		started: time.Now(), dataDir: dataDir, retentionDays: retentionDays,
+		retentionStop: make(chan struct{}), retentionDone: make(chan struct{}),
+	}
+}
+
 func NewWithRetention(dataDir string, retentionDays int) (*Store, error) {
 	if retentionDays < 1 {
 		retentionDays = 1
@@ -97,16 +111,7 @@ func NewWithRetention(dataDir string, retentionDays int) (*Store, error) {
 	if err := os.MkdirAll(dataDir, 0750); err != nil {
 		return nil, err
 	}
-	s := &Store{
-		sessions: make(map[string]*model.Session), fingerprints: make(map[string]string),
-		realtimeSubs: make(map[*realtimeSubscriber]struct{}), pathCounts: make(map[string]int64), dayCounts: make(map[string]int64), targetCounts: make(map[string]int64), requestHostStats: make(map[string]*rawHostStat), unknownPaths: make(map[string]*model.UnknownPath), probeStats: make(map[string]*model.ProbeStat), catchAllHosts: make(map[string]*model.CatchAllHost), integrationCounts: make(map[string]int64),
-		actors: make(map[string]*model.ActorProfile), actorTimeline: make(map[string][]model.ActorActivity), actorSessionLast: make(map[string]time.Time), actorFingerprints: make(map[string]int64), sshActorLastCommand: make(map[string]string), sshActorLastCommandAt: make(map[string]time.Time),
-		sshSessions: make(map[string]*model.SSHSession), sshUserCounts: make(map[string]int64), sshCommandCounts: make(map[string]int64), sshFamilyCounts: make(map[string]int64), sshCountryCounts: make(map[string]int64), sshClientCounts: make(map[string]int64), sshDayConnections: make(map[string]int64), sshDayAuth: make(map[string]int64), sshDayShells: make(map[string]int64), sshDayCommands: make(map[string]int64),
-		integrationPeers: make(map[string]*model.IntegrationPeer), integrationPersist: make(map[string]time.Time),
-		trustedManual: make(map[string]model.TrustedDomain), trustedProxy: make(map[string]model.TrustedDomain),
-		started: time.Now(), dataDir: dataDir, retentionDays: retentionDays,
-		retentionStop: make(chan struct{}), retentionDone: make(chan struct{}),
-	}
+	s := newStoreState(dataDir, retentionDays)
 	if err := s.loadIntegrationPeers(); err != nil {
 		return nil, err
 	}
@@ -145,6 +150,30 @@ func NewWithRetention(dataDir string, retentionDays int) (*Store, error) {
 		return nil, err
 	}
 	go s.retentionLoop()
+	return s, nil
+}
+
+// LoadReadOnlySnapshot reconstructs the retained in-memory view from the data
+// directory without opening writers, pruning files, or starting maintenance loops.
+// It is intended for short-lived local tooling that must not interfere with the
+// running ZentLoop process.
+func LoadReadOnlySnapshot(dataDir string) (*Store, error) {
+	s := newStoreState(dataDir, 30)
+	if err := s.loadIntegrationPeers(); err != nil {
+		return nil, err
+	}
+	if err := s.loadTrustedDomains(); err != nil {
+		return nil, err
+	}
+	if err := s.load(filepath.Join(dataDir, "events.jsonl")); err != nil {
+		return nil, err
+	}
+	if err := s.loadIntel(filepath.Join(dataDir, "intel-events.jsonl")); err != nil {
+		return nil, err
+	}
+	if err := s.loadSSH(filepath.Join(dataDir, "ssh-events.jsonl")); err != nil {
+		return nil, err
+	}
 	return s, nil
 }
 
@@ -382,6 +411,19 @@ func (s *Store) SessionDetail(id string, limit int) (model.SessionDetail, bool) 
 		events[i] = s.decorateEventLocked(events[i])
 	}
 	return model.SessionDetail{Session: cp, Events: events}, true
+}
+
+func (s *Store) WebSessionExport(id, version string) (model.WebSessionExport, bool) {
+	detail, ok := s.SessionDetail(id, 5000)
+	if !ok {
+		return model.WebSessionExport{}, false
+	}
+	return model.WebSessionExport{
+		ExportedAt: time.Now().UTC(),
+		Version:    version,
+		Session:    detail.Session,
+		Events:     detail.Events,
+	}, true
 }
 
 func (s *Store) GetSessionByFingerprint(fp string) (*model.Session, bool) {

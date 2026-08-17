@@ -377,10 +377,13 @@ func (w *virtualSSHWorld) executeWithInput(line, initialInput string) virtualSSH
 		}
 		res, capturedAssignment := w.executeVirtualCapturedAssignment(command)
 		if !capturedAssignment {
-			command = strings.TrimSpace(w.expandVirtualLine(command))
+			// Control-flow bodies must retain their variable/arithmetic expressions
+			// until each iteration/branch executes. Expanding the whole construct
+			// here would freeze `$i` in a while loop at its first value.
 			var handledControl bool
 			res, handledControl = w.executeVirtualControlFlow(command, stageInput)
 			if !handledControl {
+				command = strings.TrimSpace(w.expandVirtualLine(command))
 				res = w.executePipeline(command, stageInput)
 			}
 		}
@@ -416,7 +419,7 @@ func (w *virtualSSHWorld) executeWithInput(line, initialInput string) virtualSSH
 		if res.Depth > w.depth {
 			w.depth = res.Depth
 		}
-		if res.Exit || res.Interactive != "" || res.TerminalAction == "break" {
+		if res.Exit || res.Interactive != "" || res.TerminalAction == "break" || res.TerminalAction == "continue" {
 			break
 		}
 	}
@@ -1032,9 +1035,10 @@ func (w *virtualSSHWorld) executeVirtualCapturedAssignment(raw string) (virtualS
 		return virtualSSHResult{}, false
 	}
 	unquoted := unquoteVirtualAssignmentValue(value)
-	// Only intercept values that contain command substitution. Plain
-	// NAME=value command prefixes (LC_ALL=C lscpu) are handled below.
-	if !strings.Contains(unquoted, "$(") {
+	// Capture command substitutions before tokenization. Their stdout can contain
+	// spaces/newlines and must remain one assignment value. Both modern `$()` and
+	// legacy backticks still occur in real installer/recon scripts.
+	if !strings.Contains(unquoted, "$(") && !strings.Contains(unquoted, "`") {
 		return virtualSSHResult{}, false
 	}
 	expanded := w.expandVirtualLine(unquoted)
@@ -1061,10 +1065,11 @@ func (w *virtualSSHWorld) executeGrouped(inner string) virtualSSHResult {
 		if captured, ok := w.executeVirtualCapturedAssignment(strings.TrimSpace(part.command)); ok {
 			res = captured
 		} else {
-			cmd := strings.TrimSpace(w.expandVirtualLine(part.command))
-			if control, ok := w.executeVirtualControlFlow(cmd, ""); ok {
+			rawCmd := strings.TrimSpace(part.command)
+			if control, ok := w.executeVirtualControlFlow(rawCmd, ""); ok {
 				res = control
 			} else {
+				cmd := strings.TrimSpace(w.expandVirtualLine(rawCmd))
 				res = w.executePipeline(cmd)
 			}
 		}
@@ -1097,22 +1102,20 @@ func (w *virtualSSHWorld) executeOneDepth(raw, input string, aliasDepth int) vir
 	if res, ok := w.executeVirtualCapturedAssignment(raw); ok {
 		return res
 	}
-	// Temporary environment assignments may prefix a command (for example
-	// LC_ALL=C lscpu). Treat the simple assignment words as environment for this
-	// virtual command instead of mistaking the whole line for one assignment.
-	prefixWords := virtualWords(raw)
-	if len(prefixWords) > 1 {
-		i := 0
-		for ; i < len(prefixWords); i++ {
-			name, value, ok := strings.Cut(prefixWords[i], "=")
-			if !ok || !validVirtualEnvName(name) || strings.Contains(value, "$(") {
-				break
+	// NAME=value command uses a temporary environment and must preserve the
+	// command's original quoting. A previous implementation re-joined tokenized
+	// words, which could visibly corrupt awk/sed programs and also leaked the
+	// temporary assignment into later commands.
+	if rest, assigns := virtualCommandEnvPrefix(raw); len(assigns) > 0 {
+		if rest == "" {
+			for _, a := range assigns {
+				w.env[a.name] = w.expandVirtualLine(a.value)
 			}
-			w.env[name] = value
+			return virtualSSHResult{Family: "shell", Depth: maxInt(2, w.depth), Risk: 76, Persona: "interactive-shell", Message: "environment assignment"}
 		}
-		if i > 0 && i < len(prefixWords) {
-			raw = strings.Join(prefixWords[i:], " ")
-		}
+		restore := w.applyTemporaryEnv(assigns)
+		defer restore()
+		raw = rest
 	}
 	if inner, ok := unwrapVirtualGroup(raw); ok {
 		return w.executeGrouped(inner)
@@ -1173,6 +1176,10 @@ func (w *virtualSSHWorld) executeOneDepth(raw, input string, aliasDepth int) vir
 		r := base("execution", 4, 88, "shell-control-flow", "simulated shell loop break")
 		r.TerminalAction = "break"
 		return r
+	case "continue":
+		r := base("execution", 4, 88, "shell-control-flow", "simulated shell loop continue")
+		r.TerminalAction = "continue"
+		return r
 	case "test", "[":
 		testArgs := args
 		if cmd == "[" && len(testArgs) > 0 && testArgs[len(testArgs)-1] == "]" {
@@ -1213,7 +1220,7 @@ func (w *virtualSSHWorld) executeOneDepth(raw, input string, aliasDepth int) vir
 		r := base("recon", 3, 82, "system-recon", "hostname discovery")
 		switch {
 		case containsArg(args, "-I"):
-			r.Output = "10.10.30.21 "
+			r.Output = w.currentHost().IP + " "
 		case containsArg(args, "-f"), containsArg(args, "--fqdn"):
 			r.Output = w.hostname + ".prod.internal"
 		default:
@@ -1333,21 +1340,40 @@ func (w *virtualSSHWorld) executeOneDepth(raw, input string, aliasDepth int) vir
 		return r
 	case "df":
 		r := base("recon", 3, 84, "system-recon", "filesystem capacity discovery")
-		snap := w.system.snapshot()
-		r.Output = fmt.Sprintf("Filesystem      Size  Used Avail Use%% Mounted on\n/dev/vda2       %.0fG  %.0fG   %.0fG  %d%% /\n/dev/vdb1       %.0fG  %.0fG  %.0fG  %d%% /srv/archive", snap.RootTotalGiB, snap.RootUsedGiB, snap.RootAvailGiB, snap.RootUsePct, snap.ArchiveTotalGiB, snap.ArchiveUsedGiB, snap.ArchiveAvailGiB, snap.ArchiveUsePct)
+		r.Output = w.virtualDFOutput(args)
 		return r
 	case "free":
 		r := base("recon", 3, 83, "system-recon", "memory discovery")
-		r.Output = w.virtualFreeOutput()
+		r.Output = w.virtualFreeOutput(args)
 		return r
 	case "mount":
 		r := base("recon", 4, 87, "system-recon", "mount discovery")
-		r.Output = "/dev/vda2 on / type ext4 (rw,relatime)\n/dev/vdb1 on /srv/archive type ext4 (rw,nosuid,nodev,relatime)"
+		r.Output = "/dev/vda2 on / type ext4 (rw,relatime,errors=remount-ro)\nproc on /proc type proc (rw,nosuid,nodev,noexec,relatime)\nsysfs on /sys type sysfs (rw,nosuid,nodev,noexec,relatime)\n/dev/vdb1 on /srv/archive type ext4 (rw,nosuid,nodev,relatime)"
 		return r
-	case "env", "printenv", "set":
+	case "env":
+		if len(args) > 0 {
+			if r, ok := w.executeVirtualEnv(args, input); ok {
+				return r
+			}
+		}
+		r := base("credentials", 4, 90, "credential-hunter", "environment discovery")
+		r.Output = w.virtualEnvOutput(nil)
+		return r
+	case "printenv":
 		r := base("credentials", 4, 90, "credential-hunter", "environment discovery")
 		r.Output = w.virtualEnvOutput(args)
+		if len(args) == 1 && r.Output == "" {
+			r.Status = 1
+		}
 		return r
+	case "set":
+		r := base("shell", 2, 74, "interactive-shell", "shell option or variable inspection")
+		if len(args) == 0 {
+			r.Output = w.virtualEnvOutput(nil)
+		}
+		return r
+	case "read":
+		return w.virtualReadBuiltin(args, input)
 	case "history":
 		r := base("credentials", 4, 90, "credential-hunter", "shell history discovery")
 		if containsArg(args, "-c") {
@@ -1391,7 +1417,7 @@ func (w *virtualSSHWorld) executeOneDepth(raw, input string, aliasDepth int) vir
 		return r
 	case "ss", "netstat":
 		r := base("network", 4, 91, "network-recon", "listening service discovery")
-		r.Output = "Netid State  Local Address:Port   Peer Address:Port Process\ntcp   LISTEN 0      128      0.0.0.0:22      0.0.0.0:*     users:((\"sshd\",pid=612,fd=3))\ntcp   LISTEN 0      4096     0.0.0.0:8081    0.0.0.0:*     users:((\"web\",pid=844,fd=7))\ntcp   LISTEN 0      128      127.0.0.1:5432  0.0.0.0:*"
+		r.Output = "Netid State  Local Address:Port   Peer Address:Port Process\ntcp   LISTEN 0      128      0.0.0.0:22      0.0.0.0:*     users:((\"sshd\",pid=612,fd=3))\ntcp   LISTEN 0      4096     0.0.0.0:8081    0.0.0.0:*     users:((\"web\",pid=844,fd=7))\ntcp   LISTEN 0      128      127.0.0.1:5432  0.0.0.0:*     users:((\"docker-proxy\",pid=1102,fd=4))"
 		return r
 	case "last", "w", "who":
 		r := base("recon", 4, 86, "system-recon", "logged-in user discovery")
@@ -1626,8 +1652,26 @@ func (w *virtualSSHWorld) executeOneDepth(raw, input string, aliasDepth int) vir
 		return r
 	case "echo", "printf":
 		r := base("shell", 2, 70, "interactive-shell", "shell output")
-		r.Output = virtualEchoOutput(cmd, args)
+		if cmd == "printf" {
+			if len(args) == 0 {
+				r.Output, r.Status = "printf: usage: printf [-v var] format [arguments]", 2
+				return r
+			}
+			r.Output = virtualFormatPrintf(args[0], args[1:])
+		} else {
+			r.Output = virtualEchoOutput(cmd, args)
+		}
 		return r
+	case "seq":
+		r := base("shell", 2, 74, "interactive-shell", "numeric sequence generation")
+		r.Output, r.Status = virtualSeq(args)
+		return r
+	case "expr":
+		r := base("shell", 2, 74, "interactive-shell", "shell expression evaluation")
+		r.Output, r.Status = virtualExpr(args)
+		return r
+	case "getconf":
+		return w.virtualGetconf(args)
 	case "shutdown", "reboot", "poweroff", "halt":
 		r := base("system", 6, 96, "system-control", "system power control requested")
 		if w.user != "root" {

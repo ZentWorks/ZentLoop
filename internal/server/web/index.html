@@ -2,20 +2,28 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#0a0d10">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="ZentLoop">
   <title>ZentLoop Admin</title>
   <link rel="icon" type="image/png" href="/favicon.png">
+  <link rel="apple-touch-icon" href="/zentloop-logo.png">
+  <link rel="manifest" href="/manifest.webmanifest">
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
   <header class="topbar">
-    <div class="brand"><img class="brand-logo" src="/zentloop-logo.png" alt="ZentLoop"><span id="brand">ZentLoop</span><small>CONTROL</small></div>
+    <a class="brand" id="brandHome" href="/" aria-label="Open ZentLoop dashboard"><img class="brand-logo" src="/zentloop-logo.png" alt=""><span id="brand">ZentLoop</span><small>CONTROL</small></a>
     <div class="target-control"><label for="dateFilter">DATE</label><select id="dateFilter"><option value="live">LIVE</option><option value="all">All dates</option></select></div>
     <div class="target-control"><label for="targetFilter">TARGET</label><select id="targetFilter"><option value="">All targets</option></select></div>
     <div class="topbar-tools">
       <button id="toggleLiveView" class="view-switch" type="button" aria-label="Open ZentLoop live view" title="Live View"><span class="view-switch-dot"></span><span id="toggleLiveViewLabel">LIVE</span></button>
       <button id="openSettings" class="settings-button" type="button" aria-label="ZentLoop settings" title="Settings">⚙</button>
       <button id="openHelp" class="settings-button help-button" type="button" aria-label="ZentLoop help" title="Quick help">?</button>
+      <button id="logoutAdmin" class="settings-button logout-button" type="button" aria-label="Sign out of ZentLoop" title="Sign out"><span aria-hidden="true">↪</span><small>LOGOUT</small></button>
     </div>
     <div class="live" id="viewStatus"><span class="dot"></span> <span id="viewMode">LIVE</span> <span id="clock">--:--:--</span></div>
   </header>
@@ -43,8 +51,8 @@
         </div>
       </article>
       <article class="panel">
-        <div class="panel-title"><h2>Request activity</h2><span>recent events</span></div>
-        <svg id="activityChart" viewBox="0 0 600 150" preserveAspectRatio="none" aria-label="Request activity chart"></svg>
+        <div class="panel-title"><h2>Web / SSH activity</h2><span class="activity-legend" aria-label="Activity chart legend"><i class="web"></i>WEB <i class="ssh"></i>SSH</span></div>
+        <svg id="activityChart" viewBox="0 0 600 150" preserveAspectRatio="none" aria-label="Web and SSH activity chart"></svg>
         <div class="chart-footer"><span>older</span><span>now</span></div>
       </article>
     </section>
@@ -107,7 +115,7 @@
       <div class="section-heading"><div><span class="hex">⬡</span><h2>Self Protection</h2><small>ZentLoop health</small></div><span>limits should hurt the visitor, not the trap</span></div>
       <section class="hero-grid health-metrics">
         <article class="metric warn"><span>HTTP SHED</span><strong id="healthHTTPRejected">0</strong><small>concurrency rejects</small></article>
-        <article class="metric warn"><span>SSH SHED</span><strong id="healthSSHRejected">0</strong><small>global + per-IP rejects</small></article>
+        <article class="metric warn"><span>SSH SHED</span><strong id="healthSSHRejected">0</strong><small id="healthSSHNote">global + per-IP rejects</small></article>
         <article class="metric"><span>GUARD HITS</span><strong id="healthGuardHits">0</strong><small>budget / recursion / VFS</small></article>
         <article class="metric ok"><span>EVENT STORAGE</span><strong id="healthStorage">0 B</strong><small>HTTP + SSH + intel</small></article>
         <article class="metric"><span>IN-MEMORY EVENTS</span><strong id="healthMemoryEvents">0</strong><small>bounded rings</small></article>
@@ -260,18 +268,18 @@
       </div>
 
       <section class="live-summary-grid">
-        <article class="live-summary-card ssh"><span>SSH LIVE</span><strong id="liveSSHCount">0</strong><small id="liveSSHSummaryNote">0 active · 0 recently left</small></article>
         <article class="live-summary-card web"><span>WEB LIVE</span><strong id="liveWebCount">0</strong><small id="liveWebSummaryNote">0 active · 0 recently left</small></article>
+        <article class="live-summary-card ssh"><span>SSH LIVE</span><strong id="liveSSHCount">0</strong><small id="liveSSHSummaryNote">0 active · 0 recently left</small></article>
       </section>
 
-      <section class="panel live-session-panel">
-        <div class="panel-title"><div><h2>SSH Live Sessions</h2><span>virtual SSH trap · select for transcript</span></div><span id="liveSSHSessionCount">0 active</span></div>
-        <div id="liveSSHSessions" class="live-session-grid"></div>
-      </section>
-
-      <section class="panel live-session-panel">
+      <section class="panel live-session-panel web">
         <div class="panel-title"><div><h2>Web Live Sessions</h2><span>HTTP activity · select for request timeline</span></div><span id="liveWebSessionCount">0 active</span></div>
         <div id="liveWebSessions" class="live-session-grid"></div>
+      </section>
+
+      <section class="panel live-session-panel ssh">
+        <div class="panel-title"><div><h2>SSH Live Sessions</h2><span>virtual SSH trap · repeated auth-only retries are compacted</span></div><span id="liveSSHSessionCount">0 active</span></div>
+        <div id="liveSSHSessions" class="live-session-grid"></div>
       </section>
 
       <section class="panel live-feed-panel">
@@ -290,7 +298,34 @@
       </section>
     </section>
 
-    <footer><span id="version">ZentLoop 0.2.16</span><span>Proxy: <b id="proxyMode">direct</b> · GeoIP: <b id="geoStatus">local</b> · Official bots: <b id="botStatus">waiting</b> · <a href="https://db-ip.com" target="_blank" rel="noopener noreferrer">IP Geolocation by DB-IP</a> · no telemetry</span></footer>
+    <section id="ipView" class="ip-view" hidden aria-label="IP intelligence view">
+      <div class="ip-view-head">
+        <div><small>ACTOR / SOURCE INTELLIGENCE</small><h1 id="ipViewTitle">IP Intelligence</h1><p id="ipViewSubtitle">Correlated Web + SSH observations for one source.</p></div>
+        <div class="ip-view-actions"><button id="ipViewBack" type="button">← Dashboard</button><a id="ipExportJSON" class="export-link export-json" href="#" aria-label="Export IP intelligence JSON" title="Export JSON"><svg class="export-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1v9m0 0 3-3m-3 3L5 7M3 11.5v2h10v-2"/></svg><span>JSON</span></a></div>
+      </div>
+      <section class="hero-grid ip-metrics">
+        <article class="metric danger"><span>RISK</span><strong id="ipRisk">0</strong><small id="ipClassification">—</small></article>
+        <article class="metric"><span>SSH CONNECTIONS</span><strong id="ipSSHConnections">0</strong><small id="ipSSHAuth">0 accepted · 0 rejected</small></article>
+        <article class="metric warn"><span>SSH USERS</span><strong id="ipSSHUsers">0</strong><small id="ipSSHRate">peak 0 auth/min</small></article>
+        <article class="metric warn"><span>SSH CONCURRENCY</span><strong id="ipSSHConcurrent">0</strong><small id="ipSSHRevisit">revisit —</small></article>
+        <article class="metric"><span>WEB REQUESTS</span><strong id="ipHTTPRequests">0</strong><small id="ipHTTPShape">0 paths · 0 targets</small></article>
+        <article class="metric"><span>ENGAGEMENT</span><strong id="ipEngagement">0s</strong><small id="ipSeen">—</small></article>
+        <article class="metric danger"><span>PAYLOAD</span><strong id="ipPayloads">0</strong><small>passive signals</small></article>
+        <article class="metric ok"><span>CANARY</span><strong id="ipCanaries">0</strong><small>decoy reuse</small></article>
+      </section>
+      <section class="grid two ip-upper">
+        <article class="panel"><div class="panel-title"><h2>Web / SSH timeline</h2><span class="activity-legend"><i class="web"></i>WEB <i class="ssh"></i>SSH</span></div><svg id="ipTimelineChart" viewBox="0 0 600 170" preserveAspectRatio="none" aria-label="IP Web and SSH activity timeline"></svg><div class="chart-footer"><span id="ipTimelineFirst">first</span><span id="ipTimelineLast">last</span></div></article>
+        <article class="panel"><div class="panel-title"><h2>System assessment</h2><span>why ZentLoop scored this source</span></div><div id="ipReasons" class="ip-reasons"></div></article>
+      </section>
+      <section class="grid two ip-upper">
+        <article class="panel"><div class="panel-title"><h2>SSH profile</h2><span>users · clients · commands</span></div><div class="ip-top-grid"><div><h4>Usernames</h4><div id="ipTopUsers" class="ip-top-list"></div></div><div><h4>SSH clients</h4><div id="ipTopClients" class="ip-top-list"></div></div><div><h4>Commands</h4><div id="ipTopCommands" class="ip-top-list"></div></div><div><h4>Families</h4><div id="ipTopFamilies" class="ip-top-list"></div></div></div></article>
+        <article class="panel"><div class="panel-title"><h2>Web profile</h2><span>paths · targets</span></div><div class="ip-top-grid two"><div><h4>Paths</h4><div id="ipTopPaths" class="ip-top-list"></div></div><div><h4>Targets</h4><div id="ipTopTargets" class="ip-top-list"></div></div></div></article>
+      </section>
+      <section class="panel"><div class="panel-title"><h2>Possible campaign correlations</h2><span>heuristic only · never an identity claim</span></div><div class="table-wrap"><table><thead><tr><th>IP</th><th>CC</th><th>CONFIDENCE</th><th>RISK</th><th>LAST</th><th>WHY</th></tr></thead><tbody id="ipCampaignBody"></tbody></table></div></section>
+      <section class="panel"><div class="panel-title"><h2>Observed timeline</h2><span id="ipRawCounts">retained events</span></div><div id="ipObservedTimeline" class="ip-observed-timeline"></div></section>
+    </section>
+
+    <footer><span id="version">ZentLoop 0.2.20</span><span>Proxy: <b id="proxyMode">direct</b> · GeoIP: <b id="geoStatus">local</b> · Official bots: <b id="botStatus">waiting</b> · <a href="https://db-ip.com" target="_blank" rel="noopener noreferrer">IP Geolocation by DB-IP</a> · no telemetry</span></footer>
   </main>
 
   <div id="settingsBackdrop" class="modal-backdrop settings-backdrop" aria-hidden="true"></div>
@@ -314,7 +349,7 @@ example.net"></textarea>
     <div class="settings-modal-body help-modal-body">
       <div class="help-block"><h3>Trusted Domains</h3><p>Domains that belong to your own infrastructure. Adding a root domain also covers its subdomains. Trusted domains appear as normal targets and are included in the regular target statistics.</p></div>
       <div class="help-block"><h3>Date &amp; Target filters</h3><p>LIVE is the rolling last 24 hours and keeps receiving new Web and SSH events. Selecting a day or All dates switches to a historical view: live streams are paused and lazy loading stays inside the selected time window. The Target filter can be combined with any time view and groups trusted subdomains under their configured root domain.</p></div>
-      <div class="help-block"><h3>Live View</h3><p>The LIVE button opens a compact realtime page with active SSH sessions first, active Web sessions second and the SSH activity feed below. Selecting any session opens the same detailed live drawer used by the dashboard. The view uses the same bounded Admin WebSocket as the dashboard, keeps disconnected/quiet sessions visible for up to 60 seconds as <code>LEFT Ns</code>, and updates countdown text without rebuilding the row under your pointer. The SSH feed automatically uses three, two or one columns depending on screen width.</p></div>
+      <div class="help-block"><h3>Live View</h3><p>The LIVE button opens a compact realtime page with active Web sessions first, active SSH sessions second and the SSH activity feed below. Selecting any session opens the same detailed live drawer used by the dashboard. The view uses the same bounded Admin WebSocket as the dashboard, keeps disconnected/quiet sessions visible for up to 60 seconds as <code>LEFT Ns</code>, and updates countdown text without rebuilding the row under your pointer. The SSH feed automatically uses three, two or one columns depending on screen width.</p></div>
       <div class="help-block"><h3>Untrusted hosts</h3><p>Hosts shown in parentheses were requested by a visitor but are not trusted as one of your own domains. They are evaluated separately so they do not distort your normal target statistics. If you trust one later, its retained history is reclassified automatically.</p></div>
       <div class="help-block"><h3>Host sweeps</h3><p>ZentLoop can recognize when one visitor rapidly tries many different host names. These attempts stay in the untrusted-host view and may be guided into a generic Web Trap instead of being treated as real targets.</p></div>
       <div class="help-block"><h3>Integration / Proxy</h3><p>When ZentLoop is used behind a compatible proxy or upstream integration, the original public target and visitor information can be preserved. Verified, explicit proxy routes may also provide trusted targets automatically.</p></div>
@@ -322,6 +357,7 @@ example.net"></textarea>
       <div class="help-block"><h3>SSH Sessions</h3><p>Shows SSH login attempts, commands and movement through the virtual SSH environment and its deception paths.</p></div>
       <div class="help-block"><h3>Self Protection</h3><p>These counters show when ZentLoop protects itself instead of serving unlimited work, for example by shedding excess live viewers, limiting SSH abuse or warning when retained storage grows unusually high.</p></div>
       <div class="help-block"><h3>Payload &amp; Canary Intelligence</h3><p>This is passive observation only. ZentLoop extracts sanitized remote URLs, hosts, filenames and decoy-token reuse from traffic it already received; it does not fetch or execute the indicator. Repeated observations are grouped in the dashboard by indicator while the underlying raw intelligence events remain retained.</p></div>
+      <div class="help-block"><h3>IP Intelligence</h3><p>Click an observed source IP to open a dedicated cross-protocol view with Web/SSH history, authentication cadence, usernames, clients, commands, paths, payload/canary signals and heuristic campaign correlations. The JSON export contains the retained source profile, sessions, events and passive intelligence in one document. Campaign confidence is correlation evidence only and is never an identity claim.</p></div>
       <div class="help-grid">
         <div><b>Risk</b><span>How suspicious or aggressive the observed session currently appears.</span></div>
         <div><b>Actor</b><span>ZentLoop's behavioral classification of the visitor, such as automated or human-like activity.</span></div>
@@ -335,7 +371,7 @@ example.net"></textarea>
   </section>
 
   <aside id="drawer" class="drawer" aria-hidden="true">
-    <div class="drawer-head"><div><small>WEB SESSION</small><h3 id="dId">—</h3></div><button id="closeDrawer">×</button></div>
+    <div class="drawer-head"><div><small>WEB SESSION</small><h3 id="dId">—</h3></div><div class="drawer-actions"><a id="webExportJSON" class="export-link export-json" href="#" aria-label="Export Web session JSON" title="Export JSON"><svg class="export-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1v9m0 0 3-3m-3 3L5 7M3 11.5v2h10v-2"/></svg><span>JSON</span></a><button id="closeDrawer">×</button></div></div>
     <div class="drawer-body">
       <div class="detail-grid">
         <div><span>IP</span><b id="dIp">—</b></div><div><span>Network via</span><b id="dProxy">—</b></div>
@@ -363,7 +399,7 @@ example.net"></textarea>
   </aside>
 
   <aside id="sshDrawer" class="drawer" aria-hidden="true">
-    <div class="drawer-head ssh-drawer-head"><div><small>SSH SESSION <span id="sdLiveState" class="ssh-live-state ended">ENDED</span></small><h3 id="sdId">—</h3></div><div class="drawer-actions"><a id="sshExportJSON" class="export-link" href="#">JSON</a><a id="sshExportTXT" class="export-link" href="#">TXT</a><button id="closeSSHDrawer">×</button></div></div>
+    <div class="drawer-head ssh-drawer-head"><div><small>SSH SESSION <span id="sdLiveState" class="ssh-live-state ended">ENDED</span></small><h3 id="sdId">—</h3></div><div class="drawer-actions"><a id="sshExportJSON" class="export-link export-json" href="#" aria-label="Export SSH session JSON" title="Export JSON"><svg class="export-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1v9m0 0 3-3m-3 3L5 7M3 11.5v2h10v-2"/></svg><span>JSON</span></a><a id="sshExportTXT" class="export-link" href="#">TXT</a><button id="closeSSHDrawer">×</button></div></div>
     <div class="drawer-body">
       <div class="detail-grid">
         <div><span>IP</span><b id="sdIp">—</b></div><div><span>Country</span><b id="sdCountry">—</b></div>

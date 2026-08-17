@@ -293,7 +293,7 @@ func (w *virtualSSHWorld) seedMinerCleanupLures() {
 
 func virtualStaticPID(pid int) bool {
 	switch pid {
-	case 1, 581, 612, 844, 1021, 1842:
+	case 1, 581, 612, 844, 901, 932, 1021, 1102, 1842:
 		return true
 	default:
 		return false
@@ -320,8 +320,14 @@ func (w *virtualSSHWorld) virtualProcExe(pid int) (string, bool) {
 		return "/usr/sbin/sshd", true
 	case 844:
 		return "/opt/app/current/web", true
+	case 901:
+		return "/usr/lib/postgresql/16/bin/postgres", true
+	case 932:
+		return "/usr/bin/redis-server", true
 	case 1021:
 		return "/usr/bin/dockerd", true
+	case 1102:
+		return "/usr/bin/docker-proxy", true
 	case 1842:
 		return "/usr/local/bin/backup-agent", true
 	default:

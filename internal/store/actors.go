@@ -208,6 +208,9 @@ func (s *Store) applyActorSSHEventLocked(e model.SSHEvent) {
 				concurrent++
 			}
 		}
+		if concurrent > a.SSHPeakConcurrent {
+			a.SSHPeakConcurrent = concurrent
+		}
 		if concurrent >= 3 {
 			if addFingerprint(a, "ssh:parallel-session-burst") {
 				s.actorFingerprints["ssh:parallel-session-burst"]++
@@ -230,6 +233,57 @@ func (s *Store) applyActorSSHEventLocked(e model.SSHEvent) {
 			}
 		}
 	}
+	if e.Type == "auth" {
+		if e.AuthAccepted {
+			a.SSHAuthAccepted++
+		} else {
+			a.SSHAuthRejected++
+		}
+		user := strings.TrimSpace(e.Username)
+		if user != "" {
+			users := s.actorSSHUsers[a.ID]
+			if users == nil {
+				users = make(map[string]struct{})
+				s.actorSSHUsers[a.ID] = users
+			}
+			users[user] = struct{}{}
+			a.SSHUniqueUsers = len(users)
+		}
+
+		windowStart := e.At.Add(-time.Minute)
+		attempts := 0
+		sprayUsers := map[string]struct{}{}
+		sprayRejected := 0
+		sprayStart := e.At.Add(-2 * time.Minute)
+		for i := len(s.sshEvents) - 1; i >= 0; i-- {
+			row := s.sshEvents[i]
+			if row.At.Before(sprayStart) {
+				break
+			}
+			if row.IP != e.IP || row.Type != "auth" {
+				continue
+			}
+			if !row.At.Before(windowStart) {
+				attempts++
+			}
+			if !row.AuthAccepted {
+				sprayRejected++
+				if u := strings.TrimSpace(row.Username); u != "" {
+					sprayUsers[u] = struct{}{}
+				}
+			}
+		}
+		if attempts > a.SSHPeakAttemptsPerMin {
+			a.SSHPeakAttemptsPerMin = attempts
+		}
+		if len(sprayUsers) >= 5 && sprayRejected >= 6 {
+			a.Actor = model.ActorAutomated
+			if addFingerprint(a, "ssh:credential-spray") {
+				s.actorFingerprints["ssh:credential-spray"]++
+			}
+		}
+	}
+
 	if e.Type == "command" || e.Type == "exec" {
 		a.SSHCommands++
 		if e.Type == "exec" {
@@ -447,6 +501,8 @@ func (s *Store) RecordHealth(kind string) {
 		s.health.SSHRejectedGlobal++
 	case "ssh_rejected_per_ip":
 		s.health.SSHRejectedPerIP++
+	case "ssh_tarpit":
+		s.health.SSHTarpitApplied++
 	case "ssh_command_budget":
 		s.health.SSHCommandBudgetHits++
 	case "ssh_virtual_storage":

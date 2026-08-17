@@ -76,7 +76,7 @@ func (w *virtualSSHWorld) executeExtraCommand(cmd string, args []string, raw, in
 		return w.executeOne(inner, input), true
 	case "lspci":
 		r := base("recon", 3, 82, "system-recon", "PCI device discovery")
-		r.Output = "00:00.0 Host bridge: Intel Corporation 440FX - 82441FX PMC [Natoma]\n00:01.0 ISA bridge: Intel Corporation 82371SB PIIX3 ISA [Natoma/Triton II]\n00:03.0 Ethernet controller: Red Hat, Inc. Virtio network device\n00:04.0 VGA compatible controller: Red Hat, Inc. Virtio GPU\n00:05.0 3D controller: NVIDIA Corporation TU104GL [" + strings.TrimPrefix(virtualGPUName, "NVIDIA ") + "] (rev a1)"
+		r.Output = "00:00.0 Host bridge: Intel Corporation 82Q35 Express DRAM Controller\n00:01.0 PCI bridge: Red Hat, Inc. QEMU PCIe Root port\n00:03.0 Ethernet controller: Red Hat, Inc. Virtio network device\n00:04.0 VGA compatible controller: Red Hat, Inc. Virtio GPU\n00:05.0 3D controller: NVIDIA Corporation TU104GL [" + strings.TrimPrefix(virtualGPUName, "NVIDIA ") + "] (rev a1)\n00:1f.0 ISA bridge: Intel Corporation 82801IB (ICH9) LPC Interface Controller"
 		return r, true
 	case "which", "whereis", "type":
 		r := base("recon", 3, 82, "tool-discovery", "binary/tool discovery")
@@ -295,11 +295,11 @@ func (w *virtualSSHWorld) executeExtraCommand(cmd string, args []string, raw, in
 		return r, true
 	case "lscpu":
 		r := base("recon", 3, 84, "system-recon", "CPU discovery")
-		r.Output = fmt.Sprintf("Architecture:                         %s\nCPU(s):                               %d\nVendor ID:                            GenuineIntel\nModel name:                           %s\nVirtualization:                       VT-x\nHypervisor vendor:                    KVM", virtualMachineArch, virtualCPUCount, virtualCPUModel)
+		r.Output = fmt.Sprintf("Architecture:                         %s\nCPU op-mode(s):                       32-bit, 64-bit\nAddress sizes:                        46 bits physical, 48 bits virtual\nByte Order:                           Little Endian\nCPU(s):                               %d\nOn-line CPU(s) list:                  0-%d\nVendor ID:                            GenuineIntel\nModel name:                           %s\nThread(s) per core:                   1\nCore(s) per socket:                   %d\nSocket(s):                            1\nVirtualization:                       VT-x\nHypervisor vendor:                    KVM\nVirtualization type:                  full", virtualMachineArch, virtualCPUCount, virtualCPUCount-1, virtualCPUModel, virtualCPUCount)
 		return r, true
 	case "lsblk":
 		r := base("recon", 4, 86, "system-recon", "block device discovery")
-		r.Output = "NAME   MAJ:MIN RM   SIZE RO TYPE MOUNTPOINTS\nvda    252:0    0   100G  0 disk\n├─vda1 252:1    0     1G  0 part /boot\n└─vda2 252:2    0    99G  0 part /\nvdb    252:16   0   500G  0 disk\n└─vdb1 252:17   0   500G  0 part /srv/archive"
+		r.Output = "NAME   MAJ:MIN RM  SIZE RO TYPE MOUNTPOINTS\nvda    252:0    0  100G  0 disk\n├─vda1 252:1    0    1G  0 part /boot\n└─vda2 252:2    0   96G  0 part /\nvdb    252:16   0  480G  0 disk\n└─vdb1 252:17   0  480G  0 part /srv/archive"
 		return r, true
 	case "blkid":
 		r := base("recon", 4, 86, "system-recon", "block device discovery")
@@ -307,15 +307,15 @@ func (w *virtualSSHWorld) executeExtraCommand(cmd string, args []string, raw, in
 		return r, true
 	case "lsof":
 		r := base("network", 5, 92, "network-recon", "open file/socket discovery")
-		r.Output = "COMMAND   PID     USER   FD   TYPE DEVICE SIZE/OFF NODE NAME\nsshd      612     root    3u  IPv4  23141      0t0  TCP *:ssh (LISTEN)\nweb       844  svc-web    7u  IPv4  24421      0t0  TCP *:tproxy (LISTEN)\npostgres  901 postgres    5u  IPv4  24912      0t0  TCP localhost:postgresql (LISTEN)"
+		r.Output = "COMMAND    PID     USER   FD   TYPE DEVICE SIZE/OFF NODE NAME\nsshd       612     root    3u  IPv4  23141      0t0  TCP *:ssh (LISTEN)\nweb        844  svc-web    7u  IPv4  24421      0t0  TCP *:8081 (LISTEN)\ndocker-pr 1102     root    4u  IPv4  24912      0t0  TCP localhost:postgresql (LISTEN)"
 		return r, true
 	case "dmesg":
 		r := base("recon", 4, 87, "system-recon", "kernel log discovery")
-		r.Output = "[    0.000000] Linux version " + virtualKernelRelease + "\n[    0.881214] virtio_net virtio0 eth0: renamed from ens3\n[    1.201044] EXT4-fs (vda2): mounted filesystem with ordered data mode\n[    4.321881] systemd[1]: Reached target multi-user.target"
+		r.Output = "[    0.000000] Linux version " + virtualKernelRelease + "\n[    0.881214] virtio_net virtio0 eth0: renamed from ens3\n[    1.201044] EXT4-fs (vda2): mounted filesystem with ordered data mode\n[    3.612871] nvidia: loading out-of-tree module taints kernel.\n[    3.944210] NVRM: loading NVIDIA UNIX x86_64 Kernel Module  550.120\n[    4.321881] systemd[1]: Reached target multi-user.target"
 		return r, true
 	case "lsmod":
 		r := base("recon", 4, 85, "system-recon", "kernel module discovery")
-		r.Output = "Module                  Size  Used by\nnf_conntrack          196608  2\nbr_netfilter           32768  0\noverlay                212992  3\nvirtio_net              73728  0"
+		r.Output = "Module                  Size  Used by\nnvidia_uvm           1953792  0\nnvidia_drm            122880  0\nnvidia_modeset       1605632  1 nvidia_drm\nnvidia              61054976  2 nvidia_uvm,nvidia_modeset\nnf_conntrack          196608  2\nbr_netfilter           32768  0\noverlay                212992  3\nvirtio_net              73728  0"
 		return r, true
 	case "sysctl":
 		r := base("recon", 4, 88, "system-recon", "kernel parameter discovery")
@@ -1337,37 +1337,97 @@ func (w *virtualSSHWorld) fakeApt(cmd string, args []string) virtualSSHResult {
 }
 
 func (w *virtualSSHWorld) expandVirtualLine(line string) string {
+	line = w.expandVirtualArithmetic(line)
+	line = w.expandVirtualBackticks(line)
 	line = w.expandVirtualCommandSubstitutions(line)
 
 	var out strings.Builder
+	var quote byte
 	for i := 0; i < len(line); {
-		if line[i] != '$' {
-			out.WriteByte(line[i])
-			i++
-			continue
-		}
-		if i+1 < len(line) && line[i+1] == '?' {
-			out.WriteString(strconv.Itoa(w.lastStatus))
+		c := line[i]
+		if c == '\\' && i+1 < len(line) {
+			// Preserve the escape for the later word splitter. Most importantly an
+			// escaped '$' must not become a virtual variable expansion here.
+			out.WriteByte(c)
+			out.WriteByte(line[i+1])
 			i += 2
 			continue
 		}
-		if i+1 < len(line) && line[i+1] == '{' {
-			if end := strings.IndexByte(line[i+2:], '}'); end >= 0 {
-				end += i + 2
-				name := line[i+2 : end]
-				if value, ok := w.env[name]; ok {
-					out.WriteString(value)
-				} else {
-					out.WriteString(line[i : end+1])
-				}
-				i = end + 1
+		if quote == '\'' {
+			out.WriteByte(c)
+			if c == '\'' {
+				quote = 0
+			}
+			i++
+			continue
+		}
+		if c == '\'' {
+			quote = '\''
+			out.WriteByte(c)
+			i++
+			continue
+		}
+		if c == '"' {
+			if quote == '"' {
+				quote = 0
+			} else if quote == 0 {
+				quote = '"'
+			}
+			out.WriteByte(c)
+			i++
+			continue
+		}
+		if c != '$' {
+			out.WriteByte(c)
+			i++
+			continue
+		}
+
+		if i+1 >= len(line) {
+			out.WriteByte('$')
+			i++
+			continue
+		}
+		next := line[i+1]
+		switch next {
+		case '?':
+			out.WriteString(strconv.Itoa(w.lastStatus))
+			i += 2
+			continue
+		case '$':
+			out.WriteString(strconv.Itoa(w.virtualShellPID()))
+			i += 2
+			continue
+		case '#':
+			out.WriteByte('0')
+			i += 2
+			continue
+		case '-':
+			out.WriteString("hBc")
+			i += 2
+			continue
+		case '0':
+			out.WriteString("bash")
+			i += 2
+			continue
+		case '{':
+			end := strings.IndexByte(line[i+2:], '}')
+			if end < 0 {
+				out.WriteByte('$')
+				i++
 				continue
 			}
+			end += i + 2
+			expr := line[i+2 : end]
+			out.WriteString(w.virtualParameterExpansion(expr))
+			i = end + 1
+			continue
 		}
+
 		j := i + 1
 		for j < len(line) {
-			c := line[j]
-			if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' {
+			ch := line[j]
+			if (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_' {
 				j++
 				continue
 			}
@@ -1379,14 +1439,70 @@ func (w *virtualSSHWorld) expandVirtualLine(line string) string {
 			continue
 		}
 		name := line[i+1 : j]
-		if value, ok := w.env[name]; ok {
-			out.WriteString(value)
-		} else {
-			out.WriteString(line[i:j])
-		}
+		out.WriteString(w.virtualVariable(name))
 		i = j
 	}
 	return out.String()
+}
+
+func (w *virtualSSHWorld) virtualShellPID() int {
+	return 24000 + int(stableSSHHash(w.peerKey+"|shell")%900)
+}
+
+func (w *virtualSSHWorld) virtualVariable(name string) string {
+	switch name {
+	case "UID", "EUID":
+		return strconv.Itoa(virtualUserID(w.user))
+	case "PPID":
+		return strconv.Itoa(w.virtualShellPID() - 1)
+	}
+	return w.env[name]
+}
+
+func (w *virtualSSHWorld) virtualParameterExpansion(expr string) string {
+	if strings.HasPrefix(expr, "#") && validVirtualEnvName(strings.TrimPrefix(expr, "#")) {
+		return strconv.Itoa(len(w.virtualVariable(strings.TrimPrefix(expr, "#"))))
+	}
+	for _, op := range []string{":-", ":+", "-", "+"} {
+		if pos := strings.Index(expr, op); pos > 0 {
+			name := expr[:pos]
+			if !validVirtualEnvName(name) {
+				return ""
+			}
+			value, exists := w.env[name]
+			if name == "UID" || name == "EUID" || name == "PPID" {
+				value, exists = w.virtualVariable(name), true
+			}
+			word := expr[pos+len(op):]
+			nonempty := exists && value != ""
+			switch op {
+			case ":-":
+				if !nonempty {
+					return w.expandVirtualLine(word)
+				}
+				return value
+			case "-":
+				if !exists {
+					return w.expandVirtualLine(word)
+				}
+				return value
+			case ":+":
+				if nonempty {
+					return w.expandVirtualLine(word)
+				}
+				return ""
+			case "+":
+				if exists {
+					return w.expandVirtualLine(word)
+				}
+				return ""
+			}
+		}
+	}
+	if !validVirtualEnvName(expr) {
+		return ""
+	}
+	return w.virtualVariable(expr)
 }
 
 func (w *virtualSSHWorld) expandVirtualCommandSubstitutions(line string) string {
@@ -1409,21 +1525,49 @@ func (w *virtualSSHWorld) expandVirtualCommandSubstitutions(line string) string 
 }
 
 func findInnermostVirtualSubstitution(v string) (int, int) {
-	start := strings.LastIndex(v, "$(")
-	if start < 0 {
-		return -1, -1
-	}
-	depth := 1
+	// First locate the last command-substitution opener that is not escaped and
+	// not inside single quotes. `$()` remains active inside double quotes.
+	lastStart := -1
 	var quote byte
-	escaped := false
-	for i := start + 2; i < len(v); i++ {
+	for i := 0; i+1 < len(v); i++ {
 		c := v[i]
-		if escaped {
-			escaped = false
+		if c == '\\' {
+			i++
 			continue
 		}
-		if c == '\\' {
-			escaped = true
+		if quote == '\'' {
+			if c == '\'' {
+				quote = 0
+			}
+			continue
+		}
+		if c == '\'' {
+			quote = '\''
+			continue
+		}
+		if c == '"' {
+			if quote == '"' {
+				quote = 0
+			} else if quote == 0 {
+				quote = '"'
+			}
+			continue
+		}
+		if c == '$' && v[i+1] == '(' {
+			lastStart = i
+			i++
+		}
+	}
+	if lastStart < 0 {
+		return -1, -1
+	}
+
+	depth := 1
+	quote = 0
+	for i := lastStart + 2; i < len(v); i++ {
+		c := v[i]
+		if c == '\\' && i+1 < len(v) {
+			i++
 			continue
 		}
 		if quote != 0 {
@@ -1443,7 +1587,7 @@ func findInnermostVirtualSubstitution(v string) (int, int) {
 		if c == ')' {
 			depth--
 			if depth == 0 {
-				return start, i
+				return lastStart, i
 			}
 		}
 	}
@@ -1565,7 +1709,10 @@ func (w *virtualSSHWorld) virtualTopOutput() string {
 		"MiB Swap:   2048.0 total,   2048.0 free,      0.0 used. %8.1f avail Mem\n\n"+
 		"    PID USER      PR  NI    VIRT    RES    SHR S  %%CPU  %%MEM     TIME+ COMMAND\n"+
 		"    844 svc-web   20   0  891244 154212  27840 S  %4.1f   1.9  51:32.18 web\n"+
+		"    901 postgres  20   0  303924  87320  18944 S   0.2   1.1   9:41.07 postgres\n"+
+		"    932 redis     20   0   67240  14880   6912 S   0.1   0.2   4:18.31 redis-server\n"+
 		"   1021 root      20   0 1127840  62412  29120 S  %4.1f   0.8   3:07.44 dockerd\n"+
+		"   1102 root      20   0  112436   6412   3712 S   0.0   0.1   0:33.12 docker-proxy\n"+
 		"    612 root      20   0   15420   8200   6144 S   0.0   0.1   0:04.33 sshd\n"+
 		"   1842 svc-bac+   20   0   18240   7800   5120 S   0.1   0.1   0:12.41 backup-agent",
 		s.Now.Format("15:04:05"), virtualUptimeHuman(s.Uptime), s.Load1, s.Load5, s.Load15, w.virtualProcessCount(), maxInt(0, w.virtualProcessCount()-1),

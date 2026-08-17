@@ -80,28 +80,33 @@ func (w *virtualSSHWorld) seedDeepReality() {
 	for _, d := range []string{
 		"/dev", "/dev/pts", "/run", "/run/sshd", "/run/systemd", "/sys", "/sys/class", "/sys/class/dmi", "/sys/class/dmi/id",
 		"/sys/devices", "/sys/fs", "/sys/fs/cgroup", "/lib", "/lib64", "/lib/x86_64-linux-gnu", "/usr/lib", "/usr/lib/systemd", "/usr/lib/systemd/system",
-		"/proc/581", "/proc/612", "/proc/844", "/proc/1021", "/proc/1842", "/var/lib/dpkg", "/var/lib/dpkg/info",
+		"/proc/581", "/proc/612", "/proc/844", "/proc/901", "/proc/932", "/proc/1021", "/proc/1102", "/proc/1842", "/proc/driver", "/proc/driver/nvidia", "/proc/driver/nvidia/gpus", "/proc/driver/nvidia/gpus/0000:00:05.0", "/var/lib/dpkg", "/var/lib/dpkg/info",
 	} {
 		w.dirs[d] = true
 	}
 	files := map[string]string{
-		"/etc/mtab":                         "proc /proc proc rw,nosuid,nodev,noexec,relatime 0 0\nsysfs /sys sysfs rw,nosuid,nodev,noexec,relatime 0 0\n/dev/vda2 / ext4 rw,relatime,errors=remount-ro 0 0\n/dev/vdb1 /srv/archive ext4 rw,relatime 0 0\n",
-		"/sys/class/dmi/id/sys_vendor":      "QEMU\n",
-		"/sys/class/dmi/id/product_name":    "Standard PC (Q35 + ICH9, 2009)\n",
-		"/sys/class/dmi/id/product_version": "pc-q35-8.2\n",
-		"/sys/class/dmi/id/board_vendor":    "Red Hat\n",
-		"/sys/class/dmi/id/bios_vendor":     "SeaBIOS\n",
-		"/sys/class/dmi/id/bios_version":    "1.16.3-debian-1.16.3-2\n",
-		"/proc/1/cmdline":                   "\x00/sbin/init\x00splash\x00",
-		"/proc/612/cmdline":                 "/usr/sbin/sshd\x00-D\x00",
-		"/proc/844/cmdline":                 "/opt/app/current/web\x00--config\x00/opt/app/current/config.yaml\x00",
-		"/proc/1021/cmdline":                "/usr/bin/dockerd\x00-H\x00fd://\x00",
-		"/proc/1842/cmdline":                "/usr/local/bin/backup-agent\x00--profile\x00legacy\x00",
-		"/proc/1/cgroup":                    "0::/init.scope\n",
-		"/proc/612/cgroup":                  "0::/system.slice/ssh.service\n",
-		"/proc/844/cgroup":                  "0::/system.slice/platform-web.service\n",
-		"/proc/1021/cgroup":                 "0::/system.slice/docker.service\n",
-		"/proc/1842/cgroup":                 "0::/system.slice/backup-agent.service\n",
+		"/etc/mtab":                                         "proc /proc proc rw,nosuid,nodev,noexec,relatime 0 0\nsysfs /sys sysfs rw,nosuid,nodev,noexec,relatime 0 0\n/dev/vda2 / ext4 rw,relatime,errors=remount-ro 0 0\n/dev/vdb1 /srv/archive ext4 rw,nosuid,nodev,relatime 0 0\n",
+		"/sys/class/dmi/id/sys_vendor":                      "QEMU\n",
+		"/sys/class/dmi/id/product_name":                    "Standard PC (Q35 + ICH9, 2009)\n",
+		"/sys/class/dmi/id/product_version":                 "pc-q35-8.2\n",
+		"/sys/class/dmi/id/board_vendor":                    "Red Hat\n",
+		"/sys/class/dmi/id/bios_vendor":                     "SeaBIOS\n",
+		"/sys/class/dmi/id/bios_version":                    "1.16.3-debian-1.16.3-2\n",
+		"/proc/1/cmdline":                                   "\x00/sbin/init\x00splash\x00",
+		"/proc/612/cmdline":                                 "/usr/sbin/sshd\x00-D\x00",
+		"/proc/844/cmdline":                                 "/opt/app/current/web\x00--config\x00/opt/app/current/config.yaml\x00",
+		"/proc/901/cmdline":                                 "postgres\x00-D\x00/var/lib/postgresql/data\x00",
+		"/proc/932/cmdline":                                 "redis-server\x0010.10.30.32:6379\x00",
+		"/proc/1021/cmdline":                                "/usr/bin/dockerd\x00-H\x00fd://\x00",
+		"/proc/1102/cmdline":                                "/usr/bin/docker-proxy\x00-proto\x00tcp\x00-host-ip\x00127.0.0.1\x00-host-port\x005432\x00",
+		"/proc/1842/cmdline":                                "/usr/local/bin/backup-agent\x00--profile\x00legacy\x00",
+		"/proc/driver/nvidia/version":                       "NVRM version: NVIDIA UNIX x86_64 Kernel Module  550.120  Thu Jul 10 20:31:18 UTC 2026\nGCC version:  gcc version 13.3.0 (Ubuntu 13.3.0-6ubuntu2~24.04)\n",
+		"/proc/driver/nvidia/gpus/0000:00:05.0/information": "Model:           Tesla T4\nIRQ:             16\nGPU UUID:        GPU-7c2d1e4f-91a6-4b72-a3d5-18e249cc7a31\nVideo BIOS:      90.04.96.00.01\nBus Type:        PCIe\nDMA Size:        47 bits\nDMA Mask:        0x7fffffffffff\nBus Location:    0000:00:05.0\n",
+		"/proc/1/cgroup":                                    "0::/init.scope\n",
+		"/proc/612/cgroup":                                  "0::/system.slice/ssh.service\n",
+		"/proc/844/cgroup":                                  "0::/system.slice/platform-web.service\n",
+		"/proc/1021/cgroup":                                 "0::/system.slice/docker.service\n",
+		"/proc/1842/cgroup":                                 "0::/system.slice/backup-agent.service\n",
 	}
 	now := w.system.snapshot().Now
 	for name, content := range files {
@@ -120,7 +125,9 @@ func (w *virtualSSHWorld) virtualProcessStatus(pid string) (string, bool) {
 	procs := map[string]proc{
 		"1": {"systemd", "S (sleeping)", 0, 0}, "581": {"systemd-logind", "S (sleeping)", 1, 0},
 		"612": {"sshd", "S (sleeping)", 1, 0}, "844": {"web", "S (sleeping)", 1, 997},
-		"1021": {"dockerd", "S (sleeping)", 1, 0}, "1842": {"backup-agent", "S (sleeping)", 1, 998},
+		"901": {"postgres", "S (sleeping)", 1021, 999}, "932": {"redis-server", "S (sleeping)", 1021, 999},
+		"1021": {"dockerd", "S (sleeping)", 1, 0}, "1102": {"docker-proxy", "S (sleeping)", 1021, 0},
+		"1842": {"backup-agent", "S (sleeping)", 1, 998},
 	}
 	p, ok := procs[pid]
 	if !ok {
@@ -175,7 +182,7 @@ func (w *virtualSSHWorld) deepRealityCommand(cmd string, args []string) (virtual
 }
 
 func sortedVirtualPIDs() []string {
-	p := []string{"1", "581", "612", "844", "1021", "1842"}
+	p := []string{"1", "581", "612", "844", "901", "932", "1021", "1102", "1842"}
 	sort.Strings(p)
 	return p
 }

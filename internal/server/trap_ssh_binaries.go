@@ -14,7 +14,12 @@ type virtualSystemBinary struct {
 }
 
 var virtualSystemBinaries = []virtualSystemBinary{
+	{"/usr/bin/true", 35664, []string{"GNU coreutils 9.4", "true", "--help", "--version"}},
+	{"/usr/bin/false", 35664, []string{"GNU coreutils 9.4", "false", "--help", "--version"}},
+	{"/usr/bin/test", 60368, []string{"GNU coreutils 9.4", "test", "missing argument", "unary operator expected"}},
+	{"/usr/bin/[", 60368, []string{"GNU coreutils 9.4", "[", "missing ]", "unary operator expected"}},
 	{"/usr/bin/echo", 43856, []string{"GNU coreutils 9.4", "echo", "write error", "--help", "--version"}},
+	{"/usr/bin/printf", 64432, []string{"GNU coreutils 9.4", "printf", "usage: printf", "write error"}},
 	{"/usr/bin/cat", 44016, []string{"GNU coreutils 9.4", "cat", "standard output", "write error"}},
 	{"/usr/bin/ls", 151344, []string{"GNU coreutils 9.4", "ls", "invalid option", "--color=auto"}},
 	{"/usr/bin/pwd", 43952, []string{"GNU coreutils 9.4", "pwd", "ignoring non-option arguments"}},
@@ -98,7 +103,7 @@ func virtualELFContent(b virtualSystemBinary) string {
 
 func virtualBuiltin(name string) bool {
 	switch name {
-	case "echo", "cd", "pwd", "type", "command", "alias", "export", "unset", "history", "read", "source", ".", "exit", "logout":
+	case "echo", "printf", "cd", "pwd", "type", "command", "alias", "export", "unset", "set", "history", "read", "test", "[", "true", "false", "umask", "ulimit", "jobs", "disown", "source", ".", "exit", "logout", "break", "continue":
 		return true
 	}
 	return false

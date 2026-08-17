@@ -345,6 +345,7 @@ func (c *client) get(path string, out any) error {
 		return err
 	}
 	req.SetBasicAuth(c.user, c.password)
+	req.Header.Set("X-ZentLoop-Client", "top")
 	r, err := c.http.Do(req)
 	if err != nil {
 		return err

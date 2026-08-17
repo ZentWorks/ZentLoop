@@ -22,6 +22,11 @@ func (w *virtualSSHWorld) executeVirtualControlFlow(line, input string) (virtual
 			return r, true
 		}
 	}
+	if (strings.HasPrefix(trimmed, "while ") || strings.HasPrefix(trimmed, "until ")) && (strings.HasSuffix(trimmed, " done") || strings.HasSuffix(trimmed, "; done")) {
+		if r, ok := w.executeVirtualWhile(trimmed); ok {
+			return r, true
+		}
+	}
 	if strings.HasPrefix(trimmed, "if ") && strings.Contains(trimmed, "; then ") && strings.Contains(trimmed, " fi") {
 		if r, ok := w.executeVirtualIf(trimmed, input); ok {
 			return r, true
@@ -64,9 +69,68 @@ func (w *virtualSSHWorld) executeVirtualFor(line string) (virtualSSHResult, bool
 			combined.Status = 0
 			break
 		}
+		if r.TerminalAction == "continue" {
+			combined.Status = 0
+			continue
+		}
 		if r.Exit {
 			combined.Exit = true
 			break
+		}
+	}
+	combined.Output = strings.Join(outputs, "\n")
+	combined.TerminalAction = ""
+	return combined, true
+}
+
+func (w *virtualSSHWorld) executeVirtualWhile(line string) (virtualSSHResult, bool) {
+	until := strings.HasPrefix(line, "until ")
+	prefix := "while "
+	if until {
+		prefix = "until "
+	}
+	bodyStart := strings.Index(line, "; do ")
+	if bodyStart < 0 {
+		return virtualSSHResult{}, false
+	}
+	condition := strings.TrimSpace(strings.TrimPrefix(line[:bodyStart], prefix))
+	body := strings.TrimSpace(line[bodyStart+5:])
+	body = strings.TrimSpace(strings.TrimSuffix(body, "done"))
+	body = strings.TrimSpace(strings.TrimSuffix(body, ";"))
+	if condition == "" {
+		return virtualSSHResult{}, false
+	}
+	combined := virtualSSHResult{Status: 0, Family: "execution", CommandName: strings.TrimSpace(prefix), Depth: 5, Risk: 94, Persona: "shell-control-flow", Message: "simulated bounded shell loop"}
+	var outputs []string
+	for iteration := 0; iteration < 32; iteration++ {
+		cond := w.executePipeline(w.expandVirtualLine(condition))
+		run := cond.Status == 0
+		if until {
+			run = !run
+		}
+		if !run {
+			combined.Status = 0
+			break
+		}
+		r := w.Execute(body)
+		if r.Output != "" {
+			outputs = append(outputs, r.Output)
+		}
+		if r.Depth > combined.Depth {
+			combined.Depth, combined.Risk, combined.Persona = r.Depth, maxInt(combined.Risk, r.Risk), r.Persona
+		}
+		combined.Status = r.Status
+		if r.Exit {
+			combined.Exit = true
+			break
+		}
+		if r.TerminalAction == "break" {
+			combined.Status = 0
+			break
+		}
+		if r.TerminalAction == "continue" {
+			combined.Status = 0
+			continue
 		}
 	}
 	combined.Output = strings.Join(outputs, "\n")
@@ -93,7 +157,10 @@ func splitVirtualIfBody(rest string) (thenBody, elseBody, suffix string) {
 		suffix = strings.TrimSpace(rem)
 	}
 	thenBody = body
-	if pos := strings.Index(body, "; else "); pos >= 0 {
+	if pos := strings.Index(body, "; elif "); pos >= 0 {
+		thenBody = strings.TrimSpace(body[:pos])
+		elseBody = "if " + strings.TrimSpace(body[pos+8:]) + "; fi"
+	} else if pos := strings.Index(body, "; else "); pos >= 0 {
 		thenBody = strings.TrimSpace(body[:pos])
 		elseBody = strings.TrimSpace(body[pos+7:])
 	}
@@ -192,72 +259,103 @@ func (w *virtualSSHWorld) executeVirtualCase(line, input string) (virtualSSHResu
 }
 
 func (w *virtualSSHWorld) virtualTest(args []string) virtualSSHResult {
-	r := virtualBaseResult("test", "filesystem", 3, 82, "file-discovery", "shell condition test")
-	negate := false
-	if len(args) > 0 && args[0] == "!" {
-		negate = true
-		args = args[1:]
-	}
-	ok := false
-	if len(args) >= 3 {
-		left, op, right := args[0], args[1], args[2]
-		switch op {
-		case "=", "==":
-			ok = left == right
-		case "!=":
-			ok = left != right
-		case "-eq", "-ne", "-gt", "-ge", "-lt", "-le":
-			a, ea := strconv.ParseInt(left, 10, 64)
-			b, eb := strconv.ParseInt(right, 10, 64)
-			if ea == nil && eb == nil {
-				switch op {
-				case "-eq":
-					ok = a == b
-				case "-ne":
-					ok = a != b
-				case "-gt":
-					ok = a > b
-				case "-ge":
-					ok = a >= b
-				case "-lt":
-					ok = a < b
-				case "-le":
-					ok = a <= b
-				}
-			}
-		}
-	} else if len(args) >= 2 {
-		op, value := args[0], args[1]
-		switch op {
-		case "-f":
-			resolved := w.resolve(value)
-			_, fileOK := w.virtualReadFile(resolved)
-			ok = fileOK && !w.dirs[resolved]
-		case "-d":
-			ok = w.dirs[w.resolve(value)]
-		case "-e":
-			resolved := w.resolve(value)
-			_, fileOK := w.virtualReadFile(resolved)
-			ok = fileOK || w.dirs[resolved]
-		case "-x":
-			resolved := w.resolve(value)
-			_, exists := w.fileMeta[resolved]
-			ok = exists && w.virtualFileMode(resolved)&0o111 != 0
-		case "-n":
-			ok = value != ""
-		case "-z":
-			ok = value == ""
-		}
-	} else if len(args) == 1 {
-		ok = args[0] != ""
-	}
-	if negate {
-		ok = !ok
-	}
+	r := virtualBaseResult("test", "shell", 3, 80, "shell-control-flow", "shell condition test")
+	ok := w.evalVirtualTest(args)
 	if !ok {
 		r.Status = 1
 	}
 	return r
+}
+
+func (w *virtualSSHWorld) evalVirtualTest(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	if args[0] == "!" {
+		return !w.evalVirtualTest(args[1:])
+	}
+	// The legacy `test` -a/-o operators still appear in compact installer
+	// scripts. Keep evaluation bounded and left-associative for the simple forms
+	// used by automation.
+	for i := 1; i < len(args)-1; i++ {
+		if args[i] == "-o" {
+			return w.evalVirtualTest(args[:i]) || w.evalVirtualTest(args[i+1:])
+		}
+	}
+	for i := 1; i < len(args)-1; i++ {
+		if args[i] == "-a" {
+			return w.evalVirtualTest(args[:i]) && w.evalVirtualTest(args[i+1:])
+		}
+	}
+	if len(args) >= 3 {
+		left, op, right := args[0], args[1], args[2]
+		switch op {
+		case "=", "==":
+			return left == right
+		case "!=":
+			return left != right
+		case "-eq", "-ne", "-gt", "-ge", "-lt", "-le":
+			a, ea := strconv.ParseInt(left, 10, 64)
+			b, eb := strconv.ParseInt(right, 10, 64)
+			if ea != nil || eb != nil {
+				return false
+			}
+			switch op {
+			case "-eq":
+				return a == b
+			case "-ne":
+				return a != b
+			case "-gt":
+				return a > b
+			case "-ge":
+				return a >= b
+			case "-lt":
+				return a < b
+			case "-le":
+				return a <= b
+			}
+		case "-nt", "-ot":
+			lm, lok := w.fileMeta[w.resolve(left)]
+			rm, rok := w.fileMeta[w.resolve(right)]
+			if !lok || !rok {
+				return false
+			}
+			if op == "-nt" {
+				return lm.ModTime.After(rm.ModTime)
+			}
+			return lm.ModTime.Before(rm.ModTime)
+		}
+	}
+	if len(args) >= 2 {
+		op, value := args[0], args[1]
+		resolved := w.resolve(value)
+		content, fileOK := w.virtualReadFile(resolved)
+		switch op {
+		case "-f":
+			return fileOK && !w.dirs[resolved]
+		case "-d":
+			return w.dirs[resolved]
+		case "-e":
+			return fileOK || w.dirs[resolved]
+		case "-x":
+			return fileOK && w.virtualFileMode(resolved)&0o111 != 0
+		case "-r":
+			return w.virtualFileReadable(value)
+		case "-w":
+			return w.virtualFileWritable(value)
+		case "-s":
+			return fileOK && len(content) > 0
+		case "-L", "-h":
+			// The current virtual filesystem does not advertise symlinks as such;
+			// a copied virtual file must not falsely claim to be one.
+			return false
+		case "-n":
+			return value != ""
+		case "-z":
+			return value == ""
+		}
+	}
+	return len(args) == 1 && args[0] != ""
 }
 
 func parseVirtualPIDArg(v string) (int, bool) {
