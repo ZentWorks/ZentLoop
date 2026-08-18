@@ -31,16 +31,16 @@
   <main>
     <div id="dashboardView" class="view-pane">
     <section class="hero-grid">
-      <article class="metric danger"><span>HOSTILE</span><strong id="hostile">0</strong><small><b class="rangeWindow">LIVE · 24h</b></small></article>
-      <article class="metric warn"><span>SUSPICIOUS</span><strong id="suspicious">0</strong><small><b class="rangeWindow">LIVE · 24h</b></small></article>
-      <article class="metric ok"><span>BENIGN</span><strong id="benign">0</strong><small><b class="rangeWindow">LIVE · 24h</b></small></article>
-      <article class="metric"><span>REQUESTS</span><strong id="requestsToday">0</strong><small><b id="rps">0.0</b> req/s now</small></article>
-      <article class="metric"><span>AVG. DEPTH</span><strong id="avgDepth">0.0</strong><small><b id="loops">0</b> loops active</small></article>
+      <article class="metric danger"><span>HOSTILE</span><strong id="hostile">0</strong><small><b id="hostileSplit">web 0 · ssh 0</b></small></article>
+      <article class="metric warn"><span>SUSPICIOUS</span><strong id="suspicious">0</strong><small><b id="suspiciousSplit">web 0 · ssh 0</b></small></article>
+      <article class="metric ok"><span>BENIGN</span><strong id="benign">0</strong><small><b id="benignSplit">web 0 · ssh 0</b></small></article>
+      <article class="metric"><span>WEB REQUESTS</span><strong id="requestsToday">0</strong><small><b id="rps">0.0</b> req/s now</small></article>
+      <article class="metric"><span>AVG. DEPTH</span><strong id="avgDepth">0.0</strong><small><b id="loops">0</b> loops · web + ssh</small></article>
     </section>
 
     <section class="grid two">
       <article class="panel">
-        <div class="panel-title"><h2>Behavior classification</h2><span>active sessions</span></div>
+        <div class="panel-title"><h2>Behavior classification</h2><span>Web + SSH sessions in scope</span></div>
         <div class="behavior">
           <div class="ring" id="actorRing"><div><strong id="actorTotal">0</strong><small>actors</small></div></div>
           <div class="legend">
@@ -52,8 +52,8 @@
       </article>
       <article class="panel">
         <div class="panel-title"><h2>Web / SSH activity</h2><span class="activity-legend" aria-label="Activity chart legend"><i class="web"></i>WEB <i class="ssh"></i>SSH</span></div>
-        <svg id="activityChart" viewBox="0 0 600 150" preserveAspectRatio="none" aria-label="Web and SSH activity chart"></svg>
-        <div class="chart-footer"><span>older</span><span>now</span></div>
+        <svg id="activityChart" viewBox="0 0 600 170" preserveAspectRatio="none" aria-label="Web and SSH activity chart"></svg>
+        <div class="chart-footer"><span id="activityFirst">older</span><span id="activityUnit">events / hour</span><span id="activityLast">now</span></div>
       </article>
     </section>
 
@@ -195,7 +195,7 @@
       </article>
     </section>
 
-    <section class="panel">
+    <section class="panel lower">
       <div class="panel-title"><div><h2>Recent paths</h2><span>latest observed paths · known, benign-known and unmapped</span></div></div>
       <div class="table-wrap"><table>
         <thead><tr><th>LAST</th><th>COUNT</th><th>METHOD</th><th>PATH</th><th>KIND</th><th>STATUS</th><th>SIGNATURE</th></tr></thead>
@@ -285,14 +285,6 @@
       <section class="panel live-feed-panel">
         <div class="live-feed-page-head">
           <div class="live-feed-title"><small>SSH REALTIME ACTIVITY</small><div><h2>SSH Live Feed</h2><span id="sshLiveFeedSummary">0 live · 0 recently left</span></div></div>
-          <div class="live-feed-page-actions">
-            <div id="sshLiveFeedFilters" class="feed-filters" role="group" aria-label="SSH live feed filter">
-              <button type="button" data-feed-filter="all" class="active">All</button>
-              <button type="button" data-feed-filter="live">Live</button>
-              <button type="button" data-feed-filter="left">Recently left</button>
-            </div>
-            <button id="sshLiveFollow" class="feed-follow active" type="button" aria-pressed="true">● Live follow</button>
-          </div>
         </div>
         <div id="sshLiveFeed" class="ssh-live-feed live-page-ssh-feed"></div>
       </section>
@@ -314,7 +306,7 @@
         <article class="metric ok"><span>CANARY</span><strong id="ipCanaries">0</strong><small>decoy reuse</small></article>
       </section>
       <section class="grid two ip-upper">
-        <article class="panel"><div class="panel-title"><h2>Web / SSH timeline</h2><span class="activity-legend"><i class="web"></i>WEB <i class="ssh"></i>SSH</span></div><svg id="ipTimelineChart" viewBox="0 0 600 170" preserveAspectRatio="none" aria-label="IP Web and SSH activity timeline"></svg><div class="chart-footer"><span id="ipTimelineFirst">first</span><span id="ipTimelineLast">last</span></div></article>
+        <article class="panel"><div class="panel-title"><h2>Web / SSH timeline</h2><span class="activity-legend"><i class="web"></i>WEB <i class="ssh"></i>SSH</span></div><svg id="ipTimelineChart" viewBox="0 0 600 170" preserveAspectRatio="none" aria-label="IP Web and SSH activity timeline"></svg><div class="chart-footer"><span id="ipTimelineFirst">first</span><span id="ipTimelineUnit">events / day</span><span id="ipTimelineLast">last</span></div></article>
         <article class="panel"><div class="panel-title"><h2>System assessment</h2><span>why ZentLoop scored this source</span></div><div id="ipReasons" class="ip-reasons"></div></article>
       </section>
       <section class="grid two ip-upper">
@@ -325,7 +317,7 @@
       <section class="panel"><div class="panel-title"><h2>Observed timeline</h2><span id="ipRawCounts">retained events</span></div><div id="ipObservedTimeline" class="ip-observed-timeline"></div></section>
     </section>
 
-    <footer><span id="version">ZentLoop 0.2.21</span><span>Proxy: <b id="proxyMode">direct</b> · GeoIP: <b id="geoStatus">local</b> · Official bots: <b id="botStatus">waiting</b> · <a href="https://db-ip.com" target="_blank" rel="noopener noreferrer">IP Geolocation by DB-IP</a> · no telemetry</span></footer>
+    <footer><span id="version">ZentLoop 0.2.26</span><span>Proxy: <b id="proxyMode">direct</b> · GeoIP: <b id="geoStatus">local</b> · Official bots: <b id="botStatus">waiting</b> · <a href="https://db-ip.com" target="_blank" rel="noopener noreferrer">IP Geolocation by DB-IP</a> · no telemetry</span></footer>
   </main>
 
   <div id="settingsBackdrop" class="modal-backdrop settings-backdrop" aria-hidden="true"></div>
@@ -349,7 +341,7 @@ example.net"></textarea>
     <div class="settings-modal-body help-modal-body">
       <div class="help-block"><h3>Trusted Domains</h3><p>Domains that belong to your own infrastructure. Adding a root domain also covers its subdomains. Trusted domains appear as normal targets and are included in the regular target statistics.</p></div>
       <div class="help-block"><h3>Date &amp; Target filters</h3><p>LIVE is the rolling last 24 hours and keeps receiving new Web and SSH events. Selecting a day or All dates switches to a historical view: live streams are paused and lazy loading stays inside the selected time window. The Target filter can be combined with any time view and groups trusted subdomains under their configured root domain.</p></div>
-      <div class="help-block"><h3>Live View</h3><p>The LIVE button opens a compact realtime page with active Web sessions first, active SSH sessions second and the SSH activity feed below. Selecting any session opens the same detailed live drawer used by the dashboard. The view uses the same bounded Admin WebSocket as the dashboard, keeps disconnected/quiet sessions visible for up to 60 seconds as <code>LEFT Ns</code>, and updates countdown text without rebuilding the row under your pointer. The SSH feed automatically uses three, two or one columns depending on screen width.</p></div>
+      <div class="help-block"><h3>Live View</h3><p>The LIVE button opens a compact realtime page with active Web sessions first, active SSH sessions second and the SSH activity feed below. Selecting a Web session opens its current visit only; earlier visits remain available in IP Intelligence, while JSON export stays session-wide. The view uses the same bounded Admin WebSocket as the dashboard, keeps disconnected/quiet sessions visible for up to 60 seconds as <code>LEFT Ns</code>, and updates countdown text without rebuilding the row under your pointer. The SSH feed automatically uses three, two or one columns depending on screen width.</p></div>
       <div class="help-block"><h3>Untrusted hosts</h3><p>Hosts shown in parentheses were requested by a visitor but are not trusted as one of your own domains. They are evaluated separately so they do not distort your normal target statistics. If you trust one later, its retained history is reclassified automatically.</p></div>
       <div class="help-block"><h3>Host sweeps</h3><p>ZentLoop can recognize when one visitor rapidly tries many different host names. These attempts stay in the untrusted-host view and may be guided into a generic Web Trap instead of being treated as real targets.</p></div>
       <div class="help-block"><h3>Integration / Proxy</h3><p>When ZentLoop is used behind a compatible proxy or upstream integration, the original public target and visitor information can be preserved. Verified, explicit proxy routes may also provide trusted targets automatically.</p></div>
@@ -371,7 +363,7 @@ example.net"></textarea>
   </section>
 
   <aside id="drawer" class="drawer" aria-hidden="true">
-    <div class="drawer-head"><div><small>WEB SESSION</small><h3 id="dId">—</h3></div><div class="drawer-actions"><a id="webExportJSON" class="export-link export-json" href="#" aria-label="Export Web session JSON" title="Export JSON"><svg class="export-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1v9m0 0 3-3m-3 3L5 7M3 11.5v2h10v-2"/></svg><span>JSON</span></a><button id="closeDrawer">×</button></div></div>
+    <div class="drawer-head"><div><small>WEB SESSION · <span id="dVisitContext">CURRENT VISIT</span></small><h3 id="dId">—</h3></div><div class="drawer-actions"><a id="webExportJSON" class="export-link export-json" href="#" aria-label="Export Web session JSON" title="Export JSON"><svg class="export-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1v9m0 0 3-3m-3 3L5 7M3 11.5v2h10v-2"/></svg><span>JSON</span></a><button id="closeDrawer">×</button></div></div>
     <div class="drawer-body">
       <div class="detail-grid">
         <div><span>IP</span><b id="dIp">—</b></div><div><span>Network via</span><b id="dProxy">—</b></div>
@@ -388,12 +380,14 @@ example.net"></textarea>
         <div><span>Bot claim</span><b id="dBot">—</b></div><div><span>Bot verification</span><b id="dBotVerified">—</b></div>
         <div><span>Automation</span><b id="dAuto">—</b></div><div><span>Confidence</span><b id="dConfidence">—</b></div>
         <div><span>Avg. interval</span><b id="dInterval">—</b></div><div><span>Interval variance</span><b id="dVariance">—</b></div>
-        <div><span>Requests</span><b id="dReq">—</b></div><div><span>Visits</span><b id="dVisits">—</b></div>
-        <div><span>First seen</span><b id="dFirst">—</b></div><div><span>Last seen</span><b id="dLast">—</b></div>
+        <div><span>Current visit requests</span><b id="dReq">—</b></div><div><span>Visit started</span><b id="dVisitStarted">—</b></div>
+        <div><span>Total requests</span><b id="dReqTotal">—</b></div><div><span>Lifetime visits</span><b id="dVisits">—</b></div>
+        <div><span>First seen</span><b id="dFirst">—</b></div><div><span>Last activity</span><b id="dLast">—</b></div>
         <div><span>Depth</span><b id="dDepth">—</b></div><div><span>Frustration</span><b id="dFrustration">—</b></div>
       </div>
+      <div class="web-visit-actions"><span>Timeline shows only this visit. Earlier activity stays in IP Intelligence.</span><button id="dIPHistory" class="compact-action" type="button">View full IP history →</button></div>
       <h4>Behavior signal</h4><div class="score-track"><span id="dAutoBar"></span></div>
-      <div class="transcript-title"><h4>HTTP timeline</h4><button id="httpNewEvents" class="new-events" type="button" hidden>New live events ↓</button></div><div id="httpTimeline" class="ssh-transcript"></div>
+      <div class="transcript-title"><h4>Current visit HTTP timeline</h4><button id="httpNewEvents" class="new-events" type="button" hidden>New live events ↓</button></div><div id="httpTimeline" class="ssh-transcript"></div>
       <h4>User agent</h4><pre id="dUa"></pre>
     </div>
   </aside>

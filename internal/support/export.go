@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -20,17 +21,32 @@ import (
 )
 
 type Manifest struct {
-	ExportedAt              time.Time `json:"exported_at"`
-	Version                 string    `json:"version"`
-	IPIntelligenceExports   int       `json:"ip_intelligence_exports"`
-	SSHSessionExports       int       `json:"ssh_session_exports"`
-	WebSessionExports       int       `json:"web_session_exports"`
-	SourceIPsAnonymized     bool      `json:"source_ips_anonymized"`
-	TargetsAnonymized       bool      `json:"targets_anonymized"`
-	ReferencedIOCsPreserved bool      `json:"referenced_iocs_preserved"`
+	ExportedAt              time.Time  `json:"exported_at"`
+	Version                 string     `json:"version"`
+	Incremental             bool       `json:"incremental"`
+	InstallationID          string     `json:"installation_id"`
+	From                    *time.Time `json:"from"`
+	Until                   time.Time  `json:"until"`
+	SSHSessionExports       int        `json:"ssh_sessions"`
+	WebSessionExports       int        `json:"web_sessions"`
+	IPIntelligenceExports   int        `json:"ip_intelligence"`
+	SourceIPsAnonymized     bool       `json:"source_ips_anonymized"`
+	TargetsAnonymized       bool       `json:"targets_anonymized"`
+	ReferencedIOCsPreserved bool       `json:"referenced_iocs_preserved"`
 }
 
-const supportKeyFile = ".zentloop-support.key"
+type supportState struct {
+	LastSuccessfulUntil  time.Time         `json:"last_successful_until"`
+	IPIntelligenceHashes map[string]string `json:"ip_intelligence_hashes,omitempty"`
+}
+
+var ErrNoNewData = errors.New("no new support data")
+
+const (
+	supportKeyFile            = ".zentloop-support.key"
+	supportInstallationIDFile = ".zentloop-installation-id"
+	supportStateFile          = ".zentloop-support-state.json"
+)
 
 type anonymizer struct {
 	key       []byte
@@ -86,6 +102,145 @@ func loadOrCreateInstallKey(dataDir string) ([]byte, error) {
 		return nil, err
 	}
 	return key, nil
+}
+
+func validInstallationID(value string) bool {
+	value = strings.TrimSpace(value)
+	if !strings.HasPrefix(value, "zl-") || len(value) != 15 {
+		return false
+	}
+	decoded, err := hex.DecodeString(value[3:])
+	return err == nil && len(decoded) == 6
+}
+
+func loadOrCreateInstallationID(dataDir string) (string, error) {
+	path := filepath.Join(dataDir, supportInstallationIDFile)
+	if b, err := os.ReadFile(path); err == nil {
+		id := strings.TrimSpace(string(b))
+		if !validInstallationID(id) {
+			return "", fmt.Errorf("invalid installation id")
+		}
+		return id, nil
+	} else if !os.IsNotExist(err) {
+		return "", err
+	}
+
+	random := make([]byte, 6)
+	if _, err := rand.Read(random); err != nil {
+		return "", err
+	}
+	id := "zl-" + hex.EncodeToString(random)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		if os.IsExist(err) {
+			b, readErr := os.ReadFile(path)
+			if readErr != nil {
+				return "", readErr
+			}
+			existing := strings.TrimSpace(string(b))
+			if !validInstallationID(existing) {
+				return "", fmt.Errorf("invalid installation id")
+			}
+			return existing, nil
+		}
+		return "", err
+	}
+	if _, err := f.WriteString(id + "\n"); err != nil {
+		_ = f.Close()
+		_ = os.Remove(path)
+		return "", err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		_ = os.Remove(path)
+		return "", err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(path)
+		return "", err
+	}
+	return id, nil
+}
+
+func loadSupportState(dataDir string) (supportState, error) {
+	path := filepath.Join(dataDir, supportStateFile)
+	b, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return supportState{}, nil
+	}
+	if err != nil {
+		return supportState{}, err
+	}
+	var state supportState
+	if err := json.Unmarshal(b, &state); err != nil {
+		return supportState{}, fmt.Errorf("invalid support state: %w", err)
+	}
+	return state, nil
+}
+
+func saveSupportState(dataDir string, state supportState) error {
+	b, err := json.Marshal(state)
+	if err != nil {
+		return err
+	}
+	b = append(b, '\n')
+	tmp, err := os.CreateTemp(dataDir, ".zentloop-support-state-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	keep := false
+	defer func() {
+		_ = tmp.Close()
+		if !keep {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := tmp.Chmod(0o600); err != nil {
+		return err
+	}
+	if _, err := tmp.Write(b); err != nil {
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, filepath.Join(dataDir, supportStateFile)); err != nil {
+		return err
+	}
+	keep = true
+	return nil
+}
+
+func exportTimeInWindow(at, from, until time.Time) bool {
+	if !from.IsZero() && !at.After(from) {
+		return false
+	}
+	if !until.IsZero() && at.After(until) {
+		return false
+	}
+	return true
+}
+
+func sessionStart(firstSeen, lastSeen time.Time) time.Time {
+	if !firstSeen.IsZero() {
+		return firstSeen
+	}
+	return lastSeen
+}
+
+func ipIntelligenceFingerprint(in model.IPIntelligence) (string, error) {
+	in.ExportedAt = time.Time{}
+	in.Version = ""
+	b, err := json.Marshal(in)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 func newAnonymizer(key []byte) *anonymizer {
@@ -345,31 +500,88 @@ func archiveName(dataDir string, now time.Time) string {
 	}
 }
 
-// CreateArchive creates a read-only snapshot from retained ZentLoop data and
-// writes the resulting archive atomically into dataDir.
+// CreateArchive creates a read-only incremental snapshot from retained ZentLoop
+// data and writes the resulting archive atomically into dataDir. SSH/Web session
+// exports are emitted once based on session start time. IP Intelligence is emitted
+// again whenever its correlated retained view differs from the last successful
+// checkpoint.
 func CreateArchive(dataDir, version string, now time.Time) (string, error) {
+	state, err := loadSupportState(dataDir)
+	if err != nil {
+		return "", err
+	}
 	snapshot, err := store.LoadReadOnlySnapshot(dataDir)
 	if err != nil {
 		return "", err
 	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	archiveClock := now
+	until := now.UTC()
+	from := state.LastSuccessfulUntil.UTC()
+	if !from.IsZero() && until.Before(from) {
+		return "", fmt.Errorf("support export clock is before last checkpoint")
+	}
+
 	installKey, err := loadOrCreateInstallKey(dataDir)
+	if err != nil {
+		return "", err
+	}
+	installationID, err := loadOrCreateInstallationID(dataDir)
 	if err != nil {
 		return "", err
 	}
 	anon := newAnonymizer(installKey)
 
 	actors := snapshot.Actors(0)
-	// Allocate all known actor pseudonyms before serializing campaign peers so
-	// every reference in the archive uses one stable mapping.
 	for _, actor := range actors {
 		_ = anon.IP(actor.IP)
 		_ = anon.ActorID(actor.IP)
 	}
 
 	webSessions := snapshot.SessionsView(0, 0)
-	sshSessions := snapshot.AllSSHSessions()
+	selectedWeb := make([]model.Session, 0, len(webSessions))
+	for _, ss := range webSessions {
+		if exportTimeInWindow(sessionStart(ss.FirstSeen, ss.LastSeen), from, until) {
+			selectedWeb = append(selectedWeb, ss)
+		}
+	}
 
-	finalPath := archiveName(dataDir, now)
+	sshSessions := snapshot.AllSSHSessions()
+	selectedSSH := make([]model.SSHSession, 0, len(sshSessions))
+	for _, ss := range sshSessions {
+		if exportTimeInWindow(sessionStart(ss.FirstSeen, ss.LastSeen), from, until) {
+			selectedSSH = append(selectedSSH, ss)
+		}
+	}
+
+	selectedIntel := make([]model.IPIntelligence, 0, len(actors))
+	nextIntelHashes := make(map[string]string, len(actors))
+	for _, actor := range actors {
+		if strings.TrimSpace(actor.IP) == "" {
+			continue
+		}
+		intel, ok := snapshot.IPIntelligence(actor.IP, version)
+		if !ok {
+			continue
+		}
+		fingerprint, err := ipIntelligenceFingerprint(intel)
+		if err != nil {
+			return "", err
+		}
+		key := anon.IP(actor.IP)
+		nextIntelHashes[key] = fingerprint
+		if state.IPIntelligenceHashes[key] != fingerprint {
+			selectedIntel = append(selectedIntel, intel)
+		}
+	}
+
+	if len(selectedWeb) == 0 && len(selectedSSH) == 0 && len(selectedIntel) == 0 {
+		return "", ErrNoNewData
+	}
+
+	finalPath := archiveName(dataDir, archiveClock)
 	tmp, err := os.CreateTemp(dataDir, ".support-*.zip.tmp")
 	if err != nil {
 		return "", err
@@ -383,23 +595,25 @@ func CreateArchive(dataDir, version string, now time.Time) (string, error) {
 	}()
 
 	zw := zip.NewWriter(tmp)
+	var manifestFrom *time.Time
+	if !from.IsZero() {
+		copyFrom := from
+		manifestFrom = &copyFrom
+	}
 	manifest := Manifest{
-		ExportedAt:              now.UTC(),
+		ExportedAt:              until,
 		Version:                 version,
+		Incremental:             true,
+		InstallationID:          installationID,
+		From:                    manifestFrom,
+		Until:                   until,
 		SourceIPsAnonymized:     true,
 		TargetsAnonymized:       true,
 		ReferencedIOCsPreserved: true,
 	}
 
-	for _, actor := range actors {
-		if strings.TrimSpace(actor.IP) == "" {
-			continue
-		}
-		intel, ok := snapshot.IPIntelligence(actor.IP, version)
-		if !ok {
-			continue
-		}
-		intel.ExportedAt = now.UTC()
+	for _, intel := range selectedIntel {
+		intel.ExportedAt = until
 		intel = anonymizeIPIntelligence(intel, anon)
 		name := "ip-intelligence/" + safeName(intel.IP) + ".json"
 		if err := writeJSONEntry(zw, name, intel); err != nil {
@@ -410,12 +624,12 @@ func CreateArchive(dataDir, version string, now time.Time) (string, error) {
 		manifest.IPIntelligenceExports++
 	}
 
-	for _, ss := range sshSessions {
+	for _, ss := range selectedSSH {
 		ex, ok := snapshot.SSHSessionExport(ss.ID, version)
 		if !ok {
 			continue
 		}
-		ex.ExportedAt = now.UTC()
+		ex.ExportedAt = until
 		ex = anonymizeSSHExport(ex, anon)
 		name := "ssh/zentloop-ssh-" + safeName(ss.ID) + ".json"
 		if err := writeJSONEntry(zw, name, ex); err != nil {
@@ -426,12 +640,12 @@ func CreateArchive(dataDir, version string, now time.Time) (string, error) {
 		manifest.SSHSessionExports++
 	}
 
-	for _, ss := range webSessions {
+	for _, ss := range selectedWeb {
 		ex, ok := snapshot.WebSessionExport(ss.ID, version)
 		if !ok {
 			continue
 		}
-		ex.ExportedAt = now.UTC()
+		ex.ExportedAt = until
 		ex = anonymizeWebExport(ex, anon)
 		name := "web/zentloop-web-" + safeName(ss.ID) + ".json"
 		if err := writeJSONEntry(zw, name, ex); err != nil {
@@ -442,6 +656,11 @@ func CreateArchive(dataDir, version string, now time.Time) (string, error) {
 		manifest.WebSessionExports++
 	}
 
+	if manifest.IPIntelligenceExports == 0 && manifest.SSHSessionExports == 0 && manifest.WebSessionExports == 0 {
+		_ = zw.Close()
+		_ = tmp.Close()
+		return "", ErrNoNewData
+	}
 	if err := writeJSONEntry(zw, "manifest.json", manifest); err != nil {
 		_ = zw.Close()
 		_ = tmp.Close()
@@ -466,5 +685,10 @@ func CreateArchive(dataDir, version string, now time.Time) (string, error) {
 		return "", err
 	}
 	keep = true
+
+	if err := saveSupportState(dataDir, supportState{LastSuccessfulUntil: until, IPIntelligenceHashes: nextIntelHashes}); err != nil {
+		_ = os.Remove(finalPath)
+		return "", err
+	}
 	return finalPath, nil
 }

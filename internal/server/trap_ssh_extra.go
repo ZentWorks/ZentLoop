@@ -74,6 +74,28 @@ func (w *virtualSSHWorld) executeExtraCommand(cmd string, args []string, raw, in
 			inner += " " + strings.Join(args[1:], " ")
 		}
 		return w.executeOne(inner, input), true
+	case "pgrep", "pidof":
+		r := base("recon", 4, 88, "system-recon", "process discovery")
+		name := lastNonOption(args)
+		if name == "" {
+			r.Status = 2
+			return r, true
+		}
+		pids := w.virtualProcessPIDsByName(name)
+		if len(pids) == 0 {
+			r.Status = 1
+			return r, true
+		}
+		vals := make([]string, 0, len(pids))
+		for _, pid := range pids {
+			vals = append(vals, strconv.Itoa(pid))
+		}
+		if cmd == "pidof" {
+			r.Output = strings.Join(vals, " ")
+		} else {
+			r.Output = strings.Join(vals, "\n")
+		}
+		return r, true
 	case "lspci":
 		r := base("recon", 3, 82, "system-recon", "PCI device discovery")
 		r.Output = "00:00.0 Host bridge: Intel Corporation 82Q35 Express DRAM Controller\n00:01.0 PCI bridge: Red Hat, Inc. QEMU PCIe Root port\n00:03.0 Ethernet controller: Red Hat, Inc. Virtio network device\n00:04.0 VGA compatible controller: Red Hat, Inc. Virtio GPU\n00:05.0 3D controller: NVIDIA Corporation TU104GL [" + strings.TrimPrefix(virtualGPUName, "NVIDIA ") + "] (rev a1)\n00:1f.0 ISA bridge: Intel Corporation 82801IB (ICH9) LPC Interface Controller"

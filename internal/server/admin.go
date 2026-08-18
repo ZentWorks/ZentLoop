@@ -52,6 +52,7 @@ func NewAdmin(cfg config.Config, st *store.Store) *AdminServer {
 func (s *AdminServer) Handler() http.Handler {
 	protected := http.NewServeMux()
 	protected.HandleFunc("/api/overview", s.overview)
+	protected.HandleFunc("/api/activity", s.activity)
 	protected.HandleFunc("/api/available-days", s.availableDays)
 	protected.HandleFunc("/api/sessions", s.sessions)
 	protected.HandleFunc("/api/history", s.history)
@@ -192,6 +193,14 @@ func (s *AdminServer) overview(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, s.store.OverviewTarget(time.Duration(s.cfg.LiveSessionMinutes)*time.Minute, r.URL.Query().Get("target")))
 }
+func (s *AdminServer) activity(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	tr := requestTimeRange(r)
+	writeJSON(w, s.store.ActivityTimeline(tr.From, tr.To, r.URL.Query().Get("target")))
+}
 func (s *AdminServer) sessions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		methodNotAllowed(w)
@@ -253,7 +262,14 @@ func (s *AdminServer) session(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, ss)
 			return
 		}
-		detail, ok := s.store.SessionDetail(id, queryInt(r, "event_limit", 500, 1, 5000))
+		eventLimit := queryInt(r, "event_limit", 500, 1, 5000)
+		var detail model.SessionDetail
+		var ok bool
+		if strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("visit")), "current") {
+			detail, ok = s.store.SessionDetailCurrentVisit(id, eventLimit)
+		} else {
+			detail, ok = s.store.SessionDetail(id, eventLimit)
+		}
 		if !ok {
 			http.NotFound(w, r)
 			return

@@ -11,9 +11,72 @@ import (
 
 const sshHighlightMinScore = 50
 
-type sshHighlightBuild struct {
-	session model.SSHSession
-	events  []model.SSHEvent
+type sshHighlightState struct {
+	acceptedAt    time.Time
+	commandEvents int
+	families      map[string]bool
+	signals       map[string]bool
+}
+
+func newSSHHighlightState() *sshHighlightState {
+	return &sshHighlightState{families: make(map[string]bool), signals: make(map[string]bool)}
+}
+
+func (s *Store) updateSSHHighlightStateLocked(e model.SSHEvent) {
+	if s.sshHighlightStates == nil {
+		s.sshHighlightStates = make(map[string]*sshHighlightState)
+	}
+	state := s.sshHighlightStates[e.SessionID]
+	if state == nil {
+		state = newSSHHighlightState()
+		s.sshHighlightStates[e.SessionID] = state
+	}
+	state.apply(e)
+}
+
+func (state *sshHighlightState) apply(e model.SSHEvent) {
+	if e.Type == "auth" && e.AuthAccepted && state.acceptedAt.IsZero() {
+		state.acceptedAt = e.At
+	}
+	if state.acceptedAt.IsZero() || e.At.Before(state.acceptedAt) {
+		return
+	}
+	if e.Type == "command" || e.Type == "exec" {
+		state.commandEvents++
+		if e.CommandFamily != "" {
+			state.families[e.CommandFamily] = true
+		}
+	}
+	fp := strings.ToLower(e.Fingerprint)
+	cmd := strings.ToLower(e.Command)
+	fam := strings.ToLower(e.CommandFamily)
+	if strings.Contains(fp, "privilege") || fam == "privilege" || strings.Contains(cmd, "sudo -l") {
+		state.signals["privilege"] = true
+	}
+	if strings.Contains(fp, "resource-hijack") {
+		state.signals["resource-hijack"] = true
+	}
+	if strings.Contains(fp, "persistence") || fam == "persistence" || (strings.Contains(cmd, "crontab") && !strings.Contains(cmd, "crontab -r")) {
+		state.signals["persistence"] = true
+	}
+	if e.StdinBytes > 0 || strings.Contains(fp, "staged-payload") || strings.Contains(cmd, "cat >") || strings.Contains(cmd, "cat  >") {
+		state.signals["payload-staging"] = true
+	}
+	if strings.Contains(fp, "process-killer") || strings.HasPrefix(strings.TrimSpace(cmd), "kill ") || strings.Contains(cmd, "pkill ") || strings.Contains(cmd, "killall ") {
+		state.signals["process-control"] = true
+	}
+	if strings.Contains(fp, "shell-control-flow") || strings.Contains(cmd, "if ") || strings.Contains(cmd, "for ") {
+		state.signals["control-flow"] = true
+	}
+	if fam == "credentials" || strings.Contains(e.Persona, "credential") || len(e.CanaryTouches) > 0 {
+		state.signals["credentials"] = true
+	}
+	if len(e.CanaryTouches) > 0 {
+		state.signals["canary"] = true
+	}
+	if strings.Contains(fp, "cryptominer") || strings.Contains(cmd, "xmrig") || strings.Contains(cmd, "cnrig") {
+		state.signals["miner"] = true
+	}
 }
 
 func (s *Store) SSHHighlights(limit int, before time.Time, beforeID, rating string) model.SSHHighlightPage {
@@ -31,16 +94,21 @@ func (s *Store) SSHHighlightsRange(limit int, before time.Time, beforeID, rating
 	}
 	rating = strings.ToLower(strings.TrimSpace(rating))
 
-	grouped := make(map[string][]model.SSHEvent)
-	for _, e := range s.sshEvents {
-		grouped[e.SessionID] = append(grouped[e.SessionID], e)
-	}
 	rows := make([]model.SSHHighlight, 0, 64)
 	for id, ss := range s.sshSessions {
 		if !ss.AuthAccepted {
 			continue
 		}
-		h, ok := scoreSSHHighlight(cloneSSHSession(ss), grouped[id])
+		state := s.sshHighlightStates[id]
+		if state == nil {
+			state = newSSHHighlightState()
+			for _, e := range s.sshEvents {
+				if e.SessionID == id {
+					state.apply(e)
+				}
+			}
+		}
+		h, ok := scoreSSHHighlightState(cloneSSHSession(ss), state)
 		if !ok {
 			continue
 		}
@@ -79,57 +147,20 @@ func (s *Store) SSHHighlightsRange(limit int, before time.Time, beforeID, rating
 }
 
 func scoreSSHHighlight(ss model.SSHSession, events []model.SSHEvent) (model.SSHHighlight, bool) {
-	if !ss.AuthAccepted {
+	state := newSSHHighlightState()
+	for _, e := range events {
+		state.apply(e)
+	}
+	return scoreSSHHighlightState(ss, state)
+}
+
+func scoreSSHHighlightState(ss model.SSHSession, state *sshHighlightState) (model.SSHHighlight, bool) {
+	if !ss.AuthAccepted || state == nil || state.acceptedAt.IsZero() {
 		return model.SSHHighlight{}, false
 	}
-	families := map[string]bool{}
-	signals := map[string]bool{}
-	commandEvents := 0
-	acceptedAt := time.Time{}
-	for _, e := range events {
-		if e.Type == "auth" && e.AuthAccepted && acceptedAt.IsZero() {
-			acceptedAt = e.At
-		}
-		if !acceptedAt.IsZero() && e.At.Before(acceptedAt) {
-			continue
-		}
-		if e.Type == "command" || e.Type == "exec" {
-			commandEvents++
-			if e.CommandFamily != "" {
-				families[e.CommandFamily] = true
-			}
-		}
-		fp := strings.ToLower(e.Fingerprint)
-		cmd := strings.ToLower(e.Command)
-		fam := strings.ToLower(e.CommandFamily)
-		if strings.Contains(fp, "privilege") || fam == "privilege" || strings.Contains(cmd, "sudo -l") {
-			signals["privilege"] = true
-		}
-		if strings.Contains(fp, "resource-hijack") {
-			signals["resource-hijack"] = true
-		}
-		if strings.Contains(fp, "persistence") || fam == "persistence" || (strings.Contains(cmd, "crontab") && !strings.Contains(cmd, "crontab -r")) {
-			signals["persistence"] = true
-		}
-		if e.StdinBytes > 0 || strings.Contains(fp, "staged-payload") || strings.Contains(cmd, "cat >") || strings.Contains(cmd, "cat  >") {
-			signals["payload-staging"] = true
-		}
-		if strings.Contains(fp, "process-killer") || strings.HasPrefix(strings.TrimSpace(cmd), "kill ") || strings.Contains(cmd, "pkill ") || strings.Contains(cmd, "killall ") {
-			signals["process-control"] = true
-		}
-		if strings.Contains(fp, "shell-control-flow") || strings.Contains(cmd, "if ") || strings.Contains(cmd, "for ") {
-			signals["control-flow"] = true
-		}
-		if fam == "credentials" || strings.Contains(e.Persona, "credential") || len(e.CanaryTouches) > 0 {
-			signals["credentials"] = true
-		}
-		if len(e.CanaryTouches) > 0 {
-			signals["canary"] = true
-		}
-		if strings.Contains(fp, "cryptominer") || strings.Contains(cmd, "xmrig") || strings.Contains(cmd, "cnrig") {
-			signals["miner"] = true
-		}
-	}
+	families := state.families
+	signals := state.signals
+	commandEvents := state.commandEvents
 	if commandEvents < 2 {
 		return model.SSHHighlight{}, false
 	}

@@ -22,7 +22,7 @@ import (
 	"zentloop/internal/tui"
 )
 
-const version = "0.2.21"
+const version = "0.2.26"
 
 func main() {
 	if filepath.Base(os.Args[0]) == "support" {
@@ -30,7 +30,7 @@ func main() {
 		if dataDir == "" {
 			dataDir = "/data"
 		}
-		if err := support.RunCommand(os.Stdin, os.Stdout, dataDir, version, time.Now()); err != nil {
+		if err := support.RunCommand(os.Stdin, os.Stdout, dataDir, version, time.Time{}); err != nil {
 			fmt.Fprintf(os.Stderr, "Support export failed: %v\n", err)
 			os.Exit(1)
 		}

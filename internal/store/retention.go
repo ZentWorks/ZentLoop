@@ -34,6 +34,7 @@ func (s *Store) pruneExpired(now time.Time) error {
 	cutoff := now.AddDate(0, 0, -s.retentionDays)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.pruneActivityAggregatesLocked(cutoff)
 
 	targets := []struct {
 		name string

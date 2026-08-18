@@ -2,6 +2,7 @@ package support
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -21,6 +22,10 @@ func RunCommand(in io.Reader, out io.Writer, dataDir, version string, now time.T
 	}
 	fmt.Fprintln(out, "Creating support data ... please wait")
 	path, err := CreateArchive(dataDir, version, now)
+	if errors.Is(err, ErrNoNewData) {
+		fmt.Fprintln(out, "No new support data")
+		return nil
+	}
 	if err != nil {
 		return err
 	}

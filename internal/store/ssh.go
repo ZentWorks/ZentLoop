@@ -47,6 +47,8 @@ func (s *Store) loadSSH(path string) error {
 		if json.Unmarshal(sc.Bytes(), &e) != nil {
 			continue
 		}
+		s.countSSHActivityLocked(e)
+		s.updateSSHHighlightStateLocked(e)
 		s.sshEvents = append(s.sshEvents, e)
 		if len(s.sshEvents) > maxRing {
 			s.sshEvents = s.sshEvents[len(s.sshEvents)-maxRing:]
@@ -77,6 +79,8 @@ func (s *Store) AddSSHEvent(e model.SSHEvent) error {
 			return err
 		}
 	}
+	s.countSSHActivityLocked(e)
+	s.updateSSHHighlightStateLocked(e)
 	s.sshEvents = append(s.sshEvents, e)
 	if len(s.sshEvents) > maxRing {
 		s.sshEvents = s.sshEvents[len(s.sshEvents)-maxRing:]
@@ -557,5 +561,6 @@ func (s *Store) pruneSSHSessionsLocked(target int) {
 	remove := len(rows) - target
 	for i := 0; i < remove; i++ {
 		delete(s.sshSessions, rows[i].id)
+		delete(s.sshHighlightStates, rows[i].id)
 	}
 }

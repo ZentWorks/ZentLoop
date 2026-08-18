@@ -186,22 +186,6 @@ func (s *Store) IPIntelligence(ip, version string) (model.IPIntelligence, bool) 
 	targetClients := map[string]struct{}{}
 	httpMinute := map[int64]int{}
 	sshAuthMinute := map[int64]int{}
-	buckets := map[int64]*model.IPActivityBucket{}
-
-	addBucket := func(at time.Time, proto string) {
-		key := at.Truncate(time.Minute).Unix()
-		b := buckets[key]
-		if b == nil {
-			b = &model.IPActivityBucket{At: time.Unix(key, 0)}
-			buckets[key] = b
-		}
-		if proto == "http" {
-			b.HTTP++
-		} else {
-			b.SSH++
-		}
-	}
-
 	for _, ss := range s.sessions {
 		if ss.IP != ip {
 			continue
@@ -215,7 +199,6 @@ func (s *Store) IPIntelligence(ip, version string) (model.IPIntelligence, bool) 
 			continue
 		}
 		out.HTTPEvents = append(out.HTTPEvents, e)
-		addBucket(e.At, "http")
 		httpMinute[e.At.Truncate(time.Minute).Unix()]++
 		if p := strings.TrimSpace(e.Path); p != "" {
 			pathCounts[p]++
@@ -255,7 +238,6 @@ func (s *Store) IPIntelligence(ip, version string) (model.IPIntelligence, bool) 
 			continue
 		}
 		out.SSHEvents = append(out.SSHEvents, e)
-		addBucket(e.At, "ssh")
 		if e.Type == "auth" {
 			sshAuthMinute[e.At.Truncate(time.Minute).Unix()]++
 			if u := strings.TrimSpace(e.Username); u != "" {
@@ -319,14 +301,7 @@ func (s *Store) IPIntelligence(ip, version string) (model.IPIntelligence, bool) 
 	out.TopFamilies = topIPValues(familyCounts, 16)
 	out.TopPaths = topIPValues(pathCounts, 20)
 	out.TopTargets = topIPValues(targetCounts, 20)
-	keys := make([]int64, 0, len(buckets))
-	for key := range buckets {
-		keys = append(keys, key)
-	}
-	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
-	for _, key := range keys {
-		out.Timeline = append(out.Timeline, *buckets[key])
-	}
+	out.Timeline = s.ipDailyTimelineLocked(ip, time.Now())
 
 	reasons := make([]string, 0, len(actor.Fingerprints)+4)
 	if actor.SSHPeakAttemptsPerMin >= 10 {

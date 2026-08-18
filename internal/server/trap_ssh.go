@@ -506,14 +506,19 @@ func (s *TrapSSH) recordSSHAuth(auth sshAuthState, client, user, method string, 
 
 func (s *TrapSSH) recordSSHCommand(base model.SSHEvent, eventType, command string, world *virtualSSHWorld, result virtualSSHResult, actor model.ActorType) {
 	canaries := world.CanaryTouches(command)
+	analysis := analyzeSSHCommand(command, result)
+	applySSHCommandAnalysis(&result, analysis)
 	fingerprint := sshBehaviorFingerprint(result, command)
+	if analysis.Fingerprint != "" {
+		fingerprint = analysis.Fingerprint
+	}
 	if installer := world.sshInstallerSequenceFingerprint(result, command); installer != "" && (fingerprint == "" || result.PayloadStage == "retry" || result.PayloadStage == "executed") {
 		fingerprint = installer
 	}
 	e := model.SSHEvent{
 		ID: newID(6), At: time.Now(), SessionID: base.SessionID, IP: base.IP, Country: base.Country, CountrySource: base.CountrySource,
 		ClientVersion: base.ClientVersion, Username: base.Username, Type: eventType, Command: sanitizeLogText(command, maxSSHLoggedCommandBytes), CommandName: result.CommandName,
-		CommandFamily: result.Family, CWD: world.cwd, Output: sanitizeLogText(result.Output, 2048), Depth: result.Depth, Loop: world.loop,
+		CommandFamily: result.Family, CommandStages: analysis.Stages, CommandIntent: analysis.Intent, CommandTarget: analysis.Target, CWD: world.cwd, Output: sanitizeLogText(result.Output, 2048), Depth: result.Depth, Loop: world.loop,
 		Frustration: world.frustration, Persona: result.Persona, RiskScore: result.Risk, Classification: model.ClassHostile, Actor: actor, Message: result.Message,
 		CanaryTouches: canaries, Fingerprint: fingerprint,
 		StdinBytes: result.StdinBytes, StdinSHA256: result.StdinSHA256, StdinKind: result.StdinKind,

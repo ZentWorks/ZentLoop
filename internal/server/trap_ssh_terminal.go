@@ -428,7 +428,7 @@ var virtualSSHCommands = []string{
 	"gcc", "cc", "git", "go", "grep", "groups", "gunzip", "gzip", "head", "help", "history", "jobs", "disown", "hostname", "hostnamectl", "id", "ifconfig", "iptables",
 	"ip", "journalctl", "kill", "killall", "kubectl", "last", "less", "ln", "logout", "ls", "lsattr", "lsblk", "lscpu",
 	"lsb_release", "lsmod", "lsof", "make", "man", "mariadb", "mysql", "md5sum", "mkdir", "mktemp", "more", "mount", "mv", "nano", "nc", "ncat", "netcat", "nft", "node", "npm",
-	"netstat", "nproc", "nvidia-smi", "nohup", "openssl", "passwd", "perl", "php", "ping", "pkill", "printenv", "printf", "ps", "psql", "readelf", "redis-cli", "rsync",
+	"netstat", "nproc", "nvidia-smi", "nohup", "openssl", "passwd", "perl", "php", "pgrep", "pidof", "ping", "pkill", "printenv", "printf", "ps", "psql", "readelf", "redis-cli", "rsync",
 	"pwd", "python", "python3", "read", "readlink", "realpath", "reset", "rm", "route", "scp", "sftp", "socat", "screen", "sed", "seq", "service", "set", "source",
 	"sha256sum", "sh", "shutdown", "reboot", "poweroff", "halt", "sleep", "sort", "ss", "ssh", "stat", "strace", "strings", "su", "sudo", "sysctl", "systemctl", "systemd-detect-virt", "virt-what", "dmidecode", "stty", "tty", "tail", "tar", "tracepath", "traceroute",
 	"tee", "telnet", "tmux", "top", "touch", "tr", "true", "type", "ulimit", "umask", "uname", "ufw", "uniq", "unzip", "unset", "expr",

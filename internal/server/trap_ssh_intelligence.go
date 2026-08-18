@@ -17,8 +17,14 @@ func sshBehaviorFingerprint(result virtualSSHResult, command string) string {
 		return "ssh:hosting-provider-discovery"
 	case ((strings.Contains(low, "===shell_behavior===") || (strings.Contains(low, "path_err=") && strings.Contains(low, "cmd_err="))) && strings.Contains(low, "xxxxxx")) || environmentFingerprintCollectorScore(low) >= 5:
 		return "ssh:environment-fingerprint-probe"
-	case strings.Contains(low, "nvidia-smi") || strings.Contains(low, "lspci") || strings.Contains(low, "lscpu") || strings.Contains(low, "nproc"):
-		return "ssh:resource-discovery"
+	case strings.Contains(low, "ps ") && strings.Contains(low, "grep") && !strings.Contains(low, "grep -v grep"):
+		return "ssh:process-discovery"
+	case strings.Contains(low, "ps ") && strings.Contains(low, "grep"):
+		return "ssh:payload-presence-check"
+	case strings.Contains(low, "ps ") && (strings.Contains(low, "pcpu") || strings.Contains(low, "%cpu") || strings.Contains(low, "--sort=-pcpu")):
+		return "ssh:resource-recon"
+	case strings.Contains(low, "/proc/cpuinfo") || strings.Contains(low, "nvidia-smi") || strings.Contains(low, "lspci") || strings.Contains(low, "lscpu") || strings.Contains(low, "nproc"):
+		return "ssh:hardware-recon"
 	case looksLikeMinerCleanupSequence(low) && (strings.Contains(low, "chmod 777") || strings.Contains(low, "history -c")):
 		return "ssh:cryptominer-behavior"
 	case result.PayloadStage == "completed" || (result.StdinBytes > 0 && (strings.Contains(low, "cat >") || strings.Contains(low, "cat  >"))):

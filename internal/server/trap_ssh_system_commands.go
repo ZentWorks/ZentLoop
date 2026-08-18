@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"path"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -458,18 +459,48 @@ func virtualActivityWeight(r virtualSSHResult) float64 {
 	}
 }
 
-func (w *virtualSSHWorld) virtualPSCompactOutput() string {
+func (w *virtualSSHWorld) virtualPSCompactOutput(raw string) string {
+	type row struct {
+		pid  int
+		cpu  float64
+		name string
+	}
 	s := w.system.snapshot()
-	lines := []string{"    PID %CPU COMMAND", fmt.Sprintf("    844 %4.1f web", 0.1+s.Load1*0.55), "    901  0.2 postgres", "    932  0.1 redis-server", "   1021  0.0 dockerd", "   1102  0.0 docker-proxy", "   1842  0.1 backup-agent", "    612  0.0 sshd", "      1  0.0 systemd"}
+	rows := []row{
+		{844, 0.1 + s.Load1*0.55, "web"},
+		{901, 0.2, "postgres"},
+		{932, 0.1, "redis-server"},
+		{1021, 0.0, "dockerd"},
+		{1102, 0.0, "docker-proxy"},
+		{1842, 0.1, "backup-agent"},
+		{612, 0.0, "sshd"},
+		{1, 0.0, "systemd"},
+	}
 	for _, p := range w.processes {
-		if p != nil && p.Alive {
-			fields := strings.Fields(p.Command)
-			name := "worker"
-			if len(fields) > 0 {
-				name = path.Base(fields[0])
-			}
-			lines = append(lines, fmt.Sprintf("%7d %4.1f %s", p.PID, p.CPU, name))
+		if p == nil || !p.Alive {
+			continue
 		}
+		fields := strings.Fields(p.Command)
+		name := "worker"
+		if len(fields) > 0 {
+			name = path.Base(fields[0])
+		}
+		rows = append(rows, row{p.PID, p.CPU, name})
+	}
+	low := strings.ToLower(raw)
+	switch {
+	case strings.Contains(low, "--sort=-pcpu") || strings.Contains(low, "--sort=-%cpu"):
+		sort.SliceStable(rows, func(i, j int) bool { return rows[i].cpu > rows[j].cpu })
+	case strings.Contains(low, "--sort=pcpu") || strings.Contains(low, "--sort=%cpu"):
+		sort.SliceStable(rows, func(i, j int) bool { return rows[i].cpu < rows[j].cpu })
+	case strings.Contains(low, "--sort=-pid"):
+		sort.SliceStable(rows, func(i, j int) bool { return rows[i].pid > rows[j].pid })
+	case strings.Contains(low, "--sort=pid"):
+		sort.SliceStable(rows, func(i, j int) bool { return rows[i].pid < rows[j].pid })
+	}
+	lines := []string{"    PID %CPU COMMAND"}
+	for _, item := range rows {
+		lines = append(lines, fmt.Sprintf("%7d %4.1f %s", item.pid, item.cpu, item.name))
 	}
 	return strings.Join(lines, "\n")
 }

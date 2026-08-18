@@ -99,7 +99,7 @@ func (s *TrapServer) handle(w http.ResponseWriter, r *http.Request) {
 	lock := s.stripeFor(fp)
 	lock.Lock()
 	defer lock.Unlock()
-	ss, _ := s.sessionFor(r, fp, client, target)
+	ss, _ := s.sessionFor(r, fp, client, target, arrival)
 	requestMeta := extractRequestMeta(r, requestHost, target, integration)
 	applyRequestMeta(ss, requestMeta)
 	probe, knownProbe := identifyProbe(r.URL.Path)
@@ -197,6 +197,7 @@ func (s *TrapServer) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	now := arrival
 	ss.RequestCount++
+	ss.VisitRequestCount++
 	ss.LastSeen = now
 	ss.LastMethod = r.Method
 	ss.CurrentPath = r.URL.Path
@@ -298,7 +299,7 @@ func (s *TrapServer) handle(w http.ResponseWriter, r *http.Request) {
 		bytesWritten = cw.bytes
 	}
 	s.store.UpsertSession(ss, fp)
-	e := model.Event{ID: newID(6), At: now, SessionID: ss.ID, SessionFirstSeen: ss.FirstSeen, SessionRequests: ss.RequestCount, SessionVisits: ss.VisitCount, SessionVisitStarted: ss.VisitStarted, IP: ss.IP, IPSource: ss.IPSource, Proxy: ss.Proxy, Country: ss.Country, CountrySource: ss.CountrySource, CloudflareRay: ss.CloudflareRay, CloudflareColo: ss.CloudflareColo, Referrer: requestMeta.Referrer, ReferrerHost: requestMeta.ReferrerHost, RequestHost: requestMeta.RequestHost, Target: ss.Target, TargetTrust: ss.TargetTrust, HostSweep: ss.HostSweep, HostSweepHosts: ss.HostSweepHosts, ProbeName: probe.Name, ProbeProduct: probe.Product, ProbeCVE: probe.CVE, KnownProbe: knownProbe, Origin: requestMeta.Origin, AcceptLanguage: requestMeta.AcceptLanguage, HTTPProtocol: requestMeta.HTTPProtocol, Integration: requestMeta.Integration, IntegrationTrust: requestMeta.IntegrationTrust, CatchAll: requestMeta.CatchAll, Method: r.Method, Path: r.URL.Path, Status: status, Bytes: bytesWritten, RiskScore: ss.RiskScore, AutomationScore: ss.AutomationScore, Classification: ss.Classification, Actor: ss.Actor, Confidence: ss.Confidence, AvgIntervalMS: ss.AvgIntervalMS, IntervalVarMS: ss.IntervalVarMS, Persona: ss.Persona, Depth: ss.Depth, Loop: ss.Loop, Frustration: ss.Frustration, Category: ass.Category, Message: label, UserAgent: ss.UserAgent, BotProvider: ss.BotProvider, BotName: ss.BotName, BotClaimed: ss.BotClaimed, BotVerified: ss.BotVerified}
+	e := model.Event{ID: newID(6), At: now, SessionID: ss.ID, SessionFirstSeen: ss.FirstSeen, SessionRequests: ss.RequestCount, SessionVisits: ss.VisitCount, SessionVisitStarted: ss.VisitStarted, SessionVisitRequests: ss.VisitRequestCount, SessionVisitFirstPath: ss.VisitFirstPath, IP: ss.IP, IPSource: ss.IPSource, Proxy: ss.Proxy, Country: ss.Country, CountrySource: ss.CountrySource, CloudflareRay: ss.CloudflareRay, CloudflareColo: ss.CloudflareColo, Referrer: requestMeta.Referrer, ReferrerHost: requestMeta.ReferrerHost, RequestHost: requestMeta.RequestHost, Target: ss.Target, TargetTrust: ss.TargetTrust, HostSweep: ss.HostSweep, HostSweepHosts: ss.HostSweepHosts, ProbeName: probe.Name, ProbeProduct: probe.Product, ProbeCVE: probe.CVE, KnownProbe: knownProbe, Origin: requestMeta.Origin, AcceptLanguage: requestMeta.AcceptLanguage, HTTPProtocol: requestMeta.HTTPProtocol, Integration: requestMeta.Integration, IntegrationTrust: requestMeta.IntegrationTrust, CatchAll: requestMeta.CatchAll, Method: r.Method, Path: r.URL.Path, Status: status, Bytes: bytesWritten, RiskScore: ss.RiskScore, AutomationScore: ss.AutomationScore, Classification: ss.Classification, Actor: ss.Actor, Confidence: ss.Confidence, AvgIntervalMS: ss.AvgIntervalMS, IntervalVarMS: ss.IntervalVarMS, Persona: ss.Persona, Depth: ss.Depth, Loop: ss.Loop, Frustration: ss.Frustration, Category: ass.Category, Message: label, UserAgent: ss.UserAgent, BotProvider: ss.BotProvider, BotName: ss.BotName, BotClaimed: ss.BotClaimed, BotVerified: ss.BotVerified}
 	if err := s.store.AddEvent(e); err != nil {
 		log.Printf("event store: %v", err)
 	}
@@ -613,8 +614,10 @@ type clientMeta struct {
 	CloudflareColo string
 }
 
-func (s *TrapServer) sessionFor(r *http.Request, fp string, client clientMeta, target string) (*model.Session, bool) {
-	now := time.Now()
+func (s *TrapServer) sessionFor(r *http.Request, fp string, client clientMeta, target string, now time.Time) (*model.Session, bool) {
+	if now.IsZero() {
+		now = time.Now()
+	}
 	resumeWindow := time.Duration(effectiveResumeHours(s.cfg)) * time.Hour
 	if c, err := r.Cookie("zl_sid"); err == nil {
 		if ss, ok := s.store.GetSession(c.Value); ok && now.Sub(ss.LastSeen) <= resumeWindow && (ss.Target == "" || strings.EqualFold(ss.Target, target)) {
@@ -622,30 +625,35 @@ func (s *TrapServer) sessionFor(r *http.Request, fp string, client clientMeta, t
 			// a deployment is switched to Cloudflare proxy mode). Keep the latest
 			// trustworthy values on the existing session.
 			applyClientMeta(ss, client)
-			prepareReturnVisit(ss, now, time.Duration(effectiveLiveMinutes(s.cfg))*time.Minute)
+			prepareReturnVisit(ss, now, time.Duration(effectiveLiveMinutes(s.cfg))*time.Minute, r.URL.Path)
 			return ss, false
 		}
 	}
 	if ss, ok := s.store.GetSessionByFingerprint(fp); ok && now.Sub(ss.LastSeen) <= resumeWindow {
 		applyClientMeta(ss, client)
-		prepareReturnVisit(ss, now, time.Duration(effectiveLiveMinutes(s.cfg))*time.Minute)
+		prepareReturnVisit(ss, now, time.Duration(effectiveLiveMinutes(s.cfg))*time.Minute, r.URL.Path)
 		return ss, false
 	}
 	id := newID(16)
-	ss := &model.Session{ID: id, IP: client.IP, IPSource: client.IPSource, Proxy: client.Proxy, Country: client.Country, CountrySource: client.CountrySource, CloudflareRay: client.CloudflareRay, CloudflareColo: client.CloudflareColo, Target: target, FirstPath: r.URL.Path, UserAgent: r.UserAgent(), FirstSeen: now, LastSeen: now, VisitCount: 1, VisitStarted: now, Classification: model.ClassBenign, Actor: model.ActorUnknown, Confidence: "low"}
+	ss := &model.Session{ID: id, IP: client.IP, IPSource: client.IPSource, Proxy: client.Proxy, Country: client.Country, CountrySource: client.CountrySource, CloudflareRay: client.CloudflareRay, CloudflareColo: client.CloudflareColo, Target: target, FirstPath: r.URL.Path, VisitFirstPath: r.URL.Path, UserAgent: r.UserAgent(), FirstSeen: now, LastSeen: now, VisitCount: 1, VisitStarted: now, Classification: model.ClassBenign, Actor: model.ActorUnknown, Confidence: "low"}
 	return ss, true
 }
 
-func prepareReturnVisit(ss *model.Session, now time.Time, inactiveAfter time.Duration) {
+func prepareReturnVisit(ss *model.Session, now time.Time, inactiveAfter time.Duration, path string) {
 	if ss.VisitCount == 0 {
 		ss.VisitCount = 1
 	}
 	if ss.VisitStarted.IsZero() {
 		ss.VisitStarted = ss.FirstSeen
 	}
+	if ss.VisitFirstPath == "" {
+		ss.VisitFirstPath = ss.FirstPath
+	}
 	if !ss.LastSeen.IsZero() && now.Sub(ss.LastSeen) > inactiveAfter {
 		ss.VisitCount++
 		ss.VisitStarted = now
+		ss.VisitRequestCount = 0
+		ss.VisitFirstPath = path
 		// Long pauses are not useful for human-vs-automation timing. Keep the
 		// long-lived deception state, but start timing this visit from scratch.
 		ss.RecentTimes = nil

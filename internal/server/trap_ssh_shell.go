@@ -1400,7 +1400,7 @@ func (w *virtualSSHWorld) executeOneDepth(raw, input string, aliasDepth int) vir
 	case "ps":
 		r := base("recon", 4, 88, "system-recon", "process discovery")
 		if strings.Contains(raw, "-eo") && strings.Contains(raw, "pid") && strings.Contains(raw, "pcpu") {
-			r.Output = w.virtualPSCompactOutput()
+			r.Output = w.virtualPSCompactOutput(raw)
 		} else {
 			r.Output = w.virtualPSOutput()
 		}

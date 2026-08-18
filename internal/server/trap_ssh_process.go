@@ -344,3 +344,29 @@ func (w *virtualSSHWorld) virtualProcessCount() int {
 	}
 	return n
 }
+
+func (w *virtualSSHWorld) virtualProcessPIDsByName(name string) []int {
+	name = path.Base(strings.TrimSpace(name))
+	if name == "" {
+		return nil
+	}
+	static := map[string][]int{
+		"systemd": {1}, "init": {1}, "sshd": {612}, "web": {844}, "postgres": {901},
+		"redis-server": {932}, "dockerd": {1021}, "docker-proxy": {1102}, "backup-agent": {1842},
+	}
+	out := append([]int(nil), static[name]...)
+	for pid, p := range w.processes {
+		if p == nil || !p.Alive {
+			continue
+		}
+		fields := strings.Fields(p.Command)
+		if len(fields) == 0 {
+			continue
+		}
+		if path.Base(fields[0]) == name {
+			out = append(out, pid)
+		}
+	}
+	sort.Ints(out)
+	return out
+}
