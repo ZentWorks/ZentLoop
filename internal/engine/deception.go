@@ -15,9 +15,14 @@ import (
 	"zentloop/internal/model"
 )
 
-type Deception struct{ cfg config.Config }
+type Deception struct {
+	cfg   config.Config
+	story *webStoryState
+}
 
-func NewDeception(cfg config.Config) *Deception { return &Deception{cfg: cfg} }
+func NewDeception(cfg config.Config) *Deception {
+	return &Deception{cfg: cfg, story: newWebStoryState()}
+}
 
 type Response struct {
 	Status      int
@@ -56,8 +61,7 @@ func (d *Deception) Build(r *http.Request, ss *model.Session) Response {
 	}
 
 	if family, ok := buildFamilyDeception(r, ss, a, b); ok {
-		family.Delay = delay
-		return family
+		return d.finalizeWebStoryResponse(r, ss, family, delay)
 	}
 
 	switch {
@@ -294,7 +298,7 @@ func (d *Deception) Build(r *http.Request, ss *model.Session) Response {
 		resp.Body = []byte("upstream temporarily unavailable\n")
 		resp.Label = "transient-upstream-error"
 	}
-	return resp
+	return d.finalizeWebStoryResponse(r, ss, resp, delay)
 }
 
 func isSyntheticExistenceProbe(p string) bool {

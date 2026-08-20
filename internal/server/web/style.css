@@ -132,3 +132,24 @@ html,body{overflow-x:hidden}
 }
 
 footer .footer-version{display:flex;align-items:center;gap:8px}.update-badge{display:inline-flex;align-items:center;padding:3px 7px;border:1px solid rgba(79,209,139,.42);border-radius:4px;color:var(--ok);font:8px ui-monospace,SFMono-Regular,Consolas,monospace;letter-spacing:.55px;text-decoration:none;text-transform:uppercase}.update-badge:hover{color:#b9f4d2;border-color:rgba(79,209,139,.72);background:rgba(79,209,139,.06)}.update-badge[hidden]{display:none}@media(max-width:560px){footer .footer-version{display:flex;flex-wrap:wrap;gap:7px}}
+
+/* Verified attack traces: intentionally compact and evidence-first. */
+.trace-drawer{width:min(560px,94vw)}
+.trace-note{margin:0 0 14px;color:var(--muted);font-size:12px}
+.attack-trace-list{display:grid;gap:14px}
+.trace-chain{border:1px solid var(--line);border-radius:12px;padding:12px;background:rgba(255,255,255,.02)}
+.trace-chain header{display:flex;gap:10px;align-items:center;margin-bottom:5px}
+.trace-chain header b{font-size:11px;letter-spacing:.08em}
+.trace-chain header span{color:var(--muted);font-size:12px}
+.trace-chain>p{margin:0 0 10px;color:var(--muted);font-size:12px;line-height:1.45}
+.trace-step{display:grid;gap:3px;padding:9px 10px;border:1px solid var(--line);border-radius:9px}
+.trace-step small{color:var(--muted);font-size:10px;letter-spacing:.04em}
+.trace-step b{font-size:12px;overflow-wrap:anywhere}
+.trace-step span{color:var(--muted);font-size:11px;overflow-wrap:anywhere}
+.trace-arrow{text-align:center;color:var(--muted);line-height:18px;font-weight:700}
+.cross-observations .compact-action{white-space:nowrap}
+@media(max-width:720px){
+  .cross-observations th:nth-child(3),.cross-observations td:nth-child(3),
+  .cross-observations th:nth-child(6),.cross-observations td:nth-child(6){display:none}
+  .trace-drawer{width:100vw}
+}

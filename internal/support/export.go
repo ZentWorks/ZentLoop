@@ -33,6 +33,8 @@ type Manifest struct {
 	SourceIPsAnonymized     bool       `json:"source_ips_anonymized"`
 	TargetsAnonymized       bool       `json:"targets_anonymized"`
 	ReferencedIOCsPreserved bool       `json:"referenced_iocs_preserved"`
+	VerifiedAttackTraces    int        `json:"verified_attack_traces"`
+	CrossProtocolTraces     int        `json:"cross_protocol_traces"`
 }
 
 type supportState struct {
@@ -413,11 +415,25 @@ func anonymizeIntel(in model.IntelSignal, a *anonymizer) model.IntelSignal {
 	return in
 }
 
+func anonymizeAttackTrace(in model.AttackTrace, a *anonymizer) model.AttackTrace {
+	in.IP = a.IP(in.IP)
+	return in
+}
+
+func anonymizeAttackTraces(in []model.AttackTrace, a *anonymizer) []model.AttackTrace {
+	out := make([]model.AttackTrace, len(in))
+	for i := range in {
+		out[i] = anonymizeAttackTrace(in[i], a)
+	}
+	return out
+}
+
 func anonymizeWebExport(in model.WebSessionExport, a *anonymizer) model.WebSessionExport {
 	in.Session = anonymizeWebSession(in.Session, a)
 	for i := range in.Events {
 		in.Events[i] = anonymizeHTTPEvent(in.Events[i], a)
 	}
+	in.AttackTrace = anonymizeAttackTraces(in.AttackTrace, a)
 	return in
 }
 
@@ -433,6 +449,7 @@ func anonymizeSSHExport(in model.SSHSessionExport, a *anonymizer) model.SSHSessi
 	for i := range in.Intel {
 		in.Intel[i] = anonymizeIntel(in.Intel[i], a)
 	}
+	in.AttackTrace = anonymizeAttackTraces(in.AttackTrace, a)
 	return in
 }
 
@@ -457,6 +474,7 @@ func anonymizeIPIntelligence(in model.IPIntelligence, a *anonymizer) model.IPInt
 	for i := range in.Intelligence {
 		in.Intelligence[i] = anonymizeIntel(in.Intelligence[i], a)
 	}
+	in.AttackTrace = anonymizeAttackTraces(in.AttackTrace, a)
 	for i := range in.TopTargets {
 		if strings.TrimSpace(in.TopTargets[i].Value) != "" {
 			in.TopTargets[i].Value = a.Target(in.TopTargets[i].Value)
@@ -600,6 +618,17 @@ func CreateArchive(dataDir, version string, now time.Time) (string, error) {
 		copyFrom := from
 		manifestFrom = &copyFrom
 	}
+	traceIDs := map[string]bool{}
+	crossTraceIDs := map[string]bool{}
+	countTraces := func(rows []model.AttackTrace) {
+		for _, trace := range rows {
+			traceIDs[trace.ID] = true
+			if trace.CrossProtocol {
+				crossTraceIDs[trace.ID] = true
+			}
+		}
+	}
+
 	manifest := Manifest{
 		ExportedAt:              until,
 		Version:                 version,
@@ -614,6 +643,7 @@ func CreateArchive(dataDir, version string, now time.Time) (string, error) {
 
 	for _, intel := range selectedIntel {
 		intel.ExportedAt = until
+		countTraces(intel.AttackTrace)
 		intel = anonymizeIPIntelligence(intel, anon)
 		name := "ip-intelligence/" + safeName(intel.IP) + ".json"
 		if err := writeJSONEntry(zw, name, intel); err != nil {
@@ -630,6 +660,7 @@ func CreateArchive(dataDir, version string, now time.Time) (string, error) {
 			continue
 		}
 		ex.ExportedAt = until
+		countTraces(ex.AttackTrace)
 		ex = anonymizeSSHExport(ex, anon)
 		name := "ssh/zentloop-ssh-" + safeName(ss.ID) + ".json"
 		if err := writeJSONEntry(zw, name, ex); err != nil {
@@ -646,6 +677,7 @@ func CreateArchive(dataDir, version string, now time.Time) (string, error) {
 			continue
 		}
 		ex.ExportedAt = until
+		countTraces(ex.AttackTrace)
 		ex = anonymizeWebExport(ex, anon)
 		name := "web/zentloop-web-" + safeName(ss.ID) + ".json"
 		if err := writeJSONEntry(zw, name, ex); err != nil {
@@ -661,6 +693,8 @@ func CreateArchive(dataDir, version string, now time.Time) (string, error) {
 		_ = tmp.Close()
 		return "", ErrNoNewData
 	}
+	manifest.VerifiedAttackTraces = len(traceIDs)
+	manifest.CrossProtocolTraces = len(crossTraceIDs)
 	if err := writeJSONEntry(zw, "manifest.json", manifest); err != nil {
 		_ = zw.Close()
 		_ = tmp.Close()

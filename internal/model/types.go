@@ -19,58 +19,61 @@ const (
 )
 
 type Session struct {
-	ID                string         `json:"id"`
-	IP                string         `json:"ip"`
-	IPSource          string         `json:"ip_source,omitempty"`
-	Proxy             string         `json:"proxy,omitempty"`
-	Country           string         `json:"country,omitempty"`
-	CountrySource     string         `json:"country_source,omitempty"`
-	CloudflareRay     string         `json:"cloudflare_ray,omitempty"`
-	CloudflareColo    string         `json:"cloudflare_colo,omitempty"`
-	FirstPath         string         `json:"first_path,omitempty"`
-	FirstReferrer     string         `json:"first_referrer,omitempty"`
-	LastReferrer      string         `json:"last_referrer,omitempty"`
-	ReferrerHost      string         `json:"referrer_host,omitempty"`
-	RequestHost       string         `json:"request_host,omitempty"`
-	Target            string         `json:"target,omitempty"`
-	TargetTrust       string         `json:"target_trust,omitempty"`
-	HostSweep         bool           `json:"host_sweep,omitempty"`
-	HostSweepHosts    int            `json:"host_sweep_hosts,omitempty"`
-	Origin            string         `json:"origin,omitempty"`
-	AcceptLanguage    string         `json:"accept_language,omitempty"`
-	HTTPProtocol      string         `json:"http_protocol,omitempty"`
-	Integration       string         `json:"integration,omitempty"`
-	IntegrationTrust  string         `json:"integration_trust,omitempty"`
-	CatchAll          bool           `json:"catch_all,omitempty"`
-	UserAgent         string         `json:"user_agent"`
-	BotProvider       string         `json:"bot_provider,omitempty"`
-	BotName           string         `json:"bot_name,omitempty"`
-	BotVerified       bool           `json:"bot_verified,omitempty"`
-	BotClaimed        bool           `json:"bot_claimed,omitempty"`
-	FirstSeen         time.Time      `json:"first_seen"`
-	LastSeen          time.Time      `json:"last_seen"`
-	RequestCount      int            `json:"request_count"`
-	LoginAttempts     int            `json:"login_attempts,omitempty"`
-	VisitCount        int            `json:"visit_count"`
-	VisitStarted      time.Time      `json:"visit_started"`
-	VisitRequestCount int            `json:"visit_request_count"`
-	VisitFirstPath    string         `json:"visit_first_path,omitempty"`
-	RiskScore         int            `json:"risk_score"`
-	AutomationScore   int            `json:"automation_score"`
-	Classification    Classification `json:"classification"`
-	Actor             ActorType      `json:"actor"`
-	Confidence        string         `json:"confidence"`
-	AvgIntervalMS     int64          `json:"avg_interval_ms"`
-	IntervalVarMS     int64          `json:"interval_variance_ms"`
-	Depth             int            `json:"depth"`
-	Loop              int            `json:"loop"`
-	Frustration       int            `json:"frustration"`
-	CurrentPath       string         `json:"current_path"`
-	Persona           string         `json:"persona"`
-	LastStatus        int            `json:"last_status"`
-	LastMethod        string         `json:"last_method"`
-	RecentTimes       []time.Time    `json:"-"`
-	Journey           []JourneyStep  `json:"journey"`
+	ID                 string         `json:"id"`
+	IP                 string         `json:"ip"`
+	IPSource           string         `json:"ip_source,omitempty"`
+	Proxy              string         `json:"proxy,omitempty"`
+	Country            string         `json:"country,omitempty"`
+	CountrySource      string         `json:"country_source,omitempty"`
+	CloudflareRay      string         `json:"cloudflare_ray,omitempty"`
+	CloudflareColo     string         `json:"cloudflare_colo,omitempty"`
+	FirstPath          string         `json:"first_path,omitempty"`
+	FirstReferrer      string         `json:"first_referrer,omitempty"`
+	LastReferrer       string         `json:"last_referrer,omitempty"`
+	ReferrerHost       string         `json:"referrer_host,omitempty"`
+	RequestHost        string         `json:"request_host,omitempty"`
+	Target             string         `json:"target,omitempty"`
+	TargetTrust        string         `json:"target_trust,omitempty"`
+	HostSweep          bool           `json:"host_sweep,omitempty"`
+	HostSweepHosts     int            `json:"host_sweep_hosts,omitempty"`
+	Origin             string         `json:"origin,omitempty"`
+	AcceptLanguage     string         `json:"accept_language,omitempty"`
+	HTTPProtocol       string         `json:"http_protocol,omitempty"`
+	Integration        string         `json:"integration,omitempty"`
+	IntegrationTrust   string         `json:"integration_trust,omitempty"`
+	CatchAll           bool           `json:"catch_all,omitempty"`
+	UserAgent          string         `json:"user_agent"`
+	BotProvider        string         `json:"bot_provider,omitempty"`
+	BotName            string         `json:"bot_name,omitempty"`
+	BotVerified        bool           `json:"bot_verified,omitempty"`
+	BotClaimed         bool           `json:"bot_claimed,omitempty"`
+	FirstSeen          time.Time      `json:"first_seen"`
+	LastSeen           time.Time      `json:"last_seen"`
+	RequestCount       int            `json:"request_count"`
+	LoginAttempts      int            `json:"login_attempts,omitempty"`
+	VisitCount         int            `json:"visit_count"`
+	VisitStarted       time.Time      `json:"visit_started"`
+	VisitRequestCount  int            `json:"visit_request_count"`
+	VisitFirstPath     string         `json:"visit_first_path,omitempty"`
+	RiskScore          int            `json:"risk_score"`
+	AutomationScore    int            `json:"automation_score"`
+	Classification     Classification `json:"classification"`
+	Actor              ActorType      `json:"actor"`
+	Confidence         string         `json:"confidence"`
+	AvgIntervalMS      int64          `json:"avg_interval_ms"`
+	IntervalVarMS      int64          `json:"interval_variance_ms"`
+	Depth              int            `json:"depth"`
+	Loop               int            `json:"loop"`
+	Frustration        int            `json:"frustration"`
+	CurrentPath        string         `json:"current_path"`
+	Persona            string         `json:"persona"`
+	WebStory           string         `json:"web_story,omitempty"`
+	WebStoryConfidence string         `json:"web_story_confidence,omitempty"`
+	WebStoryLocked     bool           `json:"web_story_locked,omitempty"`
+	LastStatus         int            `json:"last_status"`
+	LastMethod         string         `json:"last_method"`
+	RecentTimes        []time.Time    `json:"-"`
+	Journey            []JourneyStep  `json:"journey"`
 }
 
 type JourneyStep struct {
@@ -80,15 +83,17 @@ type JourneyStep struct {
 }
 
 type SessionDetail struct {
-	Session Session `json:"session"`
-	Events  []Event `json:"events"`
+	Session     Session       `json:"session"`
+	Events      []Event       `json:"events"`
+	AttackTrace []AttackTrace `json:"attack_trace"`
 }
 
 type WebSessionExport struct {
-	ExportedAt time.Time `json:"exported_at"`
-	Version    string    `json:"version"`
-	Session    Session   `json:"session"`
-	Events     []Event   `json:"events"`
+	ExportedAt  time.Time     `json:"exported_at"`
+	Version     string        `json:"version"`
+	Session     Session       `json:"session"`
+	Events      []Event       `json:"events"`
+	AttackTrace []AttackTrace `json:"attack_trace"`
 }
 
 type Event struct {
@@ -137,6 +142,9 @@ type Event struct {
 	AvgIntervalMS         int64          `json:"avg_interval_ms,omitempty"`
 	IntervalVarMS         int64          `json:"interval_variance_ms,omitempty"`
 	Persona               string         `json:"persona,omitempty"`
+	WebStory              string         `json:"web_story,omitempty"`
+	WebStoryConfidence    string         `json:"web_story_confidence,omitempty"`
+	WebStoryLocked        bool           `json:"web_story_locked,omitempty"`
 	Depth                 int            `json:"depth"`
 	Loop                  int            `json:"loop"`
 	Frustration           int            `json:"frustration"`
@@ -353,6 +361,41 @@ type IPTopValue struct {
 	Count int64  `json:"count"`
 }
 
+type AttackTraceStep struct {
+	At        time.Time `json:"at"`
+	Protocol  string    `json:"protocol"`
+	SessionID string    `json:"session_id,omitempty"`
+	EventID   string    `json:"event_id,omitempty"`
+	Kind      string    `json:"kind"`
+	Path      string    `json:"path,omitempty"`
+	Command   string    `json:"command,omitempty"`
+	Username  string    `json:"username,omitempty"`
+	Summary   string    `json:"summary"`
+}
+
+type AttackTrace struct {
+	ID            string            `json:"id"`
+	IP            string            `json:"ip"`
+	Confidence    string            `json:"confidence"`
+	Relation      string            `json:"relation"`
+	Evidence      string            `json:"evidence"`
+	CrossProtocol bool              `json:"cross_protocol,omitempty"`
+	FirstSeen     time.Time         `json:"first_seen"`
+	LastSeen      time.Time         `json:"last_seen"`
+	Steps         []AttackTraceStep `json:"steps"`
+}
+
+type CrossProtocolObservation struct {
+	IP         string       `json:"ip"`
+	Country    string       `json:"country,omitempty"`
+	RiskScore  int          `json:"risk_score"`
+	LastSeen   time.Time    `json:"last_seen"`
+	HTTP       int64        `json:"http_requests"`
+	SSH        int64        `json:"ssh_connections"`
+	TraceCount int          `json:"verified_trace_count"`
+	Trace      *AttackTrace `json:"latest_trace,omitempty"`
+}
+
 type IPCampaignPeer struct {
 	IP         string    `json:"ip"`
 	Country    string    `json:"country,omitempty"`
@@ -403,6 +446,7 @@ type IPIntelligence struct {
 	TopPaths      []IPTopValue          `json:"top_paths"`
 	TopTargets    []IPTopValue          `json:"top_targets"`
 	CampaignPeers []IPCampaignPeer      `json:"possible_campaign_peers"`
+	AttackTrace   []AttackTrace         `json:"attack_trace"`
 	HTTPSessions  []Session             `json:"http_sessions"`
 	HTTPEvents    []Event               `json:"http_events"`
 	SSHSessions   []SSHSession          `json:"ssh_sessions"`
@@ -564,8 +608,9 @@ type SSHOverview struct {
 }
 
 type SSHSessionDetail struct {
-	Session SSHSession `json:"session"`
-	Events  []SSHEvent `json:"events"`
+	Session     SSHSession    `json:"session"`
+	Events      []SSHEvent    `json:"events"`
+	AttackTrace []AttackTrace `json:"attack_trace"`
 }
 
 type SSHLiveFeedItem struct {
@@ -599,12 +644,13 @@ type SSHHighlightPage struct {
 }
 
 type SSHSessionExport struct {
-	ExportedAt time.Time     `json:"exported_at"`
-	Version    string        `json:"version"`
-	Session    SSHSession    `json:"session"`
-	Events     []SSHEvent    `json:"events"`
-	Actor      *ActorProfile `json:"actor,omitempty"`
-	Intel      []IntelSignal `json:"intel,omitempty"`
+	ExportedAt  time.Time     `json:"exported_at"`
+	Version     string        `json:"version"`
+	Session     SSHSession    `json:"session"`
+	Events      []SSHEvent    `json:"events"`
+	Actor       *ActorProfile `json:"actor,omitempty"`
+	Intel       []IntelSignal `json:"intel,omitempty"`
+	AttackTrace []AttackTrace `json:"attack_trace"`
 }
 
 type ScanBurst struct {

@@ -64,32 +64,64 @@ func (s *Store) campaignPeersLocked(ip string, target *model.ActorProfile, targe
 	}
 	targetFP := stringSet(target.Fingerprints)
 	rows := make([]model.IPCampaignPeer, 0, 8)
+
+	// Build SSH evidence once for this intelligence request. The previous form
+	// rescanned every retained SSH session once per candidate actor.
+	usersByIP := make(map[string]map[string]struct{})
+	clientsByIP := make(map[string]map[string]struct{})
+	for _, ss := range s.sshSessions {
+		if ss.IP == "" {
+			continue
+		}
+		if u := strings.TrimSpace(ss.Username); u != "" {
+			if usersByIP[ss.IP] == nil {
+				usersByIP[ss.IP] = map[string]struct{}{}
+			}
+			usersByIP[ss.IP][u] = struct{}{}
+		}
+		if c := strings.TrimSpace(ss.ClientVersion); c != "" {
+			if clientsByIP[ss.IP] == nil {
+				clientsByIP[ss.IP] = map[string]struct{}{}
+			}
+			clientsByIP[ss.IP][normalizeSSHClient(c)] = struct{}{}
+		}
+	}
+
 	for _, peer := range s.actors {
 		if peer == nil || peer.IP == ip || peer.IP == "" {
 			continue
 		}
+		// A clearly human/manual actor and a clearly automated actor are not
+		// promoted into the same campaign by weak infrastructure similarities.
+		// This is negative evidence, not just absence of positive evidence.
+		if (target.Actor == model.ActorHuman && peer.Actor == model.ActorAutomated) || (target.Actor == model.ActorAutomated && peer.Actor == model.ActorHuman) {
+			continue
+		}
 		score := 0
-		reasons := make([]string, 0, 6)
+		strongSignals := 0
+		strongReasons := make([]string, 0, 5)
+		contextReasons := make([]string, 0, 2)
 		if target.Country != "" && peer.Country == target.Country {
 			score += 8
-			reasons = append(reasons, "same country")
+			contextReasons = append(contextReasons, "same country")
 		}
 		if target.LastSeen.Sub(peer.LastSeen) <= 15*time.Minute && peer.LastSeen.Sub(target.LastSeen) <= 15*time.Minute {
 			score += 15
-			reasons = append(reasons, "overlapping activity window")
+			contextReasons = append(contextReasons, "overlapping activity window")
 		} else if target.LastSeen.Sub(peer.LastSeen) <= time.Hour && peer.LastSeen.Sub(target.LastSeen) <= time.Hour {
 			score += 7
-			reasons = append(reasons, "nearby activity window")
+			contextReasons = append(contextReasons, "nearby activity window")
 		}
 		peerFP := stringSet(peer.Fingerprints)
 		sharedFP := setIntersectionSize(targetFP, peerFP)
-		if sharedFP > 0 {
+		if sharedFP >= 2 {
 			bonus := sharedFP * 10
 			if bonus > 30 {
 				bonus = 30
 			}
 			score += bonus
-			reasons = append(reasons, "shared behavior fingerprints")
+			strongSignals++
+			strongReasons = append(strongReasons, "multiple shared behavior fingerprints")
 		}
 		if target.SSHMedianRevisitSeconds > 0 && peer.SSHMedianRevisitSeconds > 0 {
 			diff := target.SSHMedianRevisitSeconds - peer.SSHMedianRevisitSeconds
@@ -102,43 +134,38 @@ func (s *Store) campaignPeersLocked(ip string, target *model.ActorProfile, targe
 			}
 			if diff <= tolerance {
 				score += 15
-				reasons = append(reasons, "similar SSH revisit cadence")
+				strongSignals++
+				strongReasons = append(strongReasons, "similar SSH revisit cadence")
 			}
 		}
-		peerUsers := map[string]struct{}{}
-		peerClients := map[string]struct{}{}
-		for _, ss := range s.sshSessions {
-			if ss.IP != peer.IP {
-				continue
-			}
-			if u := strings.TrimSpace(ss.Username); u != "" {
-				peerUsers[u] = struct{}{}
-			}
-			if c := strings.TrimSpace(ss.ClientVersion); c != "" {
-				peerClients[normalizeSSHClient(c)] = struct{}{}
-			}
-		}
+		peerUsers := usersByIP[peer.IP]
+		peerClients := clientsByIP[peer.IP]
 		sharedUsers := setIntersectionSize(targetUsers, peerUsers)
 		if sharedUsers >= 3 {
 			score += 15
-			reasons = append(reasons, "shared username spray set")
+			strongSignals++
+			strongReasons = append(strongReasons, "shared username spray set")
 		} else if sharedUsers > 0 {
 			score += 6
-			reasons = append(reasons, "shared usernames")
+			contextReasons = append(contextReasons, "shared usernames")
 		}
 		if setIntersectionSize(targetClients, peerClients) > 0 {
 			score += 16
-			reasons = append(reasons, "same SSH client family")
+			strongSignals++
+			strongReasons = append(strongReasons, "same SSH client family")
 		}
 		if target.Actor == model.ActorAutomated && peer.Actor == model.ActorAutomated {
 			score += 5
 		}
-		if score < 45 {
+		// Country, timing and small username overlap are context only. Require at
+		// least two independent behavioral signals before surfacing a peer.
+		if score < 55 || strongSignals < 2 {
 			continue
 		}
 		if score > 99 {
 			score = 99
 		}
+		reasons := append(strongReasons, contextReasons...)
 		rows = append(rows, model.IPCampaignPeer{IP: peer.IP, Country: peer.Country, Confidence: score, RiskScore: peer.RiskScore, LastSeen: peer.LastSeen, Reasons: reasons})
 	}
 	sort.Slice(rows, func(i, j int) bool {
@@ -321,6 +348,7 @@ func (s *Store) IPIntelligence(ip, version string) (model.IPIntelligence, bool) 
 	}
 	out.Summary.Reasons = reasons
 	out.CampaignPeers = s.campaignPeersLocked(ip, actor, targetUsers, targetClients)
+	out.AttackTrace = s.attackTracesLocked(ip)
 
 	sort.Slice(out.HTTPSessions, func(i, j int) bool { return out.HTTPSessions[i].FirstSeen.Before(out.HTTPSessions[j].FirstSeen) })
 	sort.Slice(out.SSHSessions, func(i, j int) bool { return out.SSHSessions[i].FirstSeen.Before(out.SSHSessions[j].FirstSeen) })

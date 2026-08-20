@@ -20,26 +20,12 @@ import (
 // does not make every scanner dictionary entry exist.
 func buildObservedWebDeception(r *http.Request, ss *model.Session, a, b string) (Response, bool) {
 	p := canonicalObservedWebPath(r.URL.Path)
-	story := currentWebStory(ss)
 	canaries := lures.CanaryLabels(ss.IP)
 
-	if story != "" && story != "wordpress" && isWordPressStoryPath(p) {
-		return observedStoryMiss(ss, "wordpress"), true
-	}
-	if story != "" && story != "rails" && isRailsStoryPath(p) {
-		return observedStoryMiss(ss, "rails"), true
-	}
-
 	if isObservedWordPressREST(p) {
-		if story != "" && story != "wordpress" {
-			return observedStoryMiss(ss, "wordpress"), true
-		}
 		return buildObservedWordPressREST(r, p, ss, a, b), true
 	}
 	if isObservedRailsArtifact(p) {
-		if story != "" && story != "rails" {
-			return observedStoryMiss(ss, "rails"), true
-		}
 		return buildObservedRailsArtifact(p, ss, a, b, canaries), true
 	}
 	if isObservedSCMArtifact(p) {
@@ -61,12 +47,9 @@ func buildObservedWebDeception(r *http.Request, ss *model.Session, a, b string) 
 		return buildObservedSecretArtifact(p, ss, a, canaries), true
 	}
 	if isObservedPHPBackdoor(p) {
-		if story != "" && story != "php" && story != "wordpress" {
-			return observedStoryMiss(ss, "php"), true
-		}
 		// A first arbitrary backdoor probe only hits one deterministic path in five.
 		// Once the actor has actually found a PHP surface, keep that story coherent.
-		if story == "" && !deterministicObservedReveal(ss.ID, p, 5) {
+		if !deterministicObservedReveal(storyTarget(ss), p, 5) {
 			return Response{Status: http.StatusNotFound, ContentType: "text/html; charset=utf-8", Label: "adaptive-php-backdoor-miss", Depth: max(ss.Depth, 1), Body: []byte("<!doctype html><title>404 Not Found</title><h1>Not Found</h1>")}, true
 		}
 		return buildPHPWebshellFamily(p, ss, a, b), true
@@ -91,32 +74,6 @@ func canonicalObservedWebPath(raw string) string {
 		return "/"
 	}
 	return p
-}
-
-func currentWebStory(ss *model.Session) string {
-	if ss == nil {
-		return ""
-	}
-	for i := len(ss.Journey) - 1; i >= 0; i-- {
-		label := strings.ToLower(ss.Journey[i].Label)
-		if strings.HasPrefix(label, "story-mismatch-") || strings.HasSuffix(label, "-miss") {
-			continue
-		}
-		p := canonicalObservedWebPath(ss.Journey[i].Path)
-		switch {
-		case strings.Contains(label, "wordpress") || isObservedWordPressREST(p) || strings.Contains(p, "/wp-content/") || strings.Contains(p, "/wp-includes/"):
-			return "wordpress"
-		case strings.Contains(label, "story-rails") || isObservedRailsArtifact(p):
-			return "rails"
-		case strings.Contains(label, "php-backdoor") || strings.Contains(label, "legacy-php"):
-			return "php"
-		}
-	}
-	return ""
-}
-
-func observedStoryMiss(ss *model.Session, requested string) Response {
-	return Response{Status: http.StatusNotFound, ContentType: "text/html; charset=utf-8", Label: "story-mismatch-" + requested, Depth: max(ss.Depth, 1), Body: []byte("<!doctype html><title>404 Not Found</title><h1>Not Found</h1>")}
 }
 
 func isWordPressStoryPath(p string) bool {
@@ -315,4 +272,32 @@ func deterministicObservedReveal(sessionID, p string, modulo int) bool {
 		n = (n*33 + int(r)) % modulo
 	}
 	return n == 0
+}
+
+// currentWebStory remains as a compatibility/introspection helper for tests and
+// existing callers. Web Story v1 decisions are target-wide in Deception.story;
+// this helper only describes what a single retained session already knows.
+func currentWebStory(ss *model.Session) string {
+	if ss == nil {
+		return ""
+	}
+	if ss.WebStory != "" {
+		return ss.WebStory
+	}
+	for i := len(ss.Journey) - 1; i >= 0; i-- {
+		label := strings.ToLower(ss.Journey[i].Label)
+		if strings.HasPrefix(label, "story-mismatch-") || strings.HasSuffix(label, "-miss") {
+			continue
+		}
+		p := canonicalObservedWebPath(ss.Journey[i].Path)
+		switch {
+		case strings.Contains(label, "wordpress") || isWordPressStoryPath(p):
+			return "wordpress"
+		case strings.Contains(label, "rails") || isRailsStoryPath(p):
+			return "rails"
+		case strings.Contains(label, "php-backdoor") || strings.Contains(label, "legacy-php"):
+			return "php"
+		}
+	}
+	return ""
 }

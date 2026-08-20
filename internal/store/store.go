@@ -365,6 +365,11 @@ func (s *Store) applyEvent(e model.Event) {
 	ss.AvgIntervalMS = e.AvgIntervalMS
 	ss.IntervalVarMS = e.IntervalVarMS
 	ss.Persona = e.Persona
+	if e.WebStory != "" {
+		ss.WebStory = e.WebStory
+		ss.WebStoryConfidence = e.WebStoryConfidence
+		ss.WebStoryLocked = e.WebStoryLocked
+	}
 	ss.Depth = e.Depth
 	ss.Loop = e.Loop
 	ss.Frustration = e.Frustration
@@ -513,7 +518,17 @@ func (s *Store) sessionDetail(id string, limit int, currentVisitOnly bool) (mode
 	for i := range events {
 		events[i] = s.decorateEventLocked(events[i])
 	}
-	return model.SessionDetail{Session: cp, Events: events}, true
+	traces := s.attackTracesLocked(ss.IP)
+	filtered := make([]model.AttackTrace, 0, len(traces))
+	for _, trace := range traces {
+		for _, step := range trace.Steps {
+			if step.SessionID == id {
+				filtered = append(filtered, trace)
+				break
+			}
+		}
+	}
+	return model.SessionDetail{Session: cp, Events: events, AttackTrace: filtered}, true
 }
 
 func (s *Store) WebSessionExport(id, version string) (model.WebSessionExport, bool) {
@@ -521,11 +536,22 @@ func (s *Store) WebSessionExport(id, version string) (model.WebSessionExport, bo
 	if !ok {
 		return model.WebSessionExport{}, false
 	}
+	traces := s.AttackTraces(detail.Session.IP)
+	filtered := make([]model.AttackTrace, 0, len(traces))
+	for _, trace := range traces {
+		for _, step := range trace.Steps {
+			if step.SessionID == id {
+				filtered = append(filtered, trace)
+				break
+			}
+		}
+	}
 	return model.WebSessionExport{
-		ExportedAt: time.Now().UTC(),
-		Version:    version,
-		Session:    detail.Session,
-		Events:     detail.Events,
+		ExportedAt:  time.Now().UTC(),
+		Version:     version,
+		Session:     detail.Session,
+		Events:      detail.Events,
+		AttackTrace: filtered,
 	}, true
 }
 

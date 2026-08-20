@@ -422,7 +422,17 @@ func (s *Store) SSHSessionDetail(id string, limit int) (model.SSHSessionDetail, 
 	for i, j := 0, len(rows)-1; i < j; i, j = i+1, j-1 {
 		rows[i], rows[j] = rows[j], rows[i]
 	}
-	return model.SSHSessionDetail{Session: cloneSSHSession(ss), Events: rows}, true
+	traces := s.attackTracesLocked(ss.IP)
+	filtered := make([]model.AttackTrace, 0, len(traces))
+	for _, trace := range traces {
+		for _, step := range trace.Steps {
+			if step.SessionID == id {
+				filtered = append(filtered, trace)
+				break
+			}
+		}
+	}
+	return model.SSHSessionDetail{Session: cloneSSHSession(ss), Events: rows, AttackTrace: filtered}, true
 }
 
 func (s *Store) SSHSessionExport(id, version string) (model.SSHSessionExport, bool) {
@@ -449,7 +459,17 @@ func (s *Store) SSHSessionExport(id, version string) (model.SSHSessionExport, bo
 			intel = append(intel, e)
 		}
 	}
-	return model.SSHSessionExport{ExportedAt: time.Now().UTC(), Version: version, Session: cloneSSHSession(ss), Events: events, Actor: actor, Intel: intel}, true
+	traces := s.attackTracesLocked(ss.IP)
+	filtered := make([]model.AttackTrace, 0, len(traces))
+	for _, trace := range traces {
+		for _, step := range trace.Steps {
+			if step.SessionID == id {
+				filtered = append(filtered, trace)
+				break
+			}
+		}
+	}
+	return model.SSHSessionExport{ExportedAt: time.Now().UTC(), Version: version, Session: cloneSSHSession(ss), Events: events, Actor: actor, Intel: intel, AttackTrace: filtered}, true
 }
 
 func (s *Store) SSHOverviewRange(enabled bool, from, to time.Time) model.SSHOverview {

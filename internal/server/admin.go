@@ -77,6 +77,7 @@ func (s *AdminServer) Handler() http.Handler {
 	protected.HandleFunc("/api/integration", s.integrationCapabilities)
 	protected.HandleFunc("/api/integration/peers", s.integrationPeers)
 	protected.HandleFunc("/api/actors/overview", s.actorOverview)
+	protected.HandleFunc("/api/cross-protocol", s.crossProtocolObservations)
 	protected.HandleFunc("/api/bursts", s.scanBursts)
 	protected.HandleFunc("/api/actors", s.actors)
 	protected.HandleFunc("/api/actors/", s.actor)
@@ -389,6 +390,14 @@ func (s *AdminServer) actorOverview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, s.store.ActorOverview())
+}
+
+func (s *AdminServer) crossProtocolObservations(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	writeJSON(w, s.store.CrossProtocolObservations(queryInt(r, "limit", 50, 1, 200)))
 }
 
 func (s *AdminServer) scanBursts(w http.ResponseWriter, r *http.Request) {

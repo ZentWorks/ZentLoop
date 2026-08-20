@@ -31,7 +31,7 @@ func analyzeSSHCommand(command string, result virtualSSHResult) sshCommandAnalys
 
 	switch {
 	case looksLikeObservedResourceCleanup(low):
-		a.Primary, a.Family, a.Intent, a.Message = firstNonEmpty(result.CommandName, firstStageOr(a.Stages, "for")), "execution", "competitor-resource-cleanup", "virtual competitor/resource cleanup"
+		a.Primary, a.Family, a.Intent, a.Message = primarySSHCommand(a.Stages, "crontab"), "execution", "competitor-resource-cleanup", "virtual competitor/resource cleanup"
 		a.Fingerprint, a.Depth, a.Risk, a.Persona = "ssh:resource-hijack-preparation", 7, 99, "resource-hijack-preparation"
 	case strings.Contains(low, "/proc/cpuinfo") && (strings.Contains(low, "processor") || strings.Contains(low, "model name")):
 		a.Primary, a.Family, a.Intent, a.Message = firstStageOr(a.Stages, "cat"), "recon", "cpu-topology-discovery", "CPU topology discovery"
@@ -103,9 +103,17 @@ func applySSHCommandAnalysis(result *virtualSSHResult, a sshCommandAnalysis) {
 	if a.Risk > result.Risk {
 		result.Risk = a.Risk
 	}
-	if a.Persona != "" && a.Risk >= result.Risk {
+	if a.Persona != "" && (a.Risk >= result.Risk || sshAnalysisOwnsReconPersona(a.Intent)) {
 		result.Persona = a.Persona
 	}
+}
+
+func sshAnalysisOwnsReconPersona(intent string) bool {
+	switch intent {
+	case "system-identity-discovery", "architecture-discovery", "hostname-discovery", "kernel-release-discovery", "uptime-discovery", "cpu-topology-discovery", "cpu-resource-discovery":
+		return true
+	}
+	return false
 }
 
 func collectSSHCommandStages(command string) []string {
@@ -124,9 +132,10 @@ func collectSSHCommandStages(command string) []string {
 		if depth > 4 {
 			return
 		}
-		for _, name := range collectSSHFlatStages(line) {
-			add(name)
-		}
+		// Walk the parsed shell structure first so stages retain their actual
+		// first-occurrence order. The flat scan remains a fallback for commands
+		// hidden inside substitutions/groups that the lightweight parser cannot
+		// fully unwrap.
 		for _, chain := range splitVirtualChain(strings.TrimSpace(line)) {
 			for _, pipeStage := range splitOutsideQuotes(chain.command, '|') {
 				stage := strings.TrimSpace(pipeStage)
@@ -156,6 +165,9 @@ func collectSSHCommandStages(command string) []string {
 					addLine(strings.Join(words[idx+2:], " "), depth+1)
 				}
 			}
+		}
+		for _, name := range collectSSHFlatStages(line) {
+			add(name)
 		}
 	}
 	addLine(command, 0)
@@ -230,12 +242,18 @@ func collectSSHFlatStages(line string) []string {
 func primarySSHCommand(stages []string, fallback string) string {
 	aux := map[string]bool{"grep": true, "egrep": true, "fgrep": true, "wc": true, "head": true, "tail": true, "sort": true, "uniq": true, "cut": true, "tr": true, "tee": true, "xargs": true, "sh": true, "bash": true, "dash": true}
 	for _, s := range stages {
-		if !aux[s] {
+		if !aux[s] && !isShellSyntaxWord(s) {
 			return s
 		}
 	}
-	if len(stages) > 0 {
-		return stages[0]
+	for _, s := range stages {
+		if !isShellSyntaxWord(s) {
+			return s
+		}
+	}
+	fallback = path.Base(strings.TrimSpace(fallback))
+	if fallback == "" || isShellSyntaxWord(fallback) {
+		return ""
 	}
 	return fallback
 }

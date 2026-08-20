@@ -86,6 +86,14 @@
         <article class="metric"><span>PAYLOAD SIGNALS</span><strong id="actorPayloads">0</strong><small>URLs / transfer chains</small></article>
       </section>
 
+      <section class="panel sessions-panel cross-observations">
+        <div class="panel-title"><h2>Cross-protocol observations</h2><span>latest 25 · same source seen on Web + SSH · trace only with evidence</span></div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>LAST</th><th>IP</th><th>CC</th><th>WEB</th><th>SSH</th><th>RISK</th><th>TRACE</th></tr></thead>
+          <tbody id="crossProtocolBody"></tbody>
+        </table></div>
+      </section>
+
       <section class="panel sessions-panel">
         <div class="panel-title"><h2>Correlated actors</h2><span id="actorListCount">0 actors</span></div>
         <div class="table-wrap"><table>
@@ -293,7 +301,7 @@
     <section id="ipView" class="ip-view" hidden aria-label="IP intelligence view">
       <div class="ip-view-head">
         <div><small>ACTOR / SOURCE INTELLIGENCE</small><h1 id="ipViewTitle">IP Intelligence</h1><p id="ipViewSubtitle">Correlated Web + SSH observations for one source.</p></div>
-        <div class="ip-view-actions"><button id="ipViewBack" type="button">← Dashboard</button><a id="ipExportJSON" class="export-link export-json" href="#" aria-label="Export IP intelligence JSON" title="Export JSON"><svg class="export-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1v9m0 0 3-3m-3 3L5 7M3 11.5v2h10v-2"/></svg><span>JSON</span></a></div>
+        <div class="ip-view-actions"><button id="ipViewBack" type="button">← Dashboard</button><button id="ipTrace" class="compact-action" type="button" hidden>Attack trace</button><a id="ipExportJSON" class="export-link export-json" href="#" aria-label="Export IP intelligence JSON" title="Export JSON"><svg class="export-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1v9m0 0 3-3m-3 3L5 7M3 11.5v2h10v-2"/></svg><span>JSON</span></a></div>
       </div>
       <section class="hero-grid ip-metrics">
         <article class="metric danger"><span>RISK</span><strong id="ipRisk">0</strong><small id="ipClassification">—</small></article>
@@ -317,7 +325,7 @@
       <section class="panel"><div class="panel-title"><h2>Observed timeline</h2><span id="ipRawCounts">retained events</span></div><div id="ipObservedTimeline" class="ip-observed-timeline"></div></section>
     </section>
 
-    <footer><span class="footer-version"><span id="version">ZentLoop 0.3.0</span><a id="updateBadge" class="update-badge" href="https://github.com/ZentWorks/ZentLoop" target="_blank" rel="noopener noreferrer" hidden>NEW VERSION AVAILABLE</a></span><span>Proxy: <b id="proxyMode">direct</b> · GeoIP: <b id="geoStatus">local</b> · Official bots: <b id="botStatus">waiting</b> · <a href="https://db-ip.com" target="_blank" rel="noopener noreferrer">IP Geolocation by DB-IP</a></span></footer>
+    <footer><span class="footer-version"><span id="version">ZentLoop 0.3.1</span><a id="updateBadge" class="update-badge" href="https://github.com/ZentWorks/ZentLoop" target="_blank" rel="noopener noreferrer" hidden>NEW VERSION AVAILABLE</a></span><span>Proxy: <b id="proxyMode">direct</b> · GeoIP: <b id="geoStatus">local</b> · Official bots: <b id="botStatus">waiting</b> · <a href="https://db-ip.com" target="_blank" rel="noopener noreferrer">IP Geolocation by DB-IP</a></span></footer>
   </main>
 
   <div id="settingsBackdrop" class="modal-backdrop settings-backdrop" aria-hidden="true"></div>
@@ -361,7 +369,7 @@ example.net"></textarea>
   </section>
 
   <aside id="drawer" class="drawer" aria-hidden="true">
-    <div class="drawer-head"><div><small>WEB SESSION · <span id="dVisitContext">CURRENT VISIT</span></small><h3 id="dId">—</h3></div><div class="drawer-actions"><a id="webExportJSON" class="export-link export-json" href="#" aria-label="Export Web session JSON" title="Export JSON"><svg class="export-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1v9m0 0 3-3m-3 3L5 7M3 11.5v2h10v-2"/></svg><span>JSON</span></a><button id="closeDrawer">×</button></div></div>
+    <div class="drawer-head"><div><small>WEB SESSION · <span id="dVisitContext">CURRENT VISIT</span></small><h3 id="dId">—</h3></div><div class="drawer-actions"><button id="dTrace" class="compact-action" type="button" hidden>Trace</button><a id="webExportJSON" class="export-link export-json" href="#" aria-label="Export Web session JSON" title="Export JSON"><svg class="export-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1v9m0 0 3-3m-3 3L5 7M3 11.5v2h10v-2"/></svg><span>JSON</span></a><button id="closeDrawer">×</button></div></div>
     <div class="drawer-body">
       <div class="detail-grid">
         <div><span>IP</span><b id="dIp">—</b></div><div><span>Network via</span><b id="dProxy">—</b></div>
@@ -391,7 +399,7 @@ example.net"></textarea>
   </aside>
 
   <aside id="sshDrawer" class="drawer" aria-hidden="true">
-    <div class="drawer-head ssh-drawer-head"><div><small>SSH SESSION <span id="sdLiveState" class="ssh-live-state ended">ENDED</span></small><h3 id="sdId">—</h3></div><div class="drawer-actions"><a id="sshExportJSON" class="export-link export-json" href="#" aria-label="Export SSH session JSON" title="Export JSON"><svg class="export-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1v9m0 0 3-3m-3 3L5 7M3 11.5v2h10v-2"/></svg><span>JSON</span></a><a id="sshExportTXT" class="export-link" href="#">TXT</a><button id="closeSSHDrawer">×</button></div></div>
+    <div class="drawer-head ssh-drawer-head"><div><small>SSH SESSION <span id="sdLiveState" class="ssh-live-state ended">ENDED</span></small><h3 id="sdId">—</h3></div><div class="drawer-actions"><button id="sdTrace" class="compact-action" type="button" hidden>Trace</button><a id="sshExportJSON" class="export-link export-json" href="#" aria-label="Export SSH session JSON" title="Export JSON"><svg class="export-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1v9m0 0 3-3m-3 3L5 7M3 11.5v2h10v-2"/></svg><span>JSON</span></a><a id="sshExportTXT" class="export-link" href="#">TXT</a><button id="closeSSHDrawer">×</button></div></div>
     <div class="drawer-body">
       <div class="detail-grid">
         <div><span>IP</span><b id="sdIp">—</b></div><div><span>Country</span><b id="sdCountry">—</b></div>
@@ -421,6 +429,13 @@ example.net"></textarea>
       </div>
       <h4>Fingerprints</h4><pre id="adFingerprints">—</pre>
       <h4>HTTP + SSH timeline</h4><div id="actorTimeline" class="ssh-transcript"></div>
+    </div>
+  </aside>
+  <aside id="traceDrawer" class="drawer trace-drawer" aria-hidden="true">
+    <div class="drawer-head"><div><small>EVIDENCE-BACKED ATTACK PATH</small><h3 id="traceTitle">Attack trace</h3></div><button id="closeTraceDrawer">×</button></div>
+    <div class="drawer-body">
+      <p id="traceNote" class="trace-note">Only evidence-backed cause → effect relations are shown.</p>
+      <div id="traceList" class="attack-trace-list"></div>
     </div>
   </aside>
   <div id="shade" class="shade"></div>
