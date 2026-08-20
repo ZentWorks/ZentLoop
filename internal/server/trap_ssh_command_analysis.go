@@ -19,7 +19,10 @@ type sshCommandAnalysis struct {
 	Persona     string
 }
 
-var sshGrepTargetRE = regexp.MustCompile(`(?i)\bgrep\s+(?:-[^\s]+\s+)*(?:--\s+)?['"]?([a-z0-9._-]{2,64})['"]?`)
+var (
+	sshGrepTargetRE = regexp.MustCompile(`(?i)\bgrep\s+(?:-[^\s]+\s+)*(?:--\s+)?['"]?([a-z0-9._-]{2,64})['"]?`)
+	sshStageNameRE  = regexp.MustCompile(`^[A-Za-z0-9._+:-]+$`)
+)
 
 func analyzeSSHCommand(command string, result virtualSSHResult) sshCommandAnalysis {
 	low := strings.ToLower(strings.TrimSpace(command))
@@ -27,6 +30,9 @@ func analyzeSSHCommand(command string, result virtualSSHResult) sshCommandAnalys
 	a.Primary = primarySSHCommand(a.Stages, result.CommandName)
 
 	switch {
+	case looksLikeObservedResourceCleanup(low):
+		a.Primary, a.Family, a.Intent, a.Message = firstNonEmpty(result.CommandName, firstStageOr(a.Stages, "for")), "execution", "competitor-resource-cleanup", "virtual competitor/resource cleanup"
+		a.Fingerprint, a.Depth, a.Risk, a.Persona = "ssh:resource-hijack-preparation", 7, 99, "resource-hijack-preparation"
 	case strings.Contains(low, "/proc/cpuinfo") && (strings.Contains(low, "processor") || strings.Contains(low, "model name")):
 		a.Primary, a.Family, a.Intent, a.Message = firstStageOr(a.Stages, "cat"), "recon", "cpu-topology-discovery", "CPU topology discovery"
 		a.Fingerprint, a.Depth, a.Risk, a.Persona = "ssh:hardware-recon", 4, 88, "system-recon"
@@ -53,6 +59,23 @@ func analyzeSSHCommand(command string, result virtualSSHResult) sshCommandAnalys
 	case strings.Contains(low, "nproc") || strings.Contains(low, "lscpu") || strings.Contains(low, "getconf _nprocessors"):
 		a.Family, a.Intent, a.Message = "recon", "cpu-resource-discovery", "CPU resource discovery"
 		a.Fingerprint, a.Depth, a.Risk, a.Persona = "ssh:hardware-recon", 4, 87, "system-recon"
+	case strings.Contains(low, "uname"):
+		a.Primary, a.Family, a.Depth, a.Risk, a.Persona = "uname", "recon", 3, 84, "system-recon"
+		switch {
+		case strings.Contains(low, "uname -a") || strings.Contains(low, "uname -s -v") || (strings.Contains(low, "uname -m") && (strings.Contains(low, " -n") || strings.Contains(low, " -r") || strings.Contains(low, " -v"))):
+			a.Intent, a.Message = "system-identity-discovery", "system identity discovery"
+		case strings.Contains(low, "uname -m"):
+			a.Intent, a.Message = "architecture-discovery", "architecture discovery"
+		case strings.Contains(low, "uname -n"):
+			a.Intent, a.Message = "hostname-discovery", "hostname discovery"
+		case strings.Contains(low, "uname -r"):
+			a.Intent, a.Message = "kernel-release-discovery", "kernel release discovery"
+		default:
+			a.Intent, a.Message = "system-identity-discovery", "system identity discovery"
+		}
+	case strings.Contains(low, "uptime"):
+		a.Primary, a.Family, a.Intent, a.Message = "uptime", "recon", "uptime-discovery", "system uptime discovery"
+		a.Depth, a.Risk, a.Persona = 3, 84, "system-recon"
 	case strings.Contains(low, "ip addr") || strings.Contains(low, "ip route") || strings.Contains(low, "ifconfig") || strings.Contains(low, "netstat") || strings.Contains(low, "ss -"):
 		a.Family, a.Intent, a.Message = "network", "network-discovery", "network configuration/service discovery"
 		a.Fingerprint, a.Depth, a.Risk, a.Persona = "ssh:network-recon", 4, 90, "network-recon"
@@ -91,7 +114,7 @@ func collectSSHCommandStages(command string) []string {
 	var addLine func(string, int)
 	add := func(name string) {
 		name = path.Base(strings.TrimSpace(name))
-		if name == "" || isShellSyntaxWord(name) || seen[name] {
+		if name == "" || strings.HasPrefix(name, "-") || !sshStageNameRE.MatchString(name) || isShellSyntaxWord(name) || seen[name] {
 			return
 		}
 		seen[name] = true

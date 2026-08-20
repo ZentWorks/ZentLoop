@@ -39,6 +39,11 @@ type AdminServer struct {
 
 	sessionMu     sync.Mutex
 	adminSessions map[[32]byte]adminSession
+
+	updateMu     sync.Mutex
+	updateState  adminUpdateState
+	updateClient *http.Client
+	updateURL    string
 }
 
 func NewAdmin(cfg config.Config, st *store.Store) *AdminServer {
@@ -357,16 +362,21 @@ func (s *AdminServer) info(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
+	s.kickAdminUpdateCheck(time.Now())
 	_, geoErr := os.Stat(s.cfg.GeoIPDB)
 	_, botCacheErr := os.Stat(s.cfg.OfficialBotsCache)
-	writeJSON(w, map[string]any{
+	info := map[string]any{
 		"brand": s.cfg.Brand, "version": currentZentLoopVersion, "proxy_mode": s.cfg.ProxyMode, "proxy_rules": s.cfg.ProxyRules,
 		"hostile_threshold": s.cfg.HostileThreshold, "suspicious_threshold": s.cfg.SuspiciousThreshold,
 		"live_session_minutes": s.cfg.LiveSessionMinutes, "resume_window_hours": s.cfg.ResumeWindowHours,
-		"geo_enrichment": true, "geoip_ready": geoErr == nil, "geoip_db": s.cfg.GeoIPDB, "integration_protocol": 1, "integration_secret_configured": s.cfg.IntegrationSecret != "", "telemetry": false,
+		"geo_enrichment": true, "geoip_ready": geoErr == nil, "geoip_db": s.cfg.GeoIPDB, "integration_protocol": 1, "integration_secret_configured": s.cfg.IntegrationSecretConfigured(), "telemetry": false,
 		"ssh_trap_enabled": s.cfg.SSHEnabled, "ssh_trap_addr": s.cfg.SSHAddr, "admin_ssh_enabled": s.cfg.AdminSSHEnabled, "admin_ssh_addr": s.cfg.AdminSSHAddr,
 		"official_bots_enabled": s.cfg.OfficialBotsEnabled, "official_bots_refresh_hours": s.cfg.OfficialBotsRefreshH, "official_bots_cache_ready": botCacheErr == nil,
-	})
+	}
+	for key, value := range s.adminUpdateInfo() {
+		info[key] = value
+	}
+	writeJSON(w, info)
 }
 func (s *AdminServer) actorOverview(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -937,8 +947,8 @@ func (s *AdminServer) integrationCapabilities(w http.ResponseWriter, r *http.Req
 			"canonical":        "v1\\n<timestamp>\\n<integration>\\n<target>\\n<catch_all:0|1>\\n<METHOD>\\n<request-uri>",
 			"max_skew_seconds": s.cfg.IntegrationMaxSkew,
 		},
-		"secret_configured":        s.cfg.IntegrationSecret != "",
-		"private_unsigned_allowed": s.cfg.IntegrationSecret == "",
+		"secret_configured":        s.cfg.IntegrationSecretConfigured(),
+		"private_unsigned_allowed": !s.cfg.IntegrationSecretConfigured(),
 		"health_check": map[string]any{
 			"method": "GET", "path": integrationCheckPath, "success_status": http.StatusNoContent,
 			"verified_header": "X-ZentLoop-Integration-Verified", "verified_value": "1",

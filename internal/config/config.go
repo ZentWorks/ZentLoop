@@ -96,6 +96,22 @@ func Load() Config {
 	}
 }
 
+func (c Config) IntegrationSecrets() []string {
+	parts := strings.Split(c.IntegrationSecret, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		secret := strings.TrimSpace(part)
+		if secret != "" {
+			out = append(out, secret)
+		}
+	}
+	return out
+}
+
+func (c Config) IntegrationSecretConfigured() bool {
+	return len(c.IntegrationSecrets()) > 0
+}
+
 func (c Config) Validate() error {
 	if strings.TrimSpace(c.AdminUser) == "" {
 		return fmt.Errorf("ZENTLOOP_ADMIN_USER must not be empty")

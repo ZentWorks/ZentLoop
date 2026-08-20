@@ -18,7 +18,7 @@ Preserve the original `Host`, validated client forwarding chain and original sch
 
 - `X-ZentLoop-Integration`: stable provider/tool identifier, e.g. `zentproxy`, `nginx`, `traefik`, `caddy`, `haproxy`, `edge-gateway`.
 - `X-ZentLoop-Target`: original requested host/IP. Optional when the normal `Host` header is preserved.
-- For ordinary trusted reverse-proxy paths that rewrite `Host` to ZentLoop's private upstream address, ZentLoop can recover the original host from `X-Forwarded-Host`. In auto mode this is accepted only from a private/loopback proxy peer with independent forwarding evidence (`X-Forwarded-For`, `X-Real-IP`, or valid Cloudflare metadata). `X-Forwarded-Host` alone never establishes trust, and signed target auto-trust remains bound to the exact signed `X-ZentLoop-Target`.
+- For ordinary trusted reverse-proxy paths that rewrite `Host` to ZentLoop's private upstream address, ZentLoop can recover the original host from `X-Forwarded-Host`. In auto mode this is accepted only from a private/loopback proxy peer with independent forwarding evidence (`X-Forwarded-For`, `X-Real-IP`, or valid Cloudflare metadata). `X-Forwarded-Host` alone never establishes trust. Trusted-domain classification is always configured explicitly by the ZentLoop administrator.
 - `X-ZentLoop-Catch-All`: use `1` for catch-all traffic. The standardized examples also use `1` for health checks; the value used is part of the signed canonical payload and must match the header.
 - `X-ZentLoop-Timestamp`: Unix timestamp in seconds, required in signed mode.
 - `X-ZentLoop-Signature`: `sha256=<hex HMAC>`, required in signed mode.
@@ -35,7 +35,7 @@ Public clients cannot self-mark requests as trusted integration traffic.
 
 ### Signed mode
 
-When `ZENTLOOP_INTEGRATION_SECRET` is configured, every trusted integration request must carry a valid HMAC-SHA256 signature, even when the peer address is private.
+When `ZENTLOOP_INTEGRATION_SECRET` is configured, every trusted integration request must carry a valid HMAC-SHA256 signature, even when the peer address is private. ZentLoop accepts multiple secrets from one quoted comma-separated value, for example `ZENTLOOP_INTEGRATION_SECRET="eins,zwe!,dr3i"`. The signature is accepted when it matches any configured secret. Commas are separators and cannot be embedded inside an individual secret.
 
 Canonical payload:
 
@@ -65,15 +65,9 @@ X-ZentLoop-Signature: sha256=<hex>
 
 The timestamp must be within `ZENTLOOP_INTEGRATION_MAX_SKEW_SECONDS` of ZentLoop's clock. The default is 300 seconds.
 
-### Target auto-trust
+### Target trust
 
-Signed integrations may also establish an **exact** trusted target for normal, explicitly routed requests. ZentLoop only auto-trusts `X-ZentLoop-Target` when all of the following are true:
-
-- integration metadata passes HMAC verification;
-- `X-ZentLoop-Catch-All` is false/absent;
-- the target is a valid domain/IP value.
-
-Private-peer mode never auto-trusts targets, even though its metadata may be accepted for attribution. Catch-all targets also never auto-trust. This is intentional: Docker/NAT boundaries can make external traffic appear to originate from one private peer, and catch-all hosts are commonly attacker-controlled. Auto-trusted proxy targets are visible read-only in the Admin WebUI Trusted Domains settings.
+Integration metadata does **not** create trusted domains automatically. A signed integration can preserve a trustworthy original target and forwarding context, but normal Target classification is enabled only for domains the administrator explicitly adds under **Settings → Trusted Domains**. Manual root domains include their subdomains on DNS label boundaries. Catch-all, private-peer and signed integration traffic can all remain observable without silently changing the trusted-domain set.
 
 ## Health check and integration verification
 
@@ -180,7 +174,7 @@ Verified integration peers are available through:
 GET /api/integration/peers
 ```
 
-and are shown in the WebUI under **Connected integrations**. Peer state contains the integration name, immediate source IP, trust mode, first/last verification time, status and aggregate check/failure counters. Secrets and signatures are never exposed.
+and are shown in the WebUI under **Connected integrations**. Peer state contains the integration name, immediate source IP, trust mode, matched auth-key slot (`key-N` for signed integrations), first/last verification time, status and aggregate check/failure counters. Same-name integrations remain separate when their source IP or matched key slot differs. Secrets and signatures are never exposed.
 
 ## Catch-all statistics
 

@@ -41,6 +41,9 @@ func identifyProbeFamily(raw string) (probeInfo, bool) {
 	if isVirtualFileReadProbe(p) {
 		return probeInfo{"Development server file-read discovery", "Vite / static file server", ""}, true
 	}
+	if info, ok := identifyObservedWebProbe(p); ok {
+		return info, true
+	}
 	if isEnvProbeFamily(p) {
 		return probeInfo{"Environment / secret file discovery", "Generic web application", ""}, true
 	}

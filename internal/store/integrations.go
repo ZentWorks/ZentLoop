@@ -17,6 +17,14 @@ const (
 	integrationOfflineAfter = 90 * time.Second
 )
 
+func integrationPeerKey(name, sourceIP, keyID string) string {
+	return strings.Join([]string{
+		strings.TrimSpace(strings.ToLower(name)),
+		strings.TrimSpace(sourceIP),
+		strings.TrimSpace(strings.ToLower(keyID)),
+	}, "\x00")
+}
+
 func (s *Store) loadIntegrationPeers() error {
 	path := filepath.Join(s.dataDir, "integration-peers.json")
 	b, err := os.ReadFile(path)
@@ -33,12 +41,14 @@ func (s *Store) loadIntegrationPeers() error {
 	for i := range rows {
 		row := rows[i]
 		row.Name = strings.TrimSpace(strings.ToLower(row.Name))
+		row.SourceIP = strings.TrimSpace(row.SourceIP)
+		row.KeyID = strings.TrimSpace(strings.ToLower(row.KeyID))
 		if row.Name == "" {
 			continue
 		}
 		row.Status = ""
 		cp := row
-		s.integrationPeers[row.Name] = &cp
+		s.integrationPeers[integrationPeerKey(row.Name, row.SourceIP, row.KeyID)] = &cp
 	}
 	return nil
 }
@@ -50,7 +60,15 @@ func (s *Store) persistIntegrationPeersLocked() error {
 		cp.Status = ""
 		rows = append(rows, cp)
 	}
-	sort.Slice(rows, func(i, j int) bool { return rows[i].Name < rows[j].Name })
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].Name != rows[j].Name {
+			return rows[i].Name < rows[j].Name
+		}
+		if rows[i].SourceIP != rows[j].SourceIP {
+			return rows[i].SourceIP < rows[j].SourceIP
+		}
+		return rows[i].KeyID < rows[j].KeyID
+	})
 	b, err := json.MarshalIndent(rows, "", "  ")
 	if err != nil {
 		return err
@@ -64,54 +82,88 @@ func (s *Store) persistIntegrationPeersLocked() error {
 	return os.Rename(tmp, path)
 }
 
-func (s *Store) RecordIntegrationVerified(name, sourceIP, trust string, now time.Time) {
+func (s *Store) RecordIntegrationVerified(name, sourceIP, trust, keyID string, now time.Time) {
 	name = strings.TrimSpace(strings.ToLower(name))
+	sourceIP = strings.TrimSpace(sourceIP)
+	keyID = strings.TrimSpace(strings.ToLower(keyID))
 	if name == "" {
 		return
 	}
+	key := integrationPeerKey(name, sourceIP, keyID)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	p := s.integrationPeers[name]
+	p := s.integrationPeers[key]
 	changed := false
+	if p == nil && keyID != "" {
+		// Older persisted peers did not carry a key id. Promote a matching
+		// name/source peer on its next successful signed verification instead
+		// of leaving a duplicate offline legacy row behind.
+		legacyKey := integrationPeerKey(name, sourceIP, "")
+		if legacy := s.integrationPeers[legacyKey]; legacy != nil && legacy.Trust == "signed" {
+			delete(s.integrationPeers, legacyKey)
+			delete(s.integrationPersist, legacyKey)
+			p = legacy
+			p.KeyID = keyID
+			s.integrationPeers[key] = p
+			changed = true
+		}
+	}
 	if p == nil {
-		p = &model.IntegrationPeer{Name: name, FirstSeen: now}
-		s.integrationPeers[name] = p
+		p = &model.IntegrationPeer{Name: name, SourceIP: sourceIP, KeyID: keyID, FirstSeen: now}
+		s.integrationPeers[key] = p
 		changed = true
 	}
-	if p.SourceIP != sourceIP || p.Trust != trust {
+	if p.SourceIP != sourceIP || p.Trust != trust || p.KeyID != keyID {
 		changed = true
 	}
 	p.SourceIP = sourceIP
 	p.Trust = trust
+	p.KeyID = keyID
 	p.LastVerified = now
 	p.Checks++
 	p.LastError = ""
-	last := s.integrationPersist[name]
+	last := s.integrationPersist[key]
 	if changed || last.IsZero() || now.Sub(last) >= 5*time.Minute {
 		if s.persistIntegrationPeersLocked() == nil {
-			s.integrationPersist[name] = now
+			s.integrationPersist[key] = now
 		}
 	}
 }
 
 func (s *Store) RecordIntegrationFailure(name, sourceIP, message string, now time.Time, allowCreate bool) {
 	name = strings.TrimSpace(strings.ToLower(name))
+	sourceIP = strings.TrimSpace(sourceIP)
 	if name == "" {
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	p := s.integrationPeers[name]
+
+	// A failed request cannot prove which configured signing key was intended.
+	// Prefer an already-known peer with the same integration name/source so a
+	// transient bad signature increments that peer instead of creating noise.
+	var key string
+	var p *model.IntegrationPeer
+	for candidateKey, candidate := range s.integrationPeers {
+		if candidate.Name == name && candidate.SourceIP == sourceIP {
+			key, p = candidateKey, candidate
+			break
+		}
+	}
 	if p == nil {
-		p = &model.IntegrationPeer{Name: name, FirstSeen: now}
-		s.integrationPeers[name] = p
+		if !allowCreate {
+			return
+		}
+		key = integrationPeerKey(name, sourceIP, "")
+		p = &model.IntegrationPeer{Name: name, SourceIP: sourceIP, FirstSeen: now}
+		s.integrationPeers[key] = p
 	}
 	p.SourceIP = sourceIP
 	p.LastFailure = now
 	p.Failures++
 	p.LastError = strings.TrimSpace(message)
 	_ = s.persistIntegrationPeersLocked()
-	s.integrationPersist[name] = now
+	s.integrationPersist[key] = now
 }
 
 func (s *Store) IntegrationPeers(now time.Time) []model.IntegrationPeer {

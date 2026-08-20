@@ -68,6 +68,10 @@ func environmentFingerprintCollectorScore(low string) int {
 
 func isHoneypotProbeCommand(command string) bool {
 	low := strings.ToLower(command)
+	trimmed := strings.TrimSpace(low)
+	if trimmed == "cat /proc" || strings.HasPrefix(trimmed, "cat /proc 2>") {
+		return true
+	}
 	for _, m := range []string{"/proc/1/cgroup", "/sys/class/dmi/id/", "systemd-detect-virt", "virt-what", "dmidecode", "cat /bin/", "file /bin/", "stat /bin/", "ssh_connection", "ssh_tty", "stty"} {
 		if strings.Contains(low, m) {
 			return true

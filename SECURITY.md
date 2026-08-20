@@ -58,12 +58,14 @@ Persistent `events.jsonl`, `ssh-events.jsonl` and `intel-events.jsonl` use `ZENT
 
 ## Reverse-proxy integration headers
 
-`X-ZentLoop-*` integration metadata is never trusted from an arbitrary public client. With no integration secret configured, metadata is accepted only when the immediate TCP peer is private/loopback. If `ZENTLOOP_INTEGRATION_SECRET` is set, a valid timestamped HMAC-SHA256 signature is required even for private peers. Use catch-all routing only for unmatched hosts; do not send application failures or known production hosts to ZentLoop.
+`X-ZentLoop-*` integration metadata is never trusted from an arbitrary public client. With no integration secret configured, metadata is accepted only when the immediate TCP peer is private/loopback. If `ZENTLOOP_INTEGRATION_SECRET` is set, a valid timestamped HMAC-SHA256 signature is required even for private peers. Multiple accepted secrets may be configured as one quoted comma-separated value such as `"eins,zwe!,dr3i"`; commas delimit secrets. Use catch-all routing only for unmatched hosts; do not send application failures or known production hosts to ZentLoop.
 
 
 ### Official crawler verification
 
-Official-bot refresh traffic is the only new runtime-Go outbound behavior in 0.2.4 (the existing entrypoint GeoIP update remains separate) and is intentionally constrained to a compiled-in list of provider HTTPS endpoints. No visitor-controlled host, URL, header or path can influence the destination. The cache is advisory classification data only. A failed/partial provider refresh never converts an unknown claim into a spoof verdict merely because the new feed was unavailable.
+Official-bot refresh traffic is intentionally constrained to a compiled-in list of provider HTTPS endpoints. No visitor-controlled host, URL, header or path can influence the destination. The cache is advisory classification data only. A failed/partial provider refresh never converts an unknown claim into a spoof verdict merely because the new feed was unavailable.
+
+The authenticated Admin UI also has a fixed-destination update check for the public `ZentWorks/ZentLoop` GitHub latest stable release. It is started asynchronously after admin login/first Admin info load, cached for 12 hours, and uses a short timeout. The request contains only the normal GitHub API request metadata and a ZentLoop version User-Agent; it does not include installation IDs, source IP intelligence, sessions, events, credentials or other collected traffic. Failure is fail-closed for the badge and cannot affect trap operation. No automatic update mechanism exists.
 
 The low-and-slow SSH deception policy may occasionally accept a recurring synthetic login attempt into the virtual Rabbit Hole. It does not retain passwords, does not compare them with any real system credential, and does not change the fundamental no-real-shell/no-outbound-network boundary.
 
@@ -76,7 +78,7 @@ The Deep Reality layer is a deterministic in-process simulation. `/proc`, `/sys`
 
 The public trap recognizes `/.well-known/zentloop/integration-check`, but only successfully trusted integration metadata can bypass normal deception logging. A valid check is handled before session/actor creation and returns only HTTP 204 plus `X-ZentLoop-Integration-Verified: 1`. Invalid claimed checks remain logged and receive HTTP 403; unclaimed probes receive a neutral logged 404.
 
-Integration peer state never stores or exposes `ZENTLOOP_INTEGRATION_SECRET` or request signatures. Peer persistence contains only provider name, immediate peer IP, trust/status timestamps and aggregate counters.
+Integration peer state never stores or exposes `ZENTLOOP_INTEGRATION_SECRET` or request signatures. Peer persistence contains only provider name, immediate peer IP, trust/status timestamps, aggregate counters and an opaque matched configuration slot such as `key-2`; the slot is positional and is not a hash/fingerprint of the secret.
 
 ## Scanner-fed SSRF and file-read deception (0.2.7)
 

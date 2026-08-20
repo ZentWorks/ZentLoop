@@ -178,7 +178,7 @@
           </table></div>
         </article>
         <article class="panel live-events ssh-events-panel">
-          <div class="panel-title"><h2>Live SSH activity</h2><span><span class="dot"></span> streaming</span></div>
+          <div class="panel-title"><h2>Live SSH activity</h2></div>
           <div id="sshEvents" class="ssh-events"></div>
         </article>
       </section>
@@ -241,7 +241,7 @@
       <article class="panel integration-peers-panel">
         <div class="panel-title"><div><h2>Connected integrations</h2><span id="integrationPeerSummary">0 peers</span></div><span>protocol v1 health verification</span></div>
         <div class="table-wrap compact-scroll"><table>
-          <thead><tr><th>NAME</th><th>SOURCE</th><th>TRUST</th><th>STATUS</th><th>LAST CHECK</th><th>CHECKS</th><th>FAIL</th></tr></thead>
+          <thead><tr><th>NAME</th><th>SOURCE</th><th>TRUST</th><th>AUTH KEY</th><th>STATUS</th><th>LAST CHECK</th><th>CHECKS</th><th>FAIL</th></tr></thead>
           <tbody id="integrationPeersBody"></tbody>
         </table></div>
         <div class="integration-note">Verified health checks stay outside deception logs. Invalid or spoofed checks remain visible as normal security traffic.</div>
@@ -255,7 +255,7 @@
         <div id="topPaths" class="bars"></div>
       </article>
       <article class="panel live-events">
-        <div class="panel-title"><h2>Live event stream</h2><span><span class="dot"></span> streaming</span></div>
+        <div class="panel-title"><h2>Live event stream</h2></div>
         <div id="events"></div>
       </article>
     </section>
@@ -309,15 +309,15 @@
         <article class="panel"><div class="panel-title"><h2>Web / SSH timeline</h2><span class="activity-legend"><i class="web"></i>WEB <i class="ssh"></i>SSH</span></div><svg id="ipTimelineChart" viewBox="0 0 600 170" preserveAspectRatio="none" aria-label="IP Web and SSH activity timeline"></svg><div class="chart-footer"><span id="ipTimelineFirst">first</span><span id="ipTimelineUnit">events / day</span><span id="ipTimelineLast">last</span></div></article>
         <article class="panel"><div class="panel-title"><h2>System assessment</h2><span>why ZentLoop scored this source</span></div><div id="ipReasons" class="ip-reasons"></div></article>
       </section>
-      <section class="grid two ip-upper">
+      <section class="grid two ip-upper lower">
         <article class="panel"><div class="panel-title"><h2>SSH profile</h2><span>users · clients · commands</span></div><div class="ip-top-grid"><div><h4>Usernames</h4><div id="ipTopUsers" class="ip-top-list"></div></div><div><h4>SSH clients</h4><div id="ipTopClients" class="ip-top-list"></div></div><div><h4>Commands</h4><div id="ipTopCommands" class="ip-top-list"></div></div><div><h4>Families</h4><div id="ipTopFamilies" class="ip-top-list"></div></div></div></article>
         <article class="panel"><div class="panel-title"><h2>Web profile</h2><span>paths · targets</span></div><div class="ip-top-grid two"><div><h4>Paths</h4><div id="ipTopPaths" class="ip-top-list"></div></div><div><h4>Targets</h4><div id="ipTopTargets" class="ip-top-list"></div></div></div></article>
       </section>
-      <section class="panel"><div class="panel-title"><h2>Possible campaign correlations</h2><span>heuristic only · never an identity claim</span></div><div class="table-wrap"><table><thead><tr><th>IP</th><th>CC</th><th>CONFIDENCE</th><th>RISK</th><th>LAST</th><th>WHY</th></tr></thead><tbody id="ipCampaignBody"></tbody></table></div></section>
+      <section class="panel lower"><div class="panel-title"><h2>Possible campaign correlations</h2><span>heuristic only · never an identity claim</span></div><div class="table-wrap"><table><thead><tr><th>IP</th><th>CC</th><th>CONFIDENCE</th><th>RISK</th><th>LAST</th><th>WHY</th></tr></thead><tbody id="ipCampaignBody"></tbody></table></div></section>
       <section class="panel"><div class="panel-title"><h2>Observed timeline</h2><span id="ipRawCounts">retained events</span></div><div id="ipObservedTimeline" class="ip-observed-timeline"></div></section>
     </section>
 
-    <footer><span id="version">ZentLoop 0.2.26</span><span>Proxy: <b id="proxyMode">direct</b> · GeoIP: <b id="geoStatus">local</b> · Official bots: <b id="botStatus">waiting</b> · <a href="https://db-ip.com" target="_blank" rel="noopener noreferrer">IP Geolocation by DB-IP</a> · no telemetry</span></footer>
+    <footer><span class="footer-version"><span id="version">ZentLoop 0.3.0</span><a id="updateBadge" class="update-badge" href="https://github.com/ZentWorks/ZentLoop" target="_blank" rel="noopener noreferrer" hidden>NEW VERSION AVAILABLE</a></span><span>Proxy: <b id="proxyMode">direct</b> · GeoIP: <b id="geoStatus">local</b> · Official bots: <b id="botStatus">waiting</b> · <a href="https://db-ip.com" target="_blank" rel="noopener noreferrer">IP Geolocation by DB-IP</a></span></footer>
   </main>
 
   <div id="settingsBackdrop" class="modal-backdrop settings-backdrop" aria-hidden="true"></div>
@@ -329,8 +329,6 @@
       <textarea id="trustedDomainsInput" rows="9" spellcheck="false" placeholder="example.com
 example.net"></textarea>
       <small class="settings-hint">Enter one root domain per line. Subdomains are trusted automatically.</small>
-      <div class="settings-proxy-title"><b>Proxy-trusted targets</b><span>signed non-catch-all upstream routes · read only</span></div>
-      <div id="proxyTrustedDomains" class="trusted-domain-list"><small>No proxy-trusted targets yet.</small></div>
       <div class="settings-actions"><span id="settingsStatus"></span><button id="saveSettings" type="button">Save trusted domains</button></div>
     </div>
   </section>
@@ -344,7 +342,7 @@ example.net"></textarea>
       <div class="help-block"><h3>Live View</h3><p>The LIVE button opens a compact realtime page with active Web sessions first, active SSH sessions second and the SSH activity feed below. Selecting a Web session opens its current visit only; earlier visits remain available in IP Intelligence, while JSON export stays session-wide. The view uses the same bounded Admin WebSocket as the dashboard, keeps disconnected/quiet sessions visible for up to 60 seconds as <code>LEFT Ns</code>, and updates countdown text without rebuilding the row under your pointer. The SSH feed automatically uses three, two or one columns depending on screen width.</p></div>
       <div class="help-block"><h3>Untrusted hosts</h3><p>Hosts shown in parentheses were requested by a visitor but are not trusted as one of your own domains. They are evaluated separately so they do not distort your normal target statistics. If you trust one later, its retained history is reclassified automatically.</p></div>
       <div class="help-block"><h3>Host sweeps</h3><p>ZentLoop can recognize when one visitor rapidly tries many different host names. These attempts stay in the untrusted-host view and may be guided into a generic Web Trap instead of being treated as real targets.</p></div>
-      <div class="help-block"><h3>Integration / Proxy</h3><p>When ZentLoop is used behind a compatible proxy or upstream integration, the original public target and visitor information can be preserved. Verified, explicit proxy routes may also provide trusted targets automatically.</p></div>
+      <div class="help-block"><h3>Integration / Proxy</h3><p>When ZentLoop is used behind a compatible proxy or upstream integration, the original public target and visitor information can be preserved. Proxy integrations can preserve the original target, while trusted domains remain explicitly controlled here by the administrator.</p></div>
       <div class="help-block"><h3>Web Sessions</h3><p>Shows activity against the Web Traps, including the requested paths and how far a visitor follows the presented breadcrumbs.</p></div>
       <div class="help-block"><h3>SSH Sessions</h3><p>Shows SSH login attempts, commands and movement through the virtual SSH environment and its deception paths.</p></div>
       <div class="help-block"><h3>Self Protection</h3><p>These counters show when ZentLoop protects itself instead of serving unlimited work, for example by shedding excess live viewers, limiting SSH abuse or warning when retained storage grows unusually high.</p></div>

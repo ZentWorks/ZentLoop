@@ -276,6 +276,7 @@ type IntegrationPeer struct {
 	Name         string    `json:"name"`
 	SourceIP     string    `json:"source_ip,omitempty"`
 	Trust        string    `json:"trust,omitempty"`
+	KeyID        string    `json:"key_id,omitempty"`
 	Status       string    `json:"status"`
 	FirstSeen    time.Time `json:"first_seen"`
 	LastVerified time.Time `json:"last_verified"`

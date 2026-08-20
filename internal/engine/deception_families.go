@@ -53,6 +53,10 @@ func buildFamilyDeception(r *http.Request, ss *model.Session, a, b string) (Resp
 		return buildVirtualFileReadFamily(p, ss, a, canaries), true
 	}
 
+	if learned, ok := buildObservedWebDeception(r, ss, a, b); ok {
+		return learned, true
+	}
+
 	if isTerraformFamily(p) {
 		if !adaptiveRevealSensitive(ss, p) {
 			return Response{Status: 404, ContentType: "text/plain; charset=utf-8", Label: "adaptive-terraform-miss", Depth: max(ss.Depth, 1), Body: []byte("Not Found\n")}, true

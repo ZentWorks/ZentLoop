@@ -15,6 +15,7 @@ It combines an HTTP deception trap, an optional fully virtual SSH **Rabbit Hole*
 ## Features
 
 - HTTP deception for scanner, bot and exploit-path activity
+- Adaptive scanner-fed Web families keep WordPress/Rails/PHP discoveries story-consistent instead of making every probed technology exist at once
 - Optional SSH deception listener with a fully virtual filesystem and command environment
 - Shared synthetic world across HTTP and SSH
 - Actor intelligence and cross-protocol correlation
@@ -63,6 +64,8 @@ ZENTLOOP_ADMIN_PASSWORD=replace-with-a-long-random-password
 If `ZENTLOOP_ADMIN_PASSWORD` is empty or unset, ZentLoop generates a cryptographically random administrator password on every start and prints it to the container log. Set the variable yourself if the password should remain stable across restarts.
 
 The browser Admin UI presents its own login page instead of the browser Basic-Auth popup. A successful login creates a temporary in-memory HttpOnly session; use a TLS reverse proxy or trusted VPN for remote administration.
+
+The Admin footer notifies you when a newer stable ZentLoop release is available.
 
 Start ZentLoop:
 
@@ -143,12 +146,18 @@ ZentLoop can be used as a fallback/sink backend for **unmatched hosts** behind a
 
 Do not use ZentLoop as a generic fallback for application errors from valid production hosts.
 
-Integration metadata can be authenticated with:
+Integration metadata can be authenticated with one or more shared secrets:
 
 ```dotenv
-ZENTLOOP_INTEGRATION_SECRET=
+# One secret
+ZENTLOOP_INTEGRATION_SECRET="eins"
+
+# Multiple accepted secrets (one quoted comma-separated value)
+ZENTLOOP_INTEGRATION_SECRET="eins,zwe!,dr3i"
 ZENTLOOP_INTEGRATION_MAX_SKEW_SECONDS=300
 ```
+
+Each incoming signed request may use any configured secret. Commas delimit secrets and cannot be part of an individual secret. **Connected integrations** keeps same-name peers separate by source and matched `key-N` slot without exposing the secret itself.
 
 The protocol and health-check behavior are documented in [docs/INTEGRATION_PROTOCOL.md](docs/INTEGRATION_PROTOCOL.md). Nginx-specific integration notes are available under [docs/integrations/](docs/integrations/).
 

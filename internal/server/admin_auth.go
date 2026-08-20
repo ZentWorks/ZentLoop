@@ -166,6 +166,7 @@ func (s *AdminServer) adminLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	setAdminSessionCookie(w, r, token, sess.ExpiresAt)
+	s.kickAdminUpdateCheck(time.Now())
 	writeJSON(w, map[string]any{"ok": true, "user": s.cfg.AdminUser, "csrf": sess.CSRF, "expires_at": sess.ExpiresAt})
 }
 

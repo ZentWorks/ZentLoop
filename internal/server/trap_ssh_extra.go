@@ -65,7 +65,7 @@ func (w *virtualSSHWorld) executeExtraCommand(cmd string, args []string, raw, in
 		}
 		allowed := map[string]bool{"cat": true, "cut": true, "echo": true, "grep": true, "head": true, "sed": true, "tail": true, "tr": true, "uname": true, "wc": true}
 		if !allowed[args[0]] {
-			r.Output = "busybox: applet not found"
+			r.Output = args[0] + ": applet not found"
 			r.Status = 127
 			return r, true
 		}

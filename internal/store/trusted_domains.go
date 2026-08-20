@@ -116,17 +116,11 @@ func (s *Store) loadTrustedDomains() error {
 			s.trustedManual[d] = row
 		}
 	}
-	for _, row := range cfg.Proxy {
-		if d := canonicalTrustedHost(row.Domain); d != "" {
-			row.Domain, row.Source = d, "proxy"
-			s.trustedProxy[d] = row
-		}
-	}
 	return nil
 }
 
 func (s *Store) persistTrustedDomainsLocked() error {
-	cfg := model.TrustedDomainSettings{Manual: trustedDomainRows(s.trustedManual), Proxy: trustedDomainRows(s.trustedProxy)}
+	cfg := model.TrustedDomainSettings{Manual: trustedDomainRows(s.trustedManual), Proxy: []model.TrustedDomain{}}
 	b, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
@@ -152,7 +146,7 @@ func trustedDomainRows(in map[string]model.TrustedDomain) []model.TrustedDomain 
 func (s *Store) TrustedDomains() model.TrustedDomainSettings {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return model.TrustedDomainSettings{Manual: trustedDomainRows(s.trustedManual), Proxy: trustedDomainRows(s.trustedProxy)}
+	return model.TrustedDomainSettings{Manual: trustedDomainRows(s.trustedManual), Proxy: []model.TrustedDomain{}}
 }
 
 func (s *Store) SetManualTrustedDomains(domains []string, now time.Time) error {
@@ -179,30 +173,6 @@ func (s *Store) SetManualTrustedDomains(domains []string, now time.Time) error {
 	return nil
 }
 
-func (s *Store) TrustProxyTarget(target, integration string, now time.Time) error {
-	d := canonicalTrustedHost(target)
-	if d == "" {
-		return fmt.Errorf("%w %q", ErrInvalidTrustedDomain, strings.TrimSpace(target))
-	}
-	integration = strings.ToLower(strings.TrimSpace(integration))
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	old, existed := s.trustedProxy[d]
-	if existed && old.Integration == integration {
-		return nil
-	}
-	s.trustedProxy[d] = model.TrustedDomain{Domain: d, Source: "proxy", Integration: integration, AddedAt: now}
-	if err := s.persistTrustedDomainsLocked(); err != nil {
-		if existed {
-			s.trustedProxy[d] = old
-		} else {
-			delete(s.trustedProxy, d)
-		}
-		return err
-	}
-	return nil
-}
-
 func (s *Store) trustedTargetRootLocked(raw string) (string, string, bool) {
 	host := canonicalTrustedHost(raw)
 	if host == "" {
@@ -218,9 +188,6 @@ func (s *Store) trustedTargetRootLocked(raw string) (string, string, bool) {
 	}
 	if root != "" {
 		return root, "manual", true
-	}
-	if _, ok := s.trustedProxy[host]; ok {
-		return host, "proxy", true
 	}
 	return "", "", false
 }

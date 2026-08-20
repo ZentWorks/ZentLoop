@@ -69,7 +69,7 @@ func (s *TrapServer) handle(w http.ResponseWriter, r *http.Request) {
 	integrationCheck := r.URL.Path == integrationCheckPath
 	integrationClaim := cleanIntegrationName(r.Header.Get("X-ZentLoop-Integration"))
 	if integrationCheck && r.Method == http.MethodGet && integration.Valid {
-		s.store.RecordIntegrationVerified(integration.Name, remoteIP(r.RemoteAddr), integration.Trust, arrival)
+		s.store.RecordIntegrationVerified(integration.Name, remoteIP(r.RemoteAddr), integration.Trust, integration.KeyID, arrival)
 		w.Header().Set("X-ZentLoop-Integration-Verified", "1")
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -80,18 +80,6 @@ func (s *TrapServer) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	requestHost := s.originalRequestHost(r, integration)
 	target := requestHost
-	if integration.Valid && integration.Target != "" {
-		// Only the exact target covered by signed, non-catch-all integration
-		// metadata may create trust. A separate X-Forwarded-Host can recover
-		// display/routing context, but must never inherit trust from a signature
-		// that authenticated a different (for example internal upstream) target.
-		signedTarget := canonicalIntegrationTarget(integration.Target)
-		if !integration.CatchAll && integration.Trust == "signed" && signedTarget != "" && !internalUpstreamTarget(signedTarget) && strings.EqualFold(signedTarget, requestHost) {
-			if err := s.store.TrustProxyTarget(requestHost, integration.Name, arrival); err != nil {
-				log.Printf("trusted proxy target store: %v", err)
-			}
-		}
-	}
 	targetTrusted, targetTrust := s.store.IsTrustedHost(target)
 	client := s.clientMeta(r, target)
 	ip := client.IP
@@ -502,6 +490,7 @@ type integrationMeta struct {
 	Target   string
 	CatchAll bool
 	Trust    string
+	KeyID    string
 	Valid    bool
 }
 
@@ -520,7 +509,8 @@ func (s *TrapServer) integrationMeta(r *http.Request, now time.Time) integration
 	// Easy local integrations (NPM/nginx/Traefik on the same Docker/LAN network)
 	// can use trusted metadata without a shared secret. If a secret is configured,
 	// signed metadata is mandatory even from a private peer.
-	if s.cfg.IntegrationSecret == "" {
+	secrets := s.cfg.IntegrationSecrets()
+	if len(secrets) == 0 {
 		if !isPrivateOrLoopback(remote) {
 			return integrationMeta{}
 		}
@@ -551,12 +541,18 @@ func (s *TrapServer) integrationMeta(r *http.Request, now time.Time) integration
 		return integrationMeta{}
 	}
 	payload := integrationSignaturePayload(tsRaw, name, target, catchAll, r.Method, r.URL.RequestURI())
-	mac := hmac.New(sha256.New, []byte(s.cfg.IntegrationSecret))
-	_, _ = mac.Write([]byte(payload))
-	if !hmac.Equal(got, mac.Sum(nil)) {
-		return integrationMeta{}
+	for i, secret := range secrets {
+		mac := hmac.New(sha256.New, []byte(secret))
+		_, _ = mac.Write([]byte(payload))
+		if hmac.Equal(got, mac.Sum(nil)) {
+			return integrationMeta{Name: name, Target: target, CatchAll: catchAll, Trust: "signed", KeyID: integrationSecretKeyID(i), Valid: true}
+		}
 	}
-	return integrationMeta{Name: name, Target: target, CatchAll: catchAll, Trust: "signed", Valid: true}
+	return integrationMeta{}
+}
+
+func integrationSecretKeyID(index int) string {
+	return fmt.Sprintf("key-%d", index+1)
 }
 
 func integrationSignaturePayload(timestamp, name, target string, catchAll bool, method, requestURI string) string {

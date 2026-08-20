@@ -343,6 +343,12 @@ func (w *virtualSSHWorld) executeWithInput(line, initialInput string) virtualSSH
 		w.system.markActivity(virtualActivityWeight(res))
 		return res
 	}
+	if res, ok := w.executeEscapedSemicolonChain(line); ok {
+		w.adaptToBehavior(res.Family, line)
+		w.lastStatus = res.Status
+		w.system.markActivity(virtualActivityWeight(res))
+		return res
+	}
 	if res, ok := w.executeVirtualControlFlow(line, initialInput); ok {
 		w.adaptToBehavior(res.Family, line)
 		w.lastStatus = res.Status
@@ -1161,6 +1167,9 @@ func (w *virtualSSHWorld) executeOneDepth(raw, input string, aliasDepth int) vir
 	}
 	if strings.HasPrefix(words[0], "./") || strings.Contains(words[0], "/") {
 		resolved := w.resolve(words[0])
+		if w.dirs[resolved] {
+			return virtualSSHResult{Output: "bash: " + words[0] + ": Is a directory", Status: 126, Family: "execution", CommandName: path.Base(words[0]), Depth: maxInt(3, w.depth), Risk: 84, Persona: "environment-fingerprint", Message: "virtual directory execution rejected"}
+		}
 		_, isSystemBinary := w.fileMeta[resolved]
 		isSystemBinary = isSystemBinary && w.fileMeta[resolved].Kind == "elf" && virtualCommandPath(cmd) != "" && (strings.HasPrefix(resolved, "/bin/") || strings.HasPrefix(resolved, "/usr/bin/") || strings.HasPrefix(resolved, "/sbin/") || strings.HasPrefix(resolved, "/usr/sbin/"))
 		if content, ok := w.virtualReadFile(words[0]); ok && content != "" && !isSystemBinary {
@@ -1289,6 +1298,17 @@ func (w *virtualSSHWorld) executeOneDepth(raw, input string, aliasDepth int) vir
 		// still valid input and must not turn into a misleading "missing operand".
 		ok := file == ""
 		if file != "" {
+			resolved := w.resolve(file)
+			if w.dirs[resolved] {
+				switch cmd {
+				case "head", "tail":
+					r.Output = cmd + ": error reading '" + file + "': Is a directory"
+				default:
+					r.Output = cmd + ": " + file + ": Is a directory"
+				}
+				r.Status, r.Persona, r.Message = 1, "environment-fingerprint", "directory content probe"
+				return r
+			}
 			content, ok = w.virtualReadFile(file)
 		}
 		if !ok {

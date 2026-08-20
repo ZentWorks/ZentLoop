@@ -78,7 +78,6 @@ type Store struct {
 	integrationPeers      map[string]*model.IntegrationPeer
 	integrationPersist    map[string]time.Time
 	trustedManual         map[string]model.TrustedDomain
-	trustedProxy          map[string]model.TrustedDomain
 	retentionDays         int
 	retentionStop         chan struct{}
 	retentionDone         chan struct{}
@@ -99,8 +98,8 @@ func newStoreState(dataDir string, retentionDays int) *Store {
 		actors: make(map[string]*model.ActorProfile), actorTimeline: make(map[string][]model.ActorActivity), actorSessionLast: make(map[string]time.Time), actorFingerprints: make(map[string]int64), sshActorLastCommand: make(map[string]string), sshActorLastCommandAt: make(map[string]time.Time), actorSSHUsers: make(map[string]map[string]struct{}),
 		sshSessions: make(map[string]*model.SSHSession), sshUserCounts: make(map[string]int64), sshCommandCounts: make(map[string]int64), sshFamilyCounts: make(map[string]int64), sshCountryCounts: make(map[string]int64), sshClientCounts: make(map[string]int64), sshDayConnections: make(map[string]int64), sshDayAuth: make(map[string]int64), sshDayShells: make(map[string]int64), sshDayCommands: make(map[string]int64), sshHourCounts: make(map[int64]int64), sshHighlightStates: make(map[string]*sshHighlightState),
 		integrationPeers: make(map[string]*model.IntegrationPeer), integrationPersist: make(map[string]time.Time),
-		trustedManual: make(map[string]model.TrustedDomain), trustedProxy: make(map[string]model.TrustedDomain),
-		started: time.Now(), dataDir: dataDir, retentionDays: retentionDays,
+		trustedManual: make(map[string]model.TrustedDomain),
+		started:       time.Now(), dataDir: dataDir, retentionDays: retentionDays,
 		retentionStop: make(chan struct{}), retentionDone: make(chan struct{}),
 	}
 }

@@ -710,3 +710,41 @@ func (w *virtualSSHWorld) expandVirtualBackticks(line string) string {
 	}
 	return line
 }
+
+// executeEscapedSemicolonChain models the observed malformed shell fragment
+// "|| \\;". In bash the backslash turns ';' into a literal command name; it is
+// not a command separator. If the left-hand grep succeeds the RHS is skipped.
+// Otherwise bash tries to execute a command named ';' and the later words are
+// merely its arguments, so a trailing crontab pipeline must not be applied.
+func (w *virtualSSHWorld) executeEscapedSemicolonChain(line string) (virtualSSHResult, bool) {
+	if !strings.Contains(strings.ToLower(line), "crontab") {
+		return virtualSSHResult{}, false
+	}
+	const marker = `|| \;`
+	idx := strings.Index(line, marker)
+	if idx < 0 {
+		return virtualSSHResult{}, false
+	}
+	left := strings.TrimSpace(line[:idx])
+	if needle := virtualFixedGrepNeedle(left); needle != "" && strings.Contains(w.crontabContent, needle) {
+		return virtualSSHResult{Status: 0, Family: "persistence", CommandName: "grep", Depth: maxInt(5, w.depth), Risk: 94, Persona: "persistence", Message: "scheduled task presence check"}, true
+	}
+	return virtualSSHResult{Output: "bash: ;: command not found", Status: 127, Family: "persistence", CommandName: ";", Depth: maxInt(6, w.depth), Risk: 97, Persona: "persistence", Message: "scheduled task modification failed on malformed shell chain"}, true
+}
+
+func virtualFixedGrepNeedle(line string) string {
+	idx := strings.LastIndex(line, "grep -F")
+	if idx < 0 {
+		return ""
+	}
+	words := virtualWords(line[idx:])
+	for i := 1; i < len(words); i++ {
+		if words[i] == "-F" && i+1 < len(words) {
+			return words[i+1]
+		}
+		if strings.HasPrefix(words[i], "-F") && len(words[i]) > 2 {
+			return strings.TrimPrefix(words[i], "-F")
+		}
+	}
+	return ""
+}
