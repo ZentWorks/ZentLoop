@@ -185,6 +185,7 @@ func newVirtualSSHWorldForSourceShared(sessionID, username, sourceIP string, sys
 		w.seedFileMetadata()
 		w.seedSystemBinaries()
 	}
+	w.ensureVirtualLoginUser(suffix)
 	shared.mu.Unlock()
 	return w
 }
@@ -263,6 +264,34 @@ func (w *virtualSSHWorld) seedFilesystem(suffix string) {
 	w.files["/opt/app/current/.git/config"] = "[core]\n\trepositoryformatversion = 0\n[remote \"origin\"]\n\turl = ssh://git@git.prod.internal/platform/web.git\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n"
 	w.files["/opt/app/current/inventory.ini"] = lures.Inventory()
 	w.dirs["/opt/app/current/.git"] = true
+}
+
+func (w *virtualSSHWorld) ensureVirtualLoginUser(suffix string) {
+	user := safeVirtualName(w.user)
+	home := w.homeDir()
+	w.dirs[home] = true
+	w.dirs[path.Join(home, ".ssh")] = true
+	if !w.virtualUserExists(user) {
+		passwd := strings.TrimSuffix(w.files["/etc/passwd"], "\n")
+		if passwd != "" {
+			passwd += "\n"
+		}
+		w.files["/etc/passwd"] = passwd + virtualUserPasswdEntry(user) + "\n"
+		groups := strings.TrimSuffix(w.files["/etc/group"], "\n")
+		if groups != "" {
+			groups += "\n"
+		}
+		w.files["/etc/group"] = groups + virtualUserGroupEntry(user) + "\n"
+		shadow := strings.TrimSuffix(w.files["/etc/shadow"], "\n")
+		if shadow != "" {
+			shadow += "\n"
+		}
+		w.files["/etc/shadow"] = shadow + user + ":$y$j9T$U" + suffix + "x$N4r6p2:20307:0:99999:7:::\n"
+		now := w.system.snapshot().Now
+		for _, name := range []string{"/etc/passwd", "/etc/group", "/etc/shadow"} {
+			w.fileMeta[name] = virtualFileMeta{Size: int64(len(w.files[name])), ModTime: now.Add(-21 * 24 * time.Hour), Kind: "text"}
+		}
+	}
 }
 
 func (w *virtualSSHWorld) homeDir() string {
@@ -1850,7 +1879,7 @@ func (w *virtualSSHWorld) fakeCurl(args []string) virtualSSHResult {
 	}
 	if isVirtualProviderLookup(url) {
 		r.Family, r.Depth, r.Risk, r.Persona, r.Message, r.LoopInc, r.Delay = "network", 4, 89, "hosting-provider-discovery", "hosting provider discovery", 0, 0
-		r.Output = virtualProviderOrg
+		r.Output = w.system.providerOrganization()
 		return r
 	}
 	internal := strings.Contains(url, "127.0.0.1:8081") || strings.Contains(url, "db-internal") || strings.Contains(url, "10.10.30.12") || strings.Contains(url, "backup-01")

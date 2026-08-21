@@ -71,7 +71,7 @@
         <input id="historySearch" type="search" placeholder="Search IP, path, actor…" autocomplete="off">
       </div>
       <div class="table-wrap"><table>
-        <thead><tr><th>LAST</th><th>TARGET</th><th>IP</th><th>CC</th><th>CLASS</th><th>ACTOR</th><th>VISITS</th><th>REQ</th><th>DEPTH</th><th>LOOP</th><th>LAST PATH</th></tr></thead>
+        <thead><tr><th>LAST</th><th>TARGET</th><th>IP</th><th>CC</th><th>CLASS</th><th>ACTOR</th><th>VISITS</th><th title="Requests: current/last visit | session total">REQ V|T</th><th>DEPTH</th><th>LOOP</th><th>LAST PATH</th></tr></thead>
         <tbody id="historyBody"></tbody>
       </table></div>
     </section>
@@ -127,7 +127,7 @@
         <article class="metric"><span>GUARD HITS</span><strong id="healthGuardHits">0</strong><small>budget / recursion / VFS</small></article>
         <article class="metric ok"><span>EVENT STORAGE</span><strong id="healthStorage">0 B</strong><small>HTTP + SSH + intel</small></article>
         <article class="metric"><span>IN-MEMORY EVENTS</span><strong id="healthMemoryEvents">0</strong><small>bounded rings</small></article>
-        <article class="metric"><span>STORAGE PRESSURE</span><strong id="healthStoragePressure">NORMAL</strong><small id="healthStorageBudget">warn at 32 MB</small></article>
+        <article class="metric"><span>STORAGE PRESSURE</span><strong id="healthStoragePressure">NORMAL</strong><small id="healthStorageBudget">warning 512 MB · cleanup 1 GB</small></article>
         <article class="metric"><span>REALTIME CLIENTS</span><strong id="healthLiveSubscribers">0 / 0</strong><small id="healthLiveSubscribersNote">Admin WebSocket viewers</small></article>
         <article class="metric"><span>REALTIME SHED</span><strong id="healthLiveRejected">0</strong><small>new realtime viewers rejected</small></article>
       </section>
@@ -179,7 +179,7 @@
 
       <section class="grid two lower">
         <article class="panel history-panel ssh-history">
-          <div class="panel-title"><div><h2>SSH session history</h2><span id="sshHistoryCount">0 sessions</span></div></div>
+          <div class="panel-title ssh-history-title"><div><h2>SSH session history</h2><span id="sshHistoryCount">0 loaded</span></div><div id="sshHistoryFilters" class="feed-filters" role="group" aria-label="SSH session history filter"><button type="button" class="active" data-ssh-history-filter="all">All <span id="sshHistoryAllCount">0</span></button><button type="button" data-ssh-history-filter="authenticated">Authenticated <span id="sshHistoryAuthCount">0</span></button></div></div>
           <div class="table-wrap"><table>
             <thead><tr><th>LAST</th><th>IP</th><th>CC</th><th>USER</th><th>CLIENT</th><th>AUTH</th><th>CMD</th><th>DEPTH</th><th>DURATION</th></tr></thead>
             <tbody id="sshHistoryBody"></tbody>
@@ -325,7 +325,7 @@
       <section class="panel"><div class="panel-title"><h2>Observed timeline</h2><span id="ipRawCounts">retained events</span></div><div id="ipObservedTimeline" class="ip-observed-timeline"></div></section>
     </section>
 
-    <footer><span class="footer-version"><span id="version">ZentLoop 0.3.1</span><a id="updateBadge" class="update-badge" href="https://github.com/ZentWorks/ZentLoop" target="_blank" rel="noopener noreferrer" hidden>NEW VERSION AVAILABLE</a></span><span>Proxy: <b id="proxyMode">direct</b> · GeoIP: <b id="geoStatus">local</b> · Official bots: <b id="botStatus">waiting</b> · <a href="https://db-ip.com" target="_blank" rel="noopener noreferrer">IP Geolocation by DB-IP</a></span></footer>
+    <footer><span class="footer-version"><span id="version">ZentLoop 0.3.4</span><a id="updateBadge" class="update-badge" href="https://github.com/ZentWorks/ZentLoop" target="_blank" rel="noopener noreferrer" hidden>NEW VERSION AVAILABLE</a></span><span>Proxy: <b id="proxyMode">direct</b> · GeoIP: <b id="geoStatus">local</b> · Official bots: <b id="botStatus">waiting</b> · <a href="https://db-ip.com" target="_blank" rel="noopener noreferrer">IP Geolocation by DB-IP</a></span></footer>
   </main>
 
   <div id="settingsBackdrop" class="modal-backdrop settings-backdrop" aria-hidden="true"></div>

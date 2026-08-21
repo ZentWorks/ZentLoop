@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -122,6 +123,18 @@ func (w *virtualSSHWorld) seedDeepReality() {
 }
 
 func (w *virtualSSHWorld) virtualProcessStatus(pid string) (string, bool) {
+	n, err := strconv.Atoi(pid)
+	if err == nil {
+		if p := w.processes[n]; p != nil && p.Alive {
+			fields := virtualWords(p.Command)
+			name := "worker"
+			if len(fields) > 0 {
+				name = path.Base(fields[0])
+			}
+			uid := virtualUserID(p.User)
+			return fmt.Sprintf("Name:\t%s\nUmask:\t0022\nState:\tS (sleeping)\nTgid:\t%d\nPid:\t%d\nPPid:\t1\nUid:\t%d\t%d\t%d\t%d\nGid:\t%d\t%d\t%d\t%d\nFDSize:\t64\nThreads:\t1\nNoNewPrivs:\t0\nSeccomp:\t2\n", name, n, n, uid, uid, uid, uid, uid, uid, uid, uid), true
+		}
+	}
 	type proc struct {
 		name, state string
 		ppid, uid   int

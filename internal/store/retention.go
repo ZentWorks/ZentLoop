@@ -55,13 +55,63 @@ func (s *Store) pruneExpired(now time.Time) error {
 		total += fileSize(filepath.Join(s.dataDir, target.name))
 	}
 	if total >= storagePressureCritBytes {
+		pressureTargets := make([]jsonlPressureTarget, 0, len(targets))
 		for _, target := range targets {
-			if err := compactJSONLTail(filepath.Join(s.dataDir, target.name), storagePressureTargetFileBytes, target.file); err != nil {
-				return fmt.Errorf("pressure compact %s: %w", target.name, err)
-			}
+			pressureTargets = append(pressureTargets, jsonlPressureTarget{name: target.name, file: target.file})
+		}
+		if err := compactJSONLStorageBudget(s.dataDir, storagePressureTargetTotalBytes, pressureTargets); err != nil {
+			return fmt.Errorf("pressure compact: %w", err)
 		}
 		s.health.StorageCompactions++
-		log.Printf("ZentLoop storage pressure compaction completed: before=%d bytes", total)
+		log.Printf("ZentLoop storage pressure compaction completed: before=%d bytes target=%d bytes after=%d bytes", total, storagePressureTargetTotalBytes, eventStorageBytes(s.dataDir))
+	}
+	return nil
+}
+
+type jsonlPressureTarget struct {
+	name string
+	file **os.File
+}
+
+// compactJSONLStorageBudget reduces the aggregate retained JSONL footprint to
+// targetBytes while preserving the newest complete records in every store.
+// Each file receives a proportional share of the target based on its current
+// footprint, avoiding the old behavior that forced every store to the same size.
+func compactJSONLStorageBudget(dataDir string, targetBytes int64, targets []jsonlPressureTarget) error {
+	if targetBytes < 1 || len(targets) == 0 {
+		return nil
+	}
+	total := int64(0)
+	sizes := make([]int64, len(targets))
+	for i, target := range targets {
+		sizes[i] = fileSize(filepath.Join(dataDir, target.name))
+		total += sizes[i]
+	}
+	if total <= targetBytes || total == 0 {
+		return nil
+	}
+
+	remainingTarget := targetBytes
+	remainingSize := total
+	for i, target := range targets {
+		if sizes[i] == 0 {
+			continue
+		}
+		share := int64(1)
+		if remainingSize > 0 {
+			share = remainingTarget * sizes[i] / remainingSize
+			if share < 1 {
+				share = 1
+			}
+		}
+		if share > sizes[i] {
+			share = sizes[i]
+		}
+		if err := compactJSONLTail(filepath.Join(dataDir, target.name), share, target.file); err != nil {
+			return fmt.Errorf("%s: %w", target.name, err)
+		}
+		remainingTarget -= share
+		remainingSize -= sizes[i]
 	}
 	return nil
 }

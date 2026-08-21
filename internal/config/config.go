@@ -46,6 +46,7 @@ type Config struct {
 	SSHIdleSeconds        int
 	SSHMaxSessionMinutes  int
 	SSHMaxAuthTries       int
+	SSHProviderOrg        string
 	AdminSSHEnabled       bool
 	AdminSSHAddr          string
 	AdminSSHUser          string
@@ -88,6 +89,7 @@ func Load() Config {
 		SSHIdleSeconds:        envInt("ZENTLOOP_SSH_IDLE_SECONDS", 120),
 		SSHMaxSessionMinutes:  envInt("ZENTLOOP_SSH_MAX_SESSION_MINUTES", 30),
 		SSHMaxAuthTries:       envInt("ZENTLOOP_SSH_MAX_AUTH_TRIES", 6),
+		SSHProviderOrg:        strings.TrimSpace(env("ZENTLOOP_SSH_PROVIDER_ORG", "AS16276 OVH SAS")),
 		AdminSSHEnabled:       envBool("ZENTLOOP_ADMIN_SSH_ENABLED", false),
 		AdminSSHAddr:          env("ZENTLOOP_ADMIN_SSH_ADDR", ":22222"),
 		AdminSSHUser:          env("ZENTLOOP_ADMIN_SSH_USER", adminUser),

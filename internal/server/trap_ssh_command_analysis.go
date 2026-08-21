@@ -30,6 +30,9 @@ func analyzeSSHCommand(command string, result virtualSSHResult) sshCommandAnalys
 	a.Primary = primarySSHCommand(a.Stages, result.CommandName)
 
 	switch {
+	case looksLikeObservedResourceCleanup(low) && hasSSHLocalPayloadExecution(low):
+		a.Primary, a.Family, a.Intent, a.Message = primarySSHCommand(a.Stages, "crontab"), "execution", "resource-hijack-payload-execution", "competitor cleanup followed by local payload execution"
+		a.Fingerprint, a.Depth, a.Risk, a.Persona = "ssh:resource-hijack-execution", 7, 100, "payload-execution"
 	case looksLikeObservedResourceCleanup(low):
 		a.Primary, a.Family, a.Intent, a.Message = primarySSHCommand(a.Stages, "crontab"), "execution", "competitor-resource-cleanup", "virtual competitor/resource cleanup"
 		a.Fingerprint, a.Depth, a.Risk, a.Persona = "ssh:resource-hijack-preparation", 7, 99, "resource-hijack-preparation"
@@ -51,11 +54,17 @@ func analyzeSSHCommand(command string, result virtualSSHResult) sshCommandAnalys
 		}
 	case strings.Contains(low, "crontab"):
 		a.Primary, a.Family, a.Depth, a.Risk, a.Persona = "crontab", "persistence", 5, 92, "persistence"
-		if strings.Contains(low, "@reboot") || strings.Contains(low, "| crontab") || strings.Contains(low, "crontab -r") || (strings.Contains(low, "crontab -") && !strings.Contains(low, "crontab -l")) {
+		switch {
+		case strings.Contains(low, "crontab -r") && !strings.Contains(low, "@reboot") && !strings.Contains(low, "| crontab") && !strings.Contains(low, "crontab - "):
+			a.Intent, a.Message, a.Fingerprint, a.Depth, a.Risk = "scheduled-task-removal", "scheduled task removal", "ssh:scheduled-task-removal", 5, 93
+		case strings.Contains(low, "@reboot") || strings.Contains(low, "| crontab") || (strings.Contains(low, "crontab -") && !strings.Contains(low, "crontab -l")):
 			a.Intent, a.Message, a.Fingerprint, a.Depth, a.Risk = "scheduled-task-modification", "scheduled task discovery or modification", "ssh:cron-persistence", 6, 97
-		} else {
+		default:
 			a.Intent, a.Message, a.Fingerprint = "scheduled-task-discovery", "scheduled task discovery", "ssh:scheduled-task-discovery"
 		}
+	case strings.Contains(low, "> /tmp/d.log") || strings.Contains(low, ">/tmp/d.log"):
+		a.Primary, a.Family, a.Intent, a.Message = primarySSHCommand(a.Stages, "echo"), "filesystem", "execution-marker-write", "execution/campaign marker written"
+		a.Fingerprint, a.Depth, a.Risk, a.Persona = "ssh:execution-marker", 5, 91, result.Persona
 	case strings.Contains(low, "nproc") || strings.Contains(low, "lscpu") || strings.Contains(low, "getconf _nprocessors"):
 		a.Family, a.Intent, a.Message = "recon", "cpu-resource-discovery", "CPU resource discovery"
 		a.Fingerprint, a.Depth, a.Risk, a.Persona = "ssh:hardware-recon", 4, 87, "system-recon"
@@ -82,6 +91,13 @@ func analyzeSSHCommand(command string, result virtualSSHResult) sshCommandAnalys
 	}
 
 	return a
+}
+
+func hasSSHLocalPayloadExecution(low string) bool {
+	if !strings.Contains(low, "./") {
+		return false
+	}
+	return strings.Contains(low, "chmod ") || strings.Contains(low, " disown") || strings.Contains(low, "&")
 }
 
 func applySSHCommandAnalysis(result *virtualSSHResult, a sshCommandAnalysis) {

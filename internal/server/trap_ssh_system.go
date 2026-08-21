@@ -9,6 +9,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -37,14 +38,15 @@ type virtualSSHPeerState struct {
 }
 
 type virtualSSHSystem struct {
-	mu         sync.Mutex
-	bootTime   time.Time
-	seed       uint64
-	lastUpdate time.Time
-	load1      float64
-	load5      float64
-	load15     float64
-	peers      map[string]virtualSSHPeerState
+	mu          sync.Mutex
+	bootTime    time.Time
+	seed        uint64
+	lastUpdate  time.Time
+	load1       float64
+	load5       float64
+	load15      float64
+	peers       map[string]virtualSSHPeerState
+	providerOrg string
 }
 
 type virtualSSHSystemSnapshot struct {
@@ -94,13 +96,14 @@ func loadVirtualSSHSystem(dataDir string) *virtualSSHSystem {
 	_ = persistVirtualSSHSystem(path, state)
 	base := 0.08 + float64(state.Seed%13)/100
 	return &virtualSSHSystem{
-		bootTime:   state.BootTime.UTC(),
-		seed:       state.Seed,
-		lastUpdate: now,
-		load1:      base + 0.05,
-		load5:      base + 0.03,
-		load15:     base + 0.01,
-		peers:      make(map[string]virtualSSHPeerState),
+		bootTime:    state.BootTime.UTC(),
+		seed:        state.Seed,
+		lastUpdate:  now,
+		load1:       base + 0.05,
+		load5:       base + 0.03,
+		load15:      base + 0.01,
+		peers:       make(map[string]virtualSSHPeerState),
+		providerOrg: defaultVirtualProviderOrg,
 	}
 }
 
@@ -108,14 +111,40 @@ func newEphemeralVirtualSSHSystem() *virtualSSHSystem {
 	now := time.Now().UTC()
 	seed := uint64(0x7a656e746c6f6f70)
 	return &virtualSSHSystem{
-		bootTime:   now.Add(-27*24*time.Hour - 7*time.Hour - 22*time.Minute).Truncate(time.Second),
-		seed:       seed,
-		lastUpdate: now,
-		load1:      0.18,
-		load5:      0.13,
-		load15:     0.09,
-		peers:      make(map[string]virtualSSHPeerState),
+		bootTime:    now.Add(-27*24*time.Hour - 7*time.Hour - 22*time.Minute).Truncate(time.Second),
+		seed:        seed,
+		lastUpdate:  now,
+		load1:       0.18,
+		load5:       0.13,
+		load15:      0.09,
+		peers:       make(map[string]virtualSSHPeerState),
+		providerOrg: defaultVirtualProviderOrg,
 	}
+}
+
+func (s *virtualSSHSystem) setProviderOrg(org string) {
+	if s == nil {
+		return
+	}
+	org = strings.TrimSpace(org)
+	if org == "" {
+		org = defaultVirtualProviderOrg
+	}
+	s.mu.Lock()
+	s.providerOrg = org
+	s.mu.Unlock()
+}
+
+func (s *virtualSSHSystem) providerOrganization() string {
+	if s == nil {
+		return defaultVirtualProviderOrg
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if strings.TrimSpace(s.providerOrg) == "" {
+		return defaultVirtualProviderOrg
+	}
+	return s.providerOrg
 }
 
 func randomVirtualSeed() uint64 {

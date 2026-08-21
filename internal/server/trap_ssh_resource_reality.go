@@ -1,11 +1,12 @@
 package server
 
 import (
+	"fmt"
 	"path"
 	"strings"
 )
 
-const virtualProviderOrg = "AS16276 OVH SAS"
+const defaultVirtualProviderOrg = "AS16276 OVH SAS"
 
 func isVirtualProviderLookup(raw string) bool {
 	low := strings.ToLower(strings.TrimSpace(raw))
@@ -46,14 +47,18 @@ func (w *virtualSSHWorld) executeKnownResourceCleanup(line string) (virtualSSHRe
 		if proc == nil || !proc.Alive {
 			continue
 		}
-		name := strings.ToLower(path.Base(strings.Fields(proc.Command)[0]))
+		fields := strings.Fields(proc.Command)
+		if len(fields) == 0 {
+			continue
+		}
+		name := strings.ToLower(path.Base(fields[0]))
 		if proc.CPU > 40.0 || proc.Mem > 60.0 || name == "cache" || name == "xmrig" || name == "cpuminer" || name == "minerd" || name == "ccminer" {
 			proc.Alive = false
 		}
 	}
 
-	return virtualSSHResult{
-		CommandName: "for",
+	result := virtualSSHResult{
+		CommandName: "crontab",
 		Family:      "execution",
 		Depth:       7,
 		Risk:        99,
@@ -61,7 +66,47 @@ func (w *virtualSSHWorld) executeKnownResourceCleanup(line string) (virtualSSHRe
 		Message:     "virtual competitor/resource cleanup",
 		Status:      0,
 		LoopInc:     2,
-	}, true
+	}
+
+	// Some observed miner families append chmod/execute/disown/history cleanup to
+	// the same giant command. The fast-path above must still apply those later
+	// side effects or a follow-up ps/stat/history probe would reveal a fake shell.
+	for _, target := range w.virtualLocalExecutionTargets(line) {
+		if _, exists := w.files[target]; !exists {
+			_ = w.setVirtualFile(target, "\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00GLIBC_2.34\x00worker\n")
+		}
+		base := path.Base(target)
+		if strings.Contains(low, "chmod 777 "+strings.ToLower(base)) || strings.Contains(low, "chmod +x "+strings.ToLower(base)) {
+			w.fileModes[target] = 0o777
+		}
+		proc := w.ensureVirtualPayloadProcess(target)
+		if proc != nil {
+			proc.Disowned = strings.Contains(low, "disown")
+			if strings.Contains(low, "&") {
+				proc.JobID = w.nextJob
+				w.nextJob++
+				if !proc.Disowned {
+					w.jobs[proc.JobID] = proc.PID
+				}
+				result.Output = fmt.Sprintf("[%d] %d", proc.JobID, proc.PID)
+			}
+		}
+		result.PayloadStage = "executed"
+		result.PayloadPath = target
+		result.Risk = 100
+		result.Persona = "payload-execution"
+		result.Message = "virtual competitor cleanup and payload execution"
+		result.LoopInc++
+		break
+	}
+	if strings.Contains(low, "history -c") {
+		w.history = nil
+		w.historyCleared = true
+	}
+	if strings.Contains(low, ".bash_history") {
+		w.deleteVirtualFile(path.Join(w.homeDir(), ".bash_history"))
+	}
+	return result, true
 }
 
 func looksLikeObservedResourceCleanup(low string) bool {

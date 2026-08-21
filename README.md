@@ -195,6 +195,7 @@ The repository contains `.env.example` with the complete deployment-oriented exa
 | `ZENTLOOP_RETENTION_DAYS` | `30` | Persistent event-log retention; values above 30 are hard-capped to 30 days |
 | `ZENTLOOP_SSH_ENABLED` | `false` | Enable public SSH deception |
 | `ZENTLOOP_SSH_PUBLIC_PORT` | `2222` | Bridge-host port for SSH deception |
+| `ZENTLOOP_SSH_PROVIDER_ORG` | `AS16276 OVH SAS` | Synthetic provider/ASN organization returned by SSH provider discovery; set it to match the deployed target |
 | `ZENTLOOP_ADMIN_SSH_ENABLED` | `false` | Enable management SSH TUI |
 | `ZENTLOOP_ADMIN_SSH_BIND` | `127.0.0.1` | Host bind for management SSH |
 | `ZENTLOOP_ADMIN_SSH_PORT` | `22222` | Host port for management SSH |

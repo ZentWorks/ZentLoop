@@ -17,13 +17,13 @@ import (
 )
 
 const (
-	maxRing                        = 5000
-	maxPathKeys                    = 5000
-	maxSessions                    = 10000
-	maxRealtimeSubscribers         = 24
-	storagePressureWarnBytes       = 32 << 20
-	storagePressureCritBytes       = 128 << 20
-	storagePressureTargetFileBytes = 32 << 20
+	maxRing                         = 5000
+	maxPathKeys                     = 5000
+	maxSessions                     = 10000
+	maxRealtimeSubscribers          = 24
+	storagePressureWarnBytes        = 512 << 20
+	storagePressureCritBytes        = 1 << 30
+	storagePressureTargetTotalBytes = 768 << 20
 )
 
 type Store struct {
@@ -125,10 +125,12 @@ func NewWithRetention(dataDir string, retentionDays int) (*Store, error) {
 		return nil, err
 	}
 	if eventStorageBytes(dataDir) >= storagePressureCritBytes {
-		for _, name := range []string{"events.jsonl", "ssh-events.jsonl", "intel-events.jsonl"} {
-			if err := compactJSONLTail(filepath.Join(dataDir, name), storagePressureTargetFileBytes, nil); err != nil {
-				return nil, fmt.Errorf("startup storage pressure compact %s: %w", name, err)
-			}
+		if err := compactJSONLStorageBudget(dataDir, storagePressureTargetTotalBytes, []jsonlPressureTarget{
+			{name: "events.jsonl"},
+			{name: "ssh-events.jsonl"},
+			{name: "intel-events.jsonl"},
+		}); err != nil {
+			return nil, fmt.Errorf("startup storage pressure compact: %w", err)
 		}
 		s.health.StorageCompactions++
 	}
@@ -300,6 +302,9 @@ func (s *Store) applyEvent(e model.Event) {
 	}
 	if e.TargetTrust != "" {
 		ss.TargetTrust = e.TargetTrust
+	}
+	if e.SelfOrigin {
+		ss.SelfOrigin = true
 	}
 	if e.HostSweep {
 		ss.HostSweep = true

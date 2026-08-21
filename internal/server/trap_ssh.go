@@ -34,8 +34,20 @@ type TrapSSH struct {
 	tarpitSem   chan struct{}
 	mu          sync.Mutex
 	perIP       map[string]int
+	realityMu   sync.Mutex
+	reality     map[string]virtualSSHSourceReality
 	close       sync.Once
 	authTimeout time.Duration
+}
+
+const (
+	maxVirtualSSHSourceRealities = 128
+	virtualSSHSourceRealityTTL   = 24 * time.Hour
+)
+
+type virtualSSHSourceReality struct {
+	shared   *virtualSSHSharedState
+	lastSeen time.Time
 }
 
 type sshAuthState struct {
@@ -80,9 +92,11 @@ func NewTrapSSH(cfg config.Config, st *store.Store) (*TrapSSH, error) {
 	if tarpitSlots > 8 {
 		tarpitSlots = 8
 	}
+	system := loadVirtualSSHSystem(cfg.DataDir)
+	system.setProviderOrg(cfg.SSHProviderOrg)
 	return &TrapSSH{
-		cfg: cfg, store: st, listener: ln, signer: signer, geo: newGeoResolver(cfg.GeoIPDB), system: loadVirtualSSHSystem(cfg.DataDir),
-		sem: make(chan struct{}, cfg.SSHMaxConcurrent), tarpitSem: make(chan struct{}, tarpitSlots), perIP: make(map[string]int), authTimeout: defaultSSHAuthTimeout,
+		cfg: cfg, store: st, listener: ln, signer: signer, geo: newGeoResolver(cfg.GeoIPDB), system: system,
+		sem: make(chan struct{}, cfg.SSHMaxConcurrent), tarpitSem: make(chan struct{}, tarpitSlots), perIP: make(map[string]int), reality: make(map[string]virtualSSHSourceReality), authTimeout: defaultSSHAuthTimeout,
 	}, nil
 }
 
@@ -228,7 +242,7 @@ func (s *TrapSSH) handleConn(conn net.Conn, auth sshAuthState) {
 	user := cleanSSHField(serverConn.User(), 64)
 	actor := classifySSHActor(client, false)
 	base := model.SSHEvent{SessionID: auth.sessionID, IP: auth.ip, Country: auth.country, CountrySource: auth.countrySource, ClientVersion: client, Username: user}
-	shared := newVirtualSSHSharedState()
+	shared := s.sharedRealityForSource(auth.ip)
 
 	go s.handleGlobalSSHRequests(base, requests)
 	for ch := range channels {
@@ -262,6 +276,44 @@ func (s *TrapSSH) handleConn(conn net.Conn, auth sshAuthState) {
 		go s.handleTrapSSHSession(conn, channel, reqs, base, shared)
 	}
 	s.recordSSHEvent(base, "disconnect", "", "", "", "SSH connection closed", 70, 0, 0, 0, actor)
+}
+
+func (s *TrapSSH) sharedRealityForSource(ip string) *virtualSSHSharedState {
+	ip = strings.TrimSpace(ip)
+	if ip == "" {
+		return newVirtualSSHSharedState()
+	}
+	now := time.Now()
+	s.realityMu.Lock()
+	defer s.realityMu.Unlock()
+	if s.reality == nil {
+		s.reality = make(map[string]virtualSSHSourceReality)
+	}
+	for key, entry := range s.reality {
+		if now.Sub(entry.lastSeen) > virtualSSHSourceRealityTTL {
+			delete(s.reality, key)
+		}
+	}
+	if entry, ok := s.reality[ip]; ok && entry.shared != nil {
+		entry.lastSeen = now
+		s.reality[ip] = entry
+		return entry.shared
+	}
+	if len(s.reality) >= maxVirtualSSHSourceRealities {
+		oldestKey := ""
+		var oldest time.Time
+		for key, entry := range s.reality {
+			if oldestKey == "" || entry.lastSeen.Before(oldest) {
+				oldestKey, oldest = key, entry.lastSeen
+			}
+		}
+		if oldestKey != "" {
+			delete(s.reality, oldestKey)
+		}
+	}
+	shared := newVirtualSSHSharedState()
+	s.reality[ip] = virtualSSHSourceReality{shared: shared, lastSeen: now}
+	return shared
 }
 
 func (s *TrapSSH) handleGlobalSSHRequests(base model.SSHEvent, requests <-chan *ssh.Request) {
@@ -512,7 +564,7 @@ func (s *TrapSSH) recordSSHCommand(base model.SSHEvent, eventType, command strin
 	if analysis.Fingerprint != "" {
 		fingerprint = analysis.Fingerprint
 	}
-	if installer := world.sshInstallerSequenceFingerprint(result, command); installer != "" && (fingerprint == "" || result.PayloadStage == "retry" || result.PayloadStage == "executed") {
+	if installer := world.sshInstallerSequenceFingerprint(result, command); installer != "" && analysis.Fingerprint != "ssh:resource-hijack-execution" && (fingerprint == "" || result.PayloadStage == "retry" || result.PayloadStage == "executed") {
 		fingerprint = installer
 	}
 	e := model.SSHEvent{
@@ -528,7 +580,7 @@ func (s *TrapSSH) recordSSHCommand(base model.SSHEvent, eventType, command strin
 		log.Printf("SSH event store: %v", err)
 	}
 	recordSSHIntelligence(s.store, base, command, canaries)
-	if result.PayloadStage == "intent" || result.PayloadStage == "retry" || result.PayloadStage == "completed" {
+	if result.PayloadStage == "intent" || result.PayloadStage == "retry" || result.PayloadStage == "completed" || result.PayloadStage == "executed" {
 		_ = s.store.AddIntelSignal(model.IntelSignal{ID: newID(6), At: time.Now(), IP: base.IP, Protocol: "ssh", SessionID: base.SessionID, Kind: "payload", Technique: "exec-stdin-staging", Filename: result.PayloadPath, Summary: "SSH payload staging " + result.PayloadStage + ": " + result.PayloadPath})
 	}
 	switch {

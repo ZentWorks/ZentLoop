@@ -156,9 +156,12 @@ func (s *TrapServer) handle(w http.ResponseWriter, r *http.Request) {
 			ass.Confidence = "medium"
 		}
 	}
-	s.store.ApplyHTTPActorFingerprint(ip, behavior.Fingerprints)
-	if ass.Automation >= 65 || behavior.AutomationBoost >= 30 {
-		s.store.PromoteHTTPAutomation(ip, ass.Automation)
+	selfOrigin := selfOriginRequest(client, target, targetTrusted)
+	if !selfOrigin {
+		s.store.ApplyHTTPActorFingerprint(ip, behavior.Fingerprints)
+		if ass.Automation >= 65 || behavior.AutomationBoost >= 30 {
+			s.store.PromoteHTTPAutomation(ip, ass.Automation)
+		}
 	}
 	ss.RiskScore = ass.Risk
 	ss.AutomationScore = ass.Automation
@@ -175,6 +178,7 @@ func (s *TrapServer) handle(w http.ResponseWriter, r *http.Request) {
 	if !targetTrusted {
 		ss.TargetTrust = "untrusted"
 	}
+	ss.SelfOrigin = selfOrigin
 	if hostSweep.Detected {
 		ss.HostSweep = true
 		ss.HostSweepHosts = maxScoreInt(ss.HostSweepHosts, hostSweep.DistinctHosts)
@@ -287,7 +291,7 @@ func (s *TrapServer) handle(w http.ResponseWriter, r *http.Request) {
 		bytesWritten = cw.bytes
 	}
 	s.store.UpsertSession(ss, fp)
-	e := model.Event{ID: newID(6), At: now, SessionID: ss.ID, SessionFirstSeen: ss.FirstSeen, SessionRequests: ss.RequestCount, SessionVisits: ss.VisitCount, SessionVisitStarted: ss.VisitStarted, SessionVisitRequests: ss.VisitRequestCount, SessionVisitFirstPath: ss.VisitFirstPath, IP: ss.IP, IPSource: ss.IPSource, Proxy: ss.Proxy, Country: ss.Country, CountrySource: ss.CountrySource, CloudflareRay: ss.CloudflareRay, CloudflareColo: ss.CloudflareColo, Referrer: requestMeta.Referrer, ReferrerHost: requestMeta.ReferrerHost, RequestHost: requestMeta.RequestHost, Target: ss.Target, TargetTrust: ss.TargetTrust, HostSweep: ss.HostSweep, HostSweepHosts: ss.HostSweepHosts, ProbeName: probe.Name, ProbeProduct: probe.Product, ProbeCVE: probe.CVE, KnownProbe: knownProbe, Origin: requestMeta.Origin, AcceptLanguage: requestMeta.AcceptLanguage, HTTPProtocol: requestMeta.HTTPProtocol, Integration: requestMeta.Integration, IntegrationTrust: requestMeta.IntegrationTrust, CatchAll: requestMeta.CatchAll, Method: r.Method, Path: r.URL.Path, Status: status, Bytes: bytesWritten, RiskScore: ss.RiskScore, AutomationScore: ss.AutomationScore, Classification: ss.Classification, Actor: ss.Actor, Confidence: ss.Confidence, AvgIntervalMS: ss.AvgIntervalMS, IntervalVarMS: ss.IntervalVarMS, Persona: ss.Persona, WebStory: ss.WebStory, WebStoryConfidence: ss.WebStoryConfidence, WebStoryLocked: ss.WebStoryLocked, Depth: ss.Depth, Loop: ss.Loop, Frustration: ss.Frustration, Category: ass.Category, Message: label, UserAgent: ss.UserAgent, BotProvider: ss.BotProvider, BotName: ss.BotName, BotClaimed: ss.BotClaimed, BotVerified: ss.BotVerified}
+	e := model.Event{ID: newID(6), At: now, SessionID: ss.ID, SessionFirstSeen: ss.FirstSeen, SessionRequests: ss.RequestCount, SessionVisits: ss.VisitCount, SessionVisitStarted: ss.VisitStarted, SessionVisitRequests: ss.VisitRequestCount, SessionVisitFirstPath: ss.VisitFirstPath, IP: ss.IP, IPSource: ss.IPSource, Proxy: ss.Proxy, Country: ss.Country, CountrySource: ss.CountrySource, CloudflareRay: ss.CloudflareRay, CloudflareColo: ss.CloudflareColo, Referrer: requestMeta.Referrer, ReferrerHost: requestMeta.ReferrerHost, RequestHost: requestMeta.RequestHost, Target: ss.Target, TargetTrust: ss.TargetTrust, SelfOrigin: ss.SelfOrigin, HostSweep: ss.HostSweep, HostSweepHosts: ss.HostSweepHosts, ProbeName: probe.Name, ProbeProduct: probe.Product, ProbeCVE: probe.CVE, KnownProbe: knownProbe, Origin: requestMeta.Origin, AcceptLanguage: requestMeta.AcceptLanguage, HTTPProtocol: requestMeta.HTTPProtocol, Integration: requestMeta.Integration, IntegrationTrust: requestMeta.IntegrationTrust, CatchAll: requestMeta.CatchAll, Method: r.Method, Path: r.URL.Path, Status: status, Bytes: bytesWritten, RiskScore: ss.RiskScore, AutomationScore: ss.AutomationScore, Classification: ss.Classification, Actor: ss.Actor, Confidence: ss.Confidence, AvgIntervalMS: ss.AvgIntervalMS, IntervalVarMS: ss.IntervalVarMS, Persona: ss.Persona, WebStory: ss.WebStory, WebStoryConfidence: ss.WebStoryConfidence, WebStoryLocked: ss.WebStoryLocked, Depth: ss.Depth, Loop: ss.Loop, Frustration: ss.Frustration, Category: ass.Category, Message: label, UserAgent: ss.UserAgent, BotProvider: ss.BotProvider, BotName: ss.BotName, BotClaimed: ss.BotClaimed, BotVerified: ss.BotVerified}
 	if err := s.store.AddEvent(e); err != nil {
 		log.Printf("event store: %v", err)
 	}
@@ -808,6 +812,18 @@ func matchProxyRule(target, raw string) string {
 		}
 	}
 	return ""
+}
+
+func selfOriginRequest(client clientMeta, target string, targetTrusted bool) bool {
+	if !targetTrusted {
+		return false
+	}
+	clientIP := net.ParseIP(strings.TrimSpace(client.IP))
+	targetIP := net.ParseIP(targetHostOnly(target))
+	if clientIP == nil || targetIP == nil {
+		return false
+	}
+	return clientIP.Equal(targetIP)
 }
 
 func targetHostOnly(target string) string {

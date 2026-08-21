@@ -113,6 +113,19 @@ func (w *virtualSSHWorld) virtualDynamicFile(name string) (string, bool) {
 			}
 		}
 	}
+	if strings.HasPrefix(name, "/proc/") && strings.HasSuffix(name, "/cmdline") {
+		parts := strings.Split(strings.Trim(name, "/"), "/")
+		if len(parts) == 3 {
+			if pid, err := strconv.Atoi(parts[1]); err == nil {
+				if proc := w.processes[pid]; proc != nil && proc.Alive {
+					words := virtualWords(proc.Command)
+					if len(words) > 0 {
+						return strings.Join(words, "\x00") + "\x00", true
+					}
+				}
+			}
+		}
+	}
 	switch name {
 	case "/etc/hostname":
 		return w.hostname + "\n", true

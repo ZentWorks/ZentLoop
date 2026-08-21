@@ -157,6 +157,10 @@ func (s *Store) applyActorHTTPEventLocked(e model.Event) {
 		return
 	}
 	a := s.ensureActorLocked(e.IP, e.Country, e.At)
+	if e.SelfOrigin {
+		a.SelfOriginHTTPRequests++
+		return
+	}
 	addProtocol(a, "http")
 	a.HTTPRequests++
 	if e.RiskScore > a.RiskScore {
@@ -539,6 +543,7 @@ func (s *Store) HealthOverview() model.HealthOverview {
 	o.StorageTotalBytes = o.EventsBytes + o.SSHEventsBytes + o.IntelEventsBytes
 	o.StorageWarnBytes = storagePressureWarnBytes
 	o.StorageCriticalBytes = storagePressureCritBytes
+	o.StorageCleanupTargetBytes = storagePressureTargetTotalBytes
 	switch {
 	case o.StorageTotalBytes >= storagePressureCritBytes:
 		o.StoragePressure = "critical"

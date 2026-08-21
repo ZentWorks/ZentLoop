@@ -590,6 +590,43 @@ func (s *AdminServer) sshHighlightsExport(w http.ResponseWriter, r *http.Request
 	})
 }
 
+func sshHistoryAuthenticated(ss model.SSHSession) bool {
+	return ss.AuthAccepted && (ss.ShellOpened || ss.ExecRequests > 0 || ss.CommandCount > 0)
+}
+
+type sshHistoryPage struct {
+	Sessions           []model.SSHSession `json:"sessions"`
+	Total              int                `json:"total"`
+	AuthenticatedTotal int                `json:"authenticated_total"`
+	HasMore            bool               `json:"has_more"`
+	Filter             string             `json:"filter"`
+}
+
+func buildSSHHistoryPage(rows []model.SSHSession, filter string, limit int) sshHistoryPage {
+	authenticatedTotal := 0
+	filtered := make([]model.SSHSession, 0, len(rows))
+	for _, ss := range rows {
+		authenticated := sshHistoryAuthenticated(ss)
+		if authenticated {
+			authenticatedTotal++
+		}
+		if filter != "authenticated" || authenticated {
+			filtered = append(filtered, ss)
+		}
+	}
+	hasMore := limit > 0 && len(filtered) > limit
+	if hasMore {
+		filtered = filtered[:limit]
+	}
+	return sshHistoryPage{
+		Sessions:           filtered,
+		Total:              len(rows),
+		AuthenticatedTotal: authenticatedTotal,
+		HasMore:            hasMore,
+		Filter:             filter,
+	}
+}
+
 func (s *AdminServer) sshHistory(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		methodNotAllowed(w)
@@ -597,15 +634,30 @@ func (s *AdminServer) sshHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	limit := queryInt(r, "limit", 300, 1, 1000)
 	tr := requestTimeRange(r)
+	base := s.store.SSHHistory(s.sshActiveWindow(), 0)
 	if tr.Set {
-		base := s.store.SSHHistory(0, 0)
+		base = s.store.SSHHistory(0, 0)
 		if !tr.All && tr.To.IsZero() {
 			base = s.store.SSHHistory(s.sshActiveWindow(), 0)
 		}
-		writeJSON(w, limitSSHSessions(base, tr, limit))
+		base = limitSSHSessions(base, tr, 0)
+	}
+
+	// Keep the original array response for API compatibility. The Admin WebUI
+	// opts into the page envelope to receive exact retained-history counters and
+	// server-side Authenticated filtering without downloading all sessions.
+	if r.URL.Query().Get("view") != "page" {
+		if limit > 0 && len(base) > limit {
+			base = base[:limit]
+		}
+		writeJSON(w, base)
 		return
 	}
-	writeJSON(w, s.store.SSHHistory(s.sshActiveWindow(), limit))
+	filter := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("filter")))
+	if filter != "authenticated" {
+		filter = "all"
+	}
+	writeJSON(w, buildSSHHistoryPage(base, filter, limit))
 }
 
 func (s *AdminServer) sshSession(w http.ResponseWriter, r *http.Request) {

@@ -146,7 +146,7 @@ func (s *Store) applySSHEventLocked(e model.SSHEvent) {
 	if e.Frustration > ss.Frustration {
 		ss.Frustration = e.Frustration
 	}
-	if e.Persona != "" {
+	if e.Persona != "" && (ss.Persona == "" || sshPersonaRank(e.Persona) >= sshPersonaRank(ss.Persona)) {
 		ss.Persona = e.Persona
 	}
 	if e.CWD != "" {
@@ -224,6 +224,29 @@ func (s *Store) applySSHEventLocked(e model.SSHEvent) {
 		}
 	}
 	s.applyActorSSHEventLocked(e)
+}
+
+func sshPersonaRank(persona string) int {
+	switch strings.TrimSpace(persona) {
+	case "payload-execution":
+		return 100
+	case "resource-hijack-preparation":
+		return 95
+	case "payload-staging":
+		return 90
+	case "persistence", "privilege-escalation", "lateral-movement":
+		return 80
+	case "anti-fingerprint":
+		return 75
+	case "network-recon", "hosting-provider-discovery", "resource-discovery", "system-recon":
+		return 50
+	case "file-manipulation", "file-discovery":
+		return 30
+	case "interactive-shell":
+		return 20
+	default:
+		return 40
+	}
 }
 
 func normalizeSSHClient(v string) string {

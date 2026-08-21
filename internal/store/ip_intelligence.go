@@ -195,7 +195,7 @@ func (s *Store) IPIntelligence(ip, version string) (model.IPIntelligence, bool) 
 	out.Summary = model.IPIntelligenceSummary{
 		FirstSeen: actor.FirstSeen, LastSeen: actor.LastSeen, RiskScore: actor.RiskScore,
 		Classification: string(actor.Classification), Actor: string(actor.Actor),
-		HTTPRequests: actor.HTTPRequests, SSHConnections: actor.SSHConnections, SSHCommands: actor.SSHCommands,
+		HTTPRequests: actor.HTTPRequests + actor.SelfOriginHTTPRequests, SelfOriginHTTPRequests: actor.SelfOriginHTTPRequests, SelfOriginOnly: actor.SelfOriginHTTPRequests > 0 && actor.HTTPRequests == 0 && actor.SSHConnections == 0, SSHConnections: actor.SSHConnections, SSHCommands: actor.SSHCommands,
 		SSHAuthAccepted: actor.SSHAuthAccepted, SSHAuthRejected: actor.SSHAuthRejected,
 		SSHUniqueUsers: actor.SSHUniqueUsers, SSHPeakConcurrent: actor.SSHPeakConcurrent,
 		SSHPeakAttemptsPerMinute: actor.SSHPeakAttemptsPerMin, SSHMedianRevisitSeconds: actor.SSHMedianRevisitSeconds,
@@ -330,7 +330,10 @@ func (s *Store) IPIntelligence(ip, version string) (model.IPIntelligence, bool) 
 	out.TopTargets = topIPValues(targetCounts, 20)
 	out.Timeline = s.ipDailyTimelineLocked(ip, time.Now())
 
-	reasons := make([]string, 0, len(actor.Fingerprints)+4)
+	reasons := make([]string, 0, len(actor.Fingerprints)+5)
+	if actor.SelfOriginHTTPRequests > 0 {
+		reasons = append(reasons, "self-origin / hairpin Web traffic observed")
+	}
 	if actor.SSHPeakAttemptsPerMin >= 10 {
 		reasons = append(reasons, "high SSH authentication rate")
 	}

@@ -34,6 +34,7 @@ type Session struct {
 	RequestHost        string         `json:"request_host,omitempty"`
 	Target             string         `json:"target,omitempty"`
 	TargetTrust        string         `json:"target_trust,omitempty"`
+	SelfOrigin         bool           `json:"self_origin,omitempty"`
 	HostSweep          bool           `json:"host_sweep,omitempty"`
 	HostSweepHosts     int            `json:"host_sweep_hosts,omitempty"`
 	Origin             string         `json:"origin,omitempty"`
@@ -118,6 +119,7 @@ type Event struct {
 	RequestHost           string         `json:"request_host,omitempty"`
 	Target                string         `json:"target,omitempty"`
 	TargetTrust           string         `json:"target_trust,omitempty"`
+	SelfOrigin            bool           `json:"self_origin,omitempty"`
 	HostSweep             bool           `json:"host_sweep,omitempty"`
 	HostSweepHosts        int            `json:"host_sweep_hosts,omitempty"`
 	ProbeName             string         `json:"probe_name,omitempty"`
@@ -316,6 +318,7 @@ type ActorProfile struct {
 	FirstSeen               time.Time      `json:"first_seen"`
 	LastSeen                time.Time      `json:"last_seen"`
 	HTTPRequests            int64          `json:"http_requests"`
+	SelfOriginHTTPRequests  int64          `json:"self_origin_http_requests,omitempty"`
 	SSHConnections          int64          `json:"ssh_connections"`
 	SSHCommands             int64          `json:"ssh_commands"`
 	Protocols               []string       `json:"protocols"`
@@ -412,6 +415,8 @@ type IPIntelligenceSummary struct {
 	Classification            string    `json:"classification"`
 	Actor                     string    `json:"actor"`
 	HTTPRequests              int64     `json:"http_requests"`
+	SelfOriginHTTPRequests    int64     `json:"self_origin_http_requests,omitempty"`
+	SelfOriginOnly            bool      `json:"self_origin_only,omitempty"`
 	HTTPUniquePaths           int       `json:"http_unique_paths"`
 	HTTPUniqueTargets         int       `json:"http_unique_targets"`
 	HTTPPeakRequestsPerMinute int       `json:"http_peak_requests_per_minute"`
@@ -505,6 +510,7 @@ type HealthOverview struct {
 	StorageTotalBytes          int64  `json:"storage_total_bytes"`
 	StorageWarnBytes           int64  `json:"storage_warn_bytes"`
 	StorageCriticalBytes       int64  `json:"storage_critical_bytes"`
+	StorageCleanupTargetBytes  int64  `json:"storage_cleanup_target_bytes"`
 	StoragePressure            string `json:"storage_pressure"`
 	StorageCompactions         int64  `json:"storage_compactions"`
 	HTTPEventsInMemory         int    `json:"http_events_in_memory"`

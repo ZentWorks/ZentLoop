@@ -68,6 +68,7 @@ func (w *virtualSSHWorld) startVirtualProcess(command string, asJob bool) *virtu
 		w.jobs[p.JobID] = pid
 	}
 	w.processes[pid] = p
+	w.dirs[fmt.Sprintf("/proc/%d", pid)] = true
 	w.system.markActivity(5.5)
 	return p
 }
@@ -237,10 +238,7 @@ func (w *virtualSSHWorld) removeVirtualPattern(raw string) bool {
 	return removed
 }
 
-func (w *virtualSSHWorld) seedDropperExecutionTargets(command string) {
-	// Only called after a multi-signal miner/dropper cleanup sequence was
-	// recognized. If that sequence later chmods/executes a local ./name, seed the
-	// expected pre-existing staged artifact in the selected temporary directory.
+func (w *virtualSSHWorld) virtualLocalExecutionTargets(command string) []string {
 	baseDir := w.cwd
 	for _, candidate := range []string{"/dev/shm", "/var/tmp", "/tmp"} {
 		if strings.Contains(command, "cd "+candidate) || strings.Contains(command, "cd "+candidate+"/") {
@@ -248,6 +246,8 @@ func (w *virtualSSHWorld) seedDropperExecutionTargets(command string) {
 			break
 		}
 	}
+	seen := make(map[string]bool)
+	var targets []string
 	for offset := 0; ; {
 		i := strings.Index(command[offset:], "./")
 		if i < 0 {
@@ -267,15 +267,28 @@ func (w *virtualSSHWorld) seedDropperExecutionTargets(command string) {
 			name := command[i:j]
 			if name != "." && name != ".." && len(name) <= 48 {
 				target := path.Join(baseDir, name)
-				if _, exists := w.files[target]; !exists {
-					_ = w.setVirtualFile(target, "\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00GLIBC_2.34\x00worker\n")
-					w.fileModes[target] = 0o644
+				if !seen[target] {
+					seen[target] = true
+					targets = append(targets, target)
 				}
 			}
 		}
 		offset = j
 		if offset <= i {
 			offset = i + 1
+		}
+	}
+	return targets
+}
+
+func (w *virtualSSHWorld) seedDropperExecutionTargets(command string) {
+	// Only called after a multi-signal miner/dropper cleanup sequence was
+	// recognized. If that sequence later chmods/executes a local ./name, seed the
+	// expected pre-existing staged artifact in the selected temporary directory.
+	for _, target := range w.virtualLocalExecutionTargets(command) {
+		if _, exists := w.files[target]; !exists {
+			_ = w.setVirtualFile(target, "\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00GLIBC_2.34\x00worker\n")
+			w.fileModes[target] = 0o644
 		}
 	}
 }
@@ -354,7 +367,8 @@ func (w *virtualSSHWorld) virtualProcessPIDsByName(name string) []int {
 		"systemd": {1}, "init": {1}, "sshd": {612}, "web": {844}, "postgres": {901},
 		"redis-server": {932}, "dockerd": {1021}, "docker-proxy": {1102}, "backup-agent": {1842},
 	}
-	out := append([]int(nil), static[name]...)
+	out := make([]int, 0, len(static[name]))
+	out = append(out, static[name]...)
 	for pid, p := range w.processes {
 		if p == nil || !p.Alive {
 			continue
