@@ -437,6 +437,16 @@ type IPIntelligenceSummary struct {
 	Reasons                   []string  `json:"reasons"`
 }
 
+type IPObservation struct {
+	At        time.Time `json:"at"`
+	Protocol  string    `json:"protocol"`
+	Kind      string    `json:"kind"`
+	Summary   string    `json:"summary"`
+	RiskScore int       `json:"risk_score,omitempty"`
+	Source    string    `json:"source"`
+	SessionID string    `json:"session_id,omitempty"`
+}
+
 type IPIntelligence struct {
 	ExportedAt    time.Time             `json:"exported_at"`
 	Version       string                `json:"version"`
@@ -457,6 +467,7 @@ type IPIntelligence struct {
 	SSHSessions   []SSHSession          `json:"ssh_sessions"`
 	SSHEvents     []SSHEvent            `json:"ssh_events"`
 	Intelligence  []IntelSignal         `json:"intelligence"`
+	Observations  []IPObservation       `json:"observations"`
 }
 
 type ActorOverview struct {

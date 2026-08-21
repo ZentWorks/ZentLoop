@@ -581,7 +581,11 @@ func (s *TrapSSH) recordSSHCommand(base model.SSHEvent, eventType, command strin
 	}
 	recordSSHIntelligence(s.store, base, command, canaries)
 	if result.PayloadStage == "intent" || result.PayloadStage == "retry" || result.PayloadStage == "completed" || result.PayloadStage == "executed" {
-		_ = s.store.AddIntelSignal(model.IntelSignal{ID: newID(6), At: time.Now(), IP: base.IP, Protocol: "ssh", SessionID: base.SessionID, Kind: "payload", Technique: "exec-stdin-staging", Filename: result.PayloadPath, Summary: "SSH payload staging " + result.PayloadStage + ": " + result.PayloadPath})
+		technique := "exec-stdin-staging"
+		if result.CommandName == "scp" {
+			technique = "scp-upload-staging"
+		}
+		_ = s.store.AddIntelSignal(model.IntelSignal{ID: newID(6), At: time.Now(), IP: base.IP, Protocol: "ssh", SessionID: base.SessionID, Kind: "payload", Technique: technique, Filename: result.PayloadPath, Summary: "SSH payload staging " + result.PayloadStage + ": " + result.PayloadPath})
 	}
 	switch {
 	case strings.Contains(result.Message, "command budget"):

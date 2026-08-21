@@ -1,6 +1,7 @@
 package store
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -11,6 +12,15 @@ import (
 type ipSweepPoint struct {
 	at    time.Time
 	delta int
+}
+
+func ipFirstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func topIPValues(counts map[string]int64, limit int) []model.IPTopValue {
@@ -220,12 +230,30 @@ func (s *Store) IPIntelligence(ip, version string) (model.IPIntelligence, bool) 
 		cp := *cloneSession(ss)
 		cp.RecentTimes = nil
 		out.HTTPSessions = append(out.HTTPSessions, cp)
+		last := strings.TrimSpace(ss.CurrentPath)
+		if last == "" {
+			last = strings.TrimSpace(ss.FirstPath)
+		}
+		if last == "" {
+			last = "/"
+		}
+		method := strings.TrimSpace(ss.LastMethod)
+		if method == "" {
+			method = "HTTP"
+		}
+		summary := fmt.Sprintf("%d requests · %d visits · last %s %s", ss.RequestCount, ss.VisitCount, method, last)
+		out.Observations = append(out.Observations, model.IPObservation{At: ss.LastSeen, Protocol: "WEB", Kind: "SESSION", Summary: summary, RiskScore: ss.RiskScore, Source: "history", SessionID: ss.ID})
 	}
 	for _, e := range s.events {
 		if e.IP != ip {
 			continue
 		}
 		out.HTTPEvents = append(out.HTTPEvents, e)
+		summary := strings.TrimSpace(strings.TrimSpace(e.Method) + " " + strings.TrimSpace(e.Path))
+		if summary == "" {
+			summary = strings.TrimSpace(e.Message)
+		}
+		out.Observations = append(out.Observations, model.IPObservation{At: e.At, Protocol: "WEB", Kind: ipFirstNonEmpty(strings.TrimSpace(e.Method), strings.TrimSpace(e.Category), "HTTP"), Summary: summary, RiskScore: e.RiskScore, Source: "retained", SessionID: e.SessionID})
 		httpMinute[e.At.Truncate(time.Minute).Unix()]++
 		if p := strings.TrimSpace(e.Path); p != "" {
 			pathCounts[p]++
@@ -247,10 +275,23 @@ func (s *Store) IPIntelligence(ip, version string) (model.IPIntelligence, bool) 
 		out.SSHSessions = append(out.SSHSessions, cloneSSHSession(ss))
 		if u := strings.TrimSpace(ss.Username); u != "" {
 			targetUsers[u] = struct{}{}
+			userCounts[u]++
 		}
 		if c := strings.TrimSpace(ss.ClientVersion); c != "" {
-			targetClients[normalizeSSHClient(c)] = struct{}{}
+			normalized := normalizeSSHClient(c)
+			targetClients[normalized] = struct{}{}
+			clientCounts[normalized]++
 		}
+		auth := "auth not accepted"
+		if ss.AuthAccepted {
+			auth = "authenticated"
+		}
+		user := strings.TrimSpace(ss.Username)
+		if user == "" {
+			user = "unknown user"
+		}
+		summary := fmt.Sprintf("%s · %s · %d auth · %d commands", user, auth, ss.AuthAttempts, ss.CommandCount)
+		out.Observations = append(out.Observations, model.IPObservation{At: ss.LastSeen, Protocol: "SSH", Kind: "SESSION", Summary: summary, RiskScore: ss.RiskScore, Source: "history", SessionID: ss.ID})
 		points = append(points, ipSweepPoint{at: ss.FirstSeen, delta: 1})
 		end := ss.DisconnectedAt
 		if end.IsZero() {
@@ -265,15 +306,21 @@ func (s *Store) IPIntelligence(ip, version string) (model.IPIntelligence, bool) 
 			continue
 		}
 		out.SSHEvents = append(out.SSHEvents, e)
+		sshSummary := strings.TrimSpace(e.Command)
+		if sshSummary == "" {
+			sshSummary = strings.TrimSpace(e.Message)
+		}
+		if sshSummary == "" {
+			sshSummary = strings.TrimSpace(e.Type)
+		}
+		out.Observations = append(out.Observations, model.IPObservation{At: e.At, Protocol: "SSH", Kind: strings.ToUpper(ipFirstNonEmpty(strings.TrimSpace(e.Type), "SSH")), Summary: sshSummary, RiskScore: e.RiskScore, Source: "retained", SessionID: e.SessionID})
 		if e.Type == "auth" {
 			sshAuthMinute[e.At.Truncate(time.Minute).Unix()]++
 			if u := strings.TrimSpace(e.Username); u != "" {
-				userCounts[u]++
 				targetUsers[u] = struct{}{}
 			}
 		}
 		if c := strings.TrimSpace(e.ClientVersion); c != "" {
-			clientCounts[normalizeSSHClient(c)]++
 			targetClients[normalizeSSHClient(c)] = struct{}{}
 		}
 		if e.Type == "exec" || e.Type == "command" {
@@ -288,6 +335,8 @@ func (s *Store) IPIntelligence(ip, version string) (model.IPIntelligence, bool) 
 	for _, e := range s.intelEvents {
 		if e.IP == ip {
 			out.Intelligence = append(out.Intelligence, e)
+			summary := ipFirstNonEmpty(strings.TrimSpace(e.Summary), strings.TrimSpace(e.URL), strings.TrimSpace(e.Host), "intelligence")
+			out.Observations = append(out.Observations, model.IPObservation{At: e.At, Protocol: strings.ToUpper(ipFirstNonEmpty(strings.TrimSpace(e.Protocol), "INTEL")), Kind: strings.ToUpper(ipFirstNonEmpty(strings.TrimSpace(e.Kind), "INTEL")), Summary: summary, Source: "retained"})
 		}
 	}
 
@@ -358,6 +407,12 @@ func (s *Store) IPIntelligence(ip, version string) (model.IPIntelligence, bool) 
 	sort.Slice(out.HTTPEvents, func(i, j int) bool { return out.HTTPEvents[i].At.Before(out.HTTPEvents[j].At) })
 	sort.Slice(out.SSHEvents, func(i, j int) bool { return out.SSHEvents[i].At.Before(out.SSHEvents[j].At) })
 	sort.Slice(out.Intelligence, func(i, j int) bool { return out.Intelligence[i].At.Before(out.Intelligence[j].At) })
+	sort.Slice(out.Observations, func(i, j int) bool {
+		if out.Observations[i].At.Equal(out.Observations[j].At) {
+			return out.Observations[i].Source < out.Observations[j].Source
+		}
+		return out.Observations[i].At.Before(out.Observations[j].At)
+	})
 	return out, true
 }
 

@@ -57,6 +57,19 @@ func buildFamilyDeception(r *http.Request, ss *model.Session, a, b string) (Resp
 		return learned, true
 	}
 
+	if isCIBuildFamily(p) {
+		return buildCIBuildFamily(p, ss, a, canaries), true
+	}
+	if isBuildManifestFamily(p) {
+		return buildBuildManifestFamily(p, ss, a), true
+	}
+	if isOpsLogFamily(p) {
+		return buildOpsLogFamily(p, ss, a, canaries), true
+	}
+	if isApplianceFamily(p) {
+		return buildApplianceFamily(p, ss, a), true
+	}
+
 	if isTerraformFamily(p) {
 		if !adaptiveRevealSensitive(ss, p) {
 			return Response{Status: 404, ContentType: "text/plain; charset=utf-8", Label: "adaptive-terraform-miss", Depth: max(ss.Depth, 1), Body: []byte("Not Found\n")}, true
@@ -381,7 +394,7 @@ func isSSHMaterialFamily(p string) bool {
 		}
 	}
 	switch base {
-	case "id_ecdsa", "id_dsa", "host.key", "server.key", "localhost.key", "privatekey.key", "key.pem", "private-key":
+	case "id_ecdsa", "id_dsa", "id_rsa.pub", "host.key", "server.key", "localhost.key", "privatekey.key", "private.key", "key.pem", "private-key":
 		return true
 	}
 	return strings.HasPrefix(p, "/ssl/") && strings.HasSuffix(base, ".key")
@@ -397,6 +410,8 @@ func buildSSHMaterialFamily(p string, ss *model.Session, a string, canaries map[
 		return Response{Status: 200, ContentType: "text/plain; charset=utf-8", Label: "fake-ssh-authorized-keys", Depth: depth, Body: []byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIVIRTUAL" + a + " backup-agent@backup-01\n")}
 	case "config":
 		return Response{Status: 200, ContentType: "text/plain; charset=utf-8", Label: "fake-ssh-client-config", Depth: depth, Body: []byte("Host backup-01\n    HostName 10.10.30.12\n    User svc-backup\n    IdentityFile ~/.ssh/id_ed25519\n")}
+	case "id_rsa.pub":
+		return Response{Status: 200, ContentType: "text/plain; charset=utf-8", Label: "fake-ssh-public-key", Depth: depth, Body: []byte("ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDVIRTUAL" + a + " deploy@prod-app-02\n")}
 	default:
 		payload := base64.StdEncoding.EncodeToString([]byte("zentloop-invalid-key|" + ss.IP + "|" + canaries["backup"]))
 		return Response{Status: 200, ContentType: "text/plain; charset=utf-8", Label: "fake-ssh-private-key", Depth: max(ss.Depth, 5), Body: []byte("-----BEGIN OPENSSH " + "PRIVATE KEY-----\n" + payload + "\n-----END OPENSSH PRIVATE KEY-----\n")}
@@ -443,18 +458,28 @@ func buildWordPressSurfaceFamily(p string, ss *model.Session, a, b string) Respo
 
 func isPHPWebshellFamily(p string) bool {
 	base := strings.ToLower(path.Base(p))
-	if !strings.HasSuffix(base, ".php") || strings.Contains(p, "/wp-includes/") || strings.Contains(p, "/wp-content/") {
+	name, ok := suspiciousPHPFamilyName(base)
+	if !ok || strings.Contains(p, "/wp-includes/") || strings.Contains(p, "/wp-content/") {
 		return false
 	}
-	name := strings.TrimSuffix(base, ".php")
-	if name == "index" || name == "temp" || name == "phpinfo" || name == "info" || name == "pinfo" || name == "i" {
+	if name == "temp" || name == "phpinfo" || name == "info" || name == "pinfo" || name == "i" {
 		return false
 	}
-	// Root-level arbitrary PHP names are a common webshell/backdoor scanner
-	// pattern. In a deception catch-all there is no legitimate application route
-	// to preserve, so treat these as one family instead of memorizing filenames.
-	if strings.Count(strings.Trim(p, "/"), "/") == 0 && name != "index" {
+	if name == "index" {
+		for _, dir := range []string{"/.trash", "/storage/", "/files/", "/images/", "/css/", "/modules/", "/wk/", "/ocean/"} {
+			if strings.Contains(p, dir) {
+				return true
+			}
+		}
+		return false
+	}
+	if strings.Count(strings.Trim(p, "/"), "/") == 0 {
 		return true
+	}
+	for _, dir := range []string{"/update/", "/uploads/", "/filemanager/", "/plugins/", "/themes/", "/images/", "/css/", "/files/", "/public/", "/fw/", "/function/", "/about/", "/storage/", "/ocean/", "/modules/", "/.trash"} {
+		if strings.Contains(p, dir) {
+			return true
+		}
 	}
 	for _, prefix := range []string{"admin", "adminer", "adminner", "shell", "file", "upload", "ops", "media", "images", "image", "random", "class", "coff", "biu", "rt", "av", "mac", "wp-"} {
 		if strings.HasPrefix(name, prefix) {
@@ -476,6 +501,30 @@ func isPHPWebshellFamily(p string) bool {
 	return allDigits || (len(name) >= 8 && letter && digit) || strings.Contains(name, "tostring")
 }
 
+func suspiciousPHPFamilyName(base string) (string, bool) {
+	for _, suffix := range []string{".php", ".php7", ".phps"} {
+		if strings.HasSuffix(base, suffix) {
+			return strings.TrimSuffix(base, suffix), true
+		}
+	}
+	if i := strings.LastIndex(base, ".php"); i >= 0 && i+4 < len(base) {
+		tail := base[i+4:]
+		if tail != "" {
+			digits := true
+			for _, r := range tail {
+				if r < '0' || r > '9' {
+					digits = false
+					break
+				}
+			}
+			if digits {
+				return base[:i], true
+			}
+		}
+	}
+	return "", false
+}
+
 func buildPHPWebshellFamily(p string, ss *model.Session, a, b string) Response {
 	name := path.Base(p)
 	body := "<!doctype html><html><head><title>File Manager</title></head><body><h3>Server: prod-app-02</h3><pre>PHP 8.3.6\nLinux prod-app-02 6.8.0-64-generic x86_64\nDocument root: /var/www/html\nCurrent file: /var/www/html/" + html.EscapeString(name) + "\nUID: www-data (33)\n</pre><a href=\"/wp-content/uploads/\">uploads</a> · <a href=\"/backup/" + b + "/\">backup</a> · <a href=\"/diag/status/" + a + "\">system</a></body></html>"
@@ -484,7 +533,7 @@ func buildPHPWebshellFamily(p string, ss *model.Session, a, b string) Response {
 
 func isTerraformFamily(p string) bool {
 	base := path.Base(p)
-	return base == "terraform.tfvars" || base == "terraform.tfstate" || strings.HasSuffix(p, "/.terraform/terraform.tfstate")
+	return base == "terraform.tfvars" || base == "terraform.tfvars.json" || base == "terraform.auto.tfvars" || base == "terraform.tfstate" || base == "terraform.tfstate.backup" || base == "terraform.tfstate.old" || base == ".terraform.lock.hcl" || base == "environment" && strings.Contains(p, "/.terraform/") || strings.HasSuffix(p, "/.terraform/terraform.tfstate")
 }
 
 func buildTerraformFamily(p string, ss *model.Session, canaries map[string]string) Response {
@@ -519,16 +568,112 @@ func buildDebugToolFamily(p string, ss *model.Session, a, b string) Response {
 	return Response{Status: 200, ContentType: "text/html; charset=utf-8", Label: "fake-debug-console", Depth: depth, Body: []byte(body)}
 }
 
+func isCIBuildFamily(p string) bool {
+	base := path.Base(strings.ToLower(p))
+	switch base {
+	case "jenkinsfile", ".travis.yml", ".drone.yml", ".gitlab-ci.yml", "azure-pipelines.yml", "cloudbuild.yaml", "cloudbuild.yml", "buildspec.yml", "buildspec.yaml":
+		return true
+	}
+	return p == "/.jenkins/config.xml" || strings.HasSuffix(p, "/gitlab-runner/config.toml")
+}
+
+func buildCIBuildFamily(p string, ss *model.Session, a string, canaries map[string]string) Response {
+	if !adaptiveRevealSensitive(ss, p) {
+		return Response{Status: 404, ContentType: "text/plain; charset=utf-8", Label: "adaptive-ci-build-miss", Depth: max(ss.Depth, 1), Body: []byte("Not Found\n")}
+	}
+	base := path.Base(p)
+	depth := max(ss.Depth, 3)
+	if p == "/.jenkins/config.xml" {
+		return Response{Status: 200, ContentType: "application/xml", Label: "fake-ci-build-config", Depth: depth, Body: []byte("<hudson><numExecutors>2</numExecutors><mode>NORMAL</mode><label>prod-app</label></hudson>\n")}
+	}
+	switch base {
+	case "jenkinsfile":
+		return Response{Status: 200, ContentType: "text/plain; charset=utf-8", Label: "fake-ci-build-config", Depth: depth, Body: []byte("pipeline { agent any; stages { stage('deploy') { steps { sh 'deploy --env production' } } } }\n")}
+	case ".travis.yml", ".drone.yml", ".gitlab-ci.yml", "azure-pipelines.yml", "cloudbuild.yaml", "cloudbuild.yml", "buildspec.yml", "buildspec.yaml":
+		return Response{Status: 200, ContentType: "text/yaml; charset=utf-8", Label: "fake-ci-build-config", Depth: depth, Body: []byte("env: production\nservices:\n  - docker\ndeploy:\n  host: prod-app-02\n  token: " + canaries["internal-api"] + "\n")}
+	default:
+		return Response{Status: 200, ContentType: "text/plain; charset=utf-8", Label: "fake-ci-build-config", Depth: depth, Body: []byte("concurrent = 2\ncheck_interval = 3\nname = \"prod-runner-" + a[:6] + "\"\n")}
+	}
+}
+
+func isBuildManifestFamily(p string) bool {
+	base := path.Base(strings.ToLower(p))
+	return base == "asset-manifest.json" || base == "amplify_outputs.json" || strings.HasSuffix(p, "/.vite/manifest.json") || p == "/dist/manifest.json" || p == "/build/manifest.json" || p == "/cdk.out/manifest.json" || strings.HasSuffix(p, "/amplify/backend/amplify-meta.json") || strings.Contains(p, "/amplify/.config/")
+}
+
+func buildBuildManifestFamily(p string, ss *model.Session, a string) Response {
+	body := mustJSON(map[string]any{"environment": "production", "buildId": a, "assets": map[string]string{"main": "/assets/main." + a[:8] + ".js", "css": "/assets/main." + a[4:10] + ".css"}})
+	return Response{Status: 200, ContentType: "application/json", Label: "fake-build-manifest", Depth: max(ss.Depth, 2), Body: body}
+}
+
+func isOpsLogFamily(p string) bool {
+	base := path.Base(strings.ToLower(p))
+	if p == "/proc/1/environ" {
+		return true
+	}
+	if base == "error.log" || base == "debug.log" || base == "laravel.log" || base == "lumen.log" || base == "app.log" || base == "production.log" || base == "error_log" || base == "mail.log" {
+		return true
+	}
+	return strings.Contains(p, "/storage/logs/") || strings.Contains(p, "/var/log/apache2/") || strings.Contains(p, "/var/log/nginx/") || strings.Contains(p, "/wp-content/debug.log")
+}
+
+func buildOpsLogFamily(p string, ss *model.Session, a string, canaries map[string]string) Response {
+	if !adaptiveRevealSensitive(ss, p) {
+		return Response{Status: 404, ContentType: "text/plain; charset=utf-8", Label: "adaptive-ops-log-miss", Depth: max(ss.Depth, 1), Body: []byte("Not Found\n")}
+	}
+	if p == "/proc/1/environ" {
+		return Response{Status: 200, ContentType: "application/octet-stream", Label: "fake-process-environ", Depth: max(ss.Depth, 4), Body: []byte("PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin\x00APP_ENV=production\x00HOSTNAME=prod-app-02\x00INTERNAL_API_TOKEN=" + canaries["internal-api"] + "\x00")}
+	}
+	body := "2026-08-21T02:14:03Z INFO app request_id=" + a + " worker=web-2\n2026-08-21T02:14:04Z WARN backup upstream=backup-01 retry=1\n2026-08-21T02:14:05Z ERROR api upstream=http://prod-app-02/api/v1/internal/" + a + " status=502\n"
+	return Response{Status: 200, ContentType: "text/plain; charset=utf-8", Label: "fake-ops-log", Depth: max(ss.Depth, 3), Body: []byte(body)}
+}
+
+func isApplianceFamily(p string) bool {
+	return p == "/hnap1" || p == "/hnap1/" || p == "/webui" || p == "/webui/" || strings.HasPrefix(p, "/webui/") || p == "/geoserver" || p == "/geoserver/" || strings.HasPrefix(p, "/geoserver/")
+}
+
+func buildApplianceFamily(p string, ss *model.Session, a string) Response {
+	// Do not turn every appliance dictionary hit into another simultaneous product.
+	// Deterministically expose one coherent surface per target; the rest stay boring.
+	if !deterministicObservedReveal(storyTarget(ss), strings.Split(strings.Trim(p, "/"), "/")[0], 3) {
+		return Response{Status: 404, ContentType: "text/html; charset=utf-8", Label: "adaptive-appliance-miss", Depth: max(ss.Depth, 1), Body: []byte("<!doctype html><title>404 Not Found</title><h1>Not Found</h1>")}
+	}
+	if strings.HasPrefix(p, "/geoserver") {
+		return Response{Status: 302, ContentType: "text/html; charset=utf-8", Headers: map[string]string{"Location": "/geoserver/web/?sid=" + a}, Label: "fake-geoserver-redirect", Depth: max(ss.Depth, 2), Body: []byte("Redirecting...")}
+	}
+	if strings.HasPrefix(p, "/hnap1") {
+		return Response{Status: 401, ContentType: "text/xml; charset=utf-8", Label: "fake-hnap-auth", Depth: max(ss.Depth, 2), Body: []byte("<?xml version=\"1.0\"?><soap:Envelope><soap:Body><error>Authentication required</error></soap:Body></soap:Envelope>")}
+	}
+	return Response{Status: 200, ContentType: "text/html; charset=utf-8", Label: "fake-appliance-webui", Depth: max(ss.Depth, 2), Body: []byte("<!doctype html><title>Management Console</title><form method=post action=/webui/login><input name=username><input type=password name=password></form>")}
+}
+
 func normalizeFamilyPath(raw string) string {
 	p := strings.ToLower(strings.TrimSpace(raw))
-	if u, err := url.PathUnescape(p); err == nil {
+	// Scanner dictionaries commonly mix encoded traversal, backslashes and
+	// duplicate slashes. Decode at most twice for matching only; raw request paths
+	// remain untouched in events/exports.
+	for i := 0; i < 2; i++ {
+		u, err := url.PathUnescape(p)
+		if err != nil || u == p {
+			break
+		}
 		p = u
 	}
+	p = strings.ReplaceAll(p, "\\", "/")
 	for strings.Contains(p, "//") {
 		p = strings.ReplaceAll(p, "//", "/")
 	}
 	if !strings.HasPrefix(p, "/") {
 		p = "/" + p
+	}
+	// A frequent scanner mutation is /static../etc/... rather than a literal
+	// filesystem path. Normalize only this well-known prefix before path.Clean.
+	if strings.HasPrefix(p, "/static../") {
+		p = "/" + strings.TrimPrefix(p, "/static../")
+	}
+	p = path.Clean(p)
+	if p == "." {
+		return "/"
 	}
 	return p
 }
@@ -537,7 +682,7 @@ func isCloudCredentialFamily(p string) bool {
 	base := path.Base(strings.ToLower(p))
 	low := strings.ToLower(p)
 	switch base {
-	case "credentials", "serviceaccountkey.json", "service-account.json", "service_account.json", "firebase-adminsdk.json", "firebase-admin.json", "firebase-service-account.json", "firebase-credentials.json", "credentials.json", "google-credentials.json", "gcp-credentials.json", "gcp-key.json", "gcp-service.json", "gcp-service-account.json", "google-service-account.json", "gc-service.json", "application_default_credentials.json", "key.json", "sa.json", "secrets.json", "aws.json", "aws-credentials.json", "aws_credentials.txt", "aws_credentials.json", "aws_creds.js", ".aws_creds.json", "s3-credentials.json", "s3-credentials.bak", "aws-config.js", "rclone.conf", ".boto", ".s3cfg", ".netrc", ".npmrc", "accesstokens.json", "openai.json", "anthropic.json", "claude_desktop_config.json", ".mcp.json", "rootkey.csv":
+	case "credentials", "serviceaccountkey.json", "serviceaccount.json", "service-account.json", "service_account.json", "gcloud-service-key.json", "awsconfig.js", "awsconfiguration.json", "firebase-adminsdk.json", "firebase-admin.json", "firebase-service-account.json", "firebase-credentials.json", "credentials.json", "google-credentials.json", "gcp-credentials.json", "gcp-key.json", "gcp-service.json", "gcp-service-account.json", "google-service-account.json", "gc-service.json", "application_default_credentials.json", "key.json", "sa.json", "secrets.json", "aws.json", "aws-credentials.json", "aws_credentials.txt", "aws_credentials.json", "aws_creds.js", ".aws_creds.json", "s3-credentials.json", "s3-credentials.bak", "aws-config.js", "rclone.conf", ".boto", ".s3cfg", ".netrc", ".npmrc", "accesstokens.json", "openai.json", "anthropic.json", "claude_desktop_config.json", ".mcp.json", "rootkey.csv":
 		return true
 	}
 	return strings.HasPrefix(low, "/latest/meta-data/") || strings.Contains(low, "ecs/task-credentials") || p == "/__/firebase/init.json" || strings.Contains(low, "/.azure/") || strings.Contains(low, "/.gcloud/") || strings.Contains(low, "/.config/gcloud/") || strings.Contains(low, "/.aws/") || strings.Contains(low, "/aws/") || strings.Contains(low, "/secrets/aws") || strings.Contains(low, "/secrets/gcp") || strings.Contains(low, "/k8s/eks/credentials") || strings.Contains(low, "/.kube/config") || strings.Contains(low, "/serviceaccount/token") || strings.Contains(low, "/.openai/") || strings.Contains(low, "/.anthropic/") || strings.Contains(low, "/.config/anthropic/") || strings.Contains(low, "/.claude") || strings.Contains(low, "/.cursor/") || strings.Contains(low, "/.continue/") || strings.Contains(low, "/.codex/") || strings.Contains(low, "/.hermes/") || strings.Contains(low, "/.aider") || strings.Contains(low, "/.openclaw/")

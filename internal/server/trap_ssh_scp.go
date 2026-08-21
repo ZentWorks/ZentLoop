@@ -13,7 +13,7 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-const maxVirtualSCPUploadBytes = 1 << 20
+const maxVirtualSCPUploadBytes = 64 << 20
 
 func isVirtualSCPSink(command string) bool {
 	words := virtualWords(command)
@@ -42,7 +42,7 @@ func virtualSCPTarget(command string) string {
 func (w *virtualSSHWorld) runVirtualSCPSink(ch ssh.Channel, command string) virtualSSHResult {
 	r := virtualBaseResult("scp", "file-transfer", 6, 98, "payload-staging", "virtual SCP upload received")
 	target := w.resolve(virtualSCPTarget(command))
-	br := bufio.NewReader(io.LimitReader(ch, maxVirtualSCPUploadBytes+64*1024))
+	br := bufio.NewReader(io.LimitReader(ch, maxVirtualSCPUploadBytes+256*1024))
 	_, _ = ch.Write([]byte{0}) // receiver ready
 	for records := 0; records < 32; records++ {
 		line, err := br.ReadString('\n')
@@ -74,9 +74,16 @@ func (w *virtualSSHWorld) runVirtualSCPSink(ch ssh.Channel, command string) virt
 				return r
 			}
 			sz, err := strconv.ParseInt(parts[1], 10, 64)
-			if err != nil || sz < 0 || sz > maxVirtualSCPUploadBytes {
+			if err != nil || sz < 0 {
 				r.Status = 1
-				r.Output = "scp: file too large"
+				r.Output = "scp: protocol error: invalid file size"
+				_, _ = ch.Write(append([]byte{1}, []byte(r.Output+"\n")...))
+				return r
+			}
+			if sz > maxVirtualSCPUploadBytes {
+				r.Status = 1
+				r.Output = "scp: write remote: No space left on device"
+				_, _ = ch.Write(append([]byte{1}, []byte(r.Output+"\n")...))
 				return r
 			}
 			name := path.Base(parts[2])

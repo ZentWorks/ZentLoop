@@ -13,14 +13,31 @@ func normalizeProbePath(raw string) string {
 	if p == "" {
 		return "/"
 	}
-	if u, err := url.PathUnescape(p); err == nil {
+	// Scanner dictionaries commonly mix encoded traversal, backslashes and
+	// duplicate slashes. Decode at most twice for matching only; raw request paths
+	// remain untouched in events/exports.
+	for i := 0; i < 2; i++ {
+		u, err := url.PathUnescape(p)
+		if err != nil || u == p {
+			break
+		}
 		p = u
 	}
+	p = strings.ReplaceAll(p, "\\", "/")
 	for strings.Contains(p, "//") {
 		p = strings.ReplaceAll(p, "//", "/")
 	}
 	if !strings.HasPrefix(p, "/") {
 		p = "/" + p
+	}
+	// A frequent scanner mutation is /static../etc/... rather than a literal
+	// filesystem path. Normalize only this well-known prefix before path.Clean.
+	if strings.HasPrefix(p, "/static../") {
+		p = "/" + strings.TrimPrefix(p, "/static../")
+	}
+	p = path.Clean(p)
+	if p == "." {
+		return "/"
 	}
 	return p
 }
@@ -43,6 +60,18 @@ func identifyProbeFamily(raw string) (probeInfo, bool) {
 	}
 	if info, ok := identifyObservedWebProbe(p); ok {
 		return info, true
+	}
+	if isCIBuildProbe(p) {
+		return probeInfo{"CI/CD build configuration discovery", "CI/CD / build tooling", ""}, true
+	}
+	if isBuildManifestProbe(p) {
+		return probeInfo{"Frontend / deployment manifest discovery", "Web build / deployment tooling", ""}, true
+	}
+	if isOpsLogProbe(p) {
+		return probeInfo{"Application / operations log discovery", "Web application operations", ""}, true
+	}
+	if isApplianceProbe(p) {
+		return probeInfo{"Appliance / management surface discovery", "Network / application appliance", ""}, true
 	}
 	if isEnvProbeFamily(p) {
 		return probeInfo{"Environment / secret file discovery", "Generic web application", ""}, true
@@ -101,6 +130,39 @@ func identifyProbeFamily(raw string) (probeInfo, bool) {
 	return probeInfo{}, false
 }
 
+func isCIBuildProbe(p string) bool {
+	base := path.Base(strings.ToLower(p))
+	switch base {
+	case "jenkinsfile", ".travis.yml", ".drone.yml", ".gitlab-ci.yml", "azure-pipelines.yml", "cloudbuild.yaml", "cloudbuild.yml", "buildspec.yml", "buildspec.yaml":
+		return true
+	}
+	return p == "/.jenkins/config.xml" || strings.HasSuffix(p, "/gitlab-runner/config.toml")
+}
+
+func isBuildManifestProbe(p string) bool {
+	base := path.Base(strings.ToLower(p))
+	switch base {
+	case "asset-manifest.json", "amplify_outputs.json":
+		return true
+	}
+	return strings.HasSuffix(p, "/.vite/manifest.json") || p == "/dist/manifest.json" || p == "/build/manifest.json" || p == "/cdk.out/manifest.json" || strings.HasSuffix(p, "/amplify/backend/amplify-meta.json") || strings.Contains(p, "/amplify/.config/")
+}
+
+func isOpsLogProbe(p string) bool {
+	base := path.Base(strings.ToLower(p))
+	if p == "/proc/1/environ" {
+		return true
+	}
+	if base == "error.log" || base == "debug.log" || base == "laravel.log" || base == "lumen.log" || base == "app.log" || base == "production.log" || base == "error_log" || base == "mail.log" {
+		return true
+	}
+	return strings.Contains(p, "/storage/logs/") || strings.Contains(p, "/var/log/apache2/") || strings.Contains(p, "/var/log/nginx/") || strings.Contains(p, "/wp-content/debug.log")
+}
+
+func isApplianceProbe(p string) bool {
+	return p == "/hnap1" || p == "/hnap1/" || p == "/webui" || p == "/webui/" || strings.HasPrefix(p, "/webui/") || p == "/geoserver" || p == "/geoserver/" || strings.HasPrefix(p, "/geoserver/")
+}
+
 func isSSRFProbeFamily(p string) bool {
 	if strings.HasPrefix(p, "/latest/meta-data/") {
 		return true
@@ -125,7 +187,7 @@ func isCloudCredentialProbe(p string) bool {
 	base := path.Base(p)
 	low := strings.ToLower(p)
 	switch base {
-	case "credentials", "serviceaccountkey.json", "service-account.json", "service_account.json", "firebase-adminsdk.json", "firebase-admin.json", "firebase-service-account.json", "firebase-credentials.json", "credentials.json", "google-credentials.json", "gcp-credentials.json", "gcp-key.json", "gcp-service.json", "gcp-service-account.json", "google-service-account.json", "gc-service.json", "application_default_credentials.json", "key.json", "sa.json", "secrets.json", "aws.json", "aws-credentials.json", "aws_credentials.txt", "aws_credentials.json", "aws_creds.js", ".aws_creds.json", "s3-credentials.json", "s3-credentials.bak", "aws-config.js", "rclone.conf", ".boto", ".s3cfg", ".netrc", ".npmrc", "accessTokens.json", "openai.json", "anthropic.json", "claude_desktop_config.json", ".mcp.json", "rootkey.csv":
+	case "credentials", "serviceaccountkey.json", "serviceaccount.json", "service-account.json", "service_account.json", "gcloud-service-key.json", "awsconfig.js", "awsconfiguration.json", "firebase-adminsdk.json", "firebase-admin.json", "firebase-service-account.json", "firebase-credentials.json", "credentials.json", "google-credentials.json", "gcp-credentials.json", "gcp-key.json", "gcp-service.json", "gcp-service-account.json", "google-service-account.json", "gc-service.json", "application_default_credentials.json", "key.json", "sa.json", "secrets.json", "aws.json", "aws-credentials.json", "aws_credentials.txt", "aws_credentials.json", "aws_creds.js", ".aws_creds.json", "s3-credentials.json", "s3-credentials.bak", "aws-config.js", "rclone.conf", ".boto", ".s3cfg", ".netrc", ".npmrc", "accessTokens.json", "openai.json", "anthropic.json", "claude_desktop_config.json", ".mcp.json", "rootkey.csv":
 		return true
 	}
 	if strings.HasPrefix(low, "/latest/meta-data/") || strings.Contains(low, "ecs/task-credentials") {
@@ -142,7 +204,7 @@ func isCloudCredentialProbe(p string) bool {
 
 func isTerraformProbe(p string) bool {
 	base := path.Base(p)
-	return base == "terraform.tfvars" || base == "terraform.tfstate" || strings.HasSuffix(p, "/.terraform/terraform.tfstate")
+	return base == "terraform.tfvars" || base == "terraform.tfvars.json" || base == "terraform.auto.tfvars" || base == "terraform.tfstate" || base == "terraform.tfstate.backup" || base == "terraform.tfstate.old" || base == ".terraform.lock.hcl" || base == "environment" && strings.Contains(p, "/.terraform/") || strings.HasSuffix(p, "/.terraform/terraform.tfstate")
 }
 
 func isSQLDumpProbe(p string) bool {
@@ -166,18 +228,30 @@ func isWordPressSurfaceProbe(p string) bool {
 
 func isPHPWebshellProbe(p string) bool {
 	base := strings.ToLower(path.Base(p))
-	if !strings.HasSuffix(base, ".php") || strings.Contains(p, "/wp-includes/") || strings.Contains(p, "/wp-content/") {
+	name, ok := suspiciousPHPProbeName(base)
+	if !ok || strings.Contains(p, "/wp-includes/") || strings.Contains(p, "/wp-content/") {
 		return false
 	}
-	name := strings.TrimSuffix(base, ".php")
-	if name == "index" || name == "temp" || name == "phpinfo" || name == "info" || name == "pinfo" || name == "i" {
+	if name == "temp" || name == "phpinfo" || name == "info" || name == "pinfo" || name == "i" {
 		return false
 	}
-	// Root-level arbitrary PHP names are a common webshell/backdoor scanner
-	// pattern. In a deception catch-all there is no legitimate application route
-	// to preserve, so treat these as one family instead of memorizing filenames.
-	if strings.Count(strings.Trim(p, "/"), "/") == 0 && name != "index" {
+	if name == "index" {
+		for _, dir := range []string{"/.trash", "/storage/", "/files/", "/images/", "/css/", "/modules/", "/wk/", "/ocean/"} {
+			if strings.Contains(p, dir) {
+				return true
+			}
+		}
+		return false
+	}
+	// Root-level arbitrary PHP names and mutated PHP extensions are common
+	// webshell/backdoor dictionary probes on a catch-all target.
+	if strings.Count(strings.Trim(p, "/"), "/") == 0 {
 		return true
+	}
+	for _, dir := range []string{"/update/", "/uploads/", "/filemanager/", "/plugins/", "/themes/", "/images/", "/css/", "/files/", "/public/", "/fw/", "/function/", "/about/", "/storage/", "/ocean/", "/modules/", "/.trash"} {
+		if strings.Contains(p, dir) {
+			return true
+		}
 	}
 	for _, prefix := range []string{"admin", "adminer", "adminner", "shell", "file", "upload", "ops", "media", "images", "image", "random", "class", "coff", "biu", "rt", "av", "mac", "wp-"} {
 		if strings.HasPrefix(name, prefix) {
@@ -199,6 +273,30 @@ func isPHPWebshellProbe(p string) bool {
 	return allDigits || (len(name) >= 8 && letter && digit) || strings.Contains(name, "tostring")
 }
 
+func suspiciousPHPProbeName(base string) (string, bool) {
+	for _, suffix := range []string{".php", ".php7", ".phps"} {
+		if strings.HasSuffix(base, suffix) {
+			return strings.TrimSuffix(base, suffix), true
+		}
+	}
+	if i := strings.LastIndex(base, ".php"); i >= 0 && i+4 < len(base) {
+		tail := base[i+4:]
+		if tail != "" {
+			digits := true
+			for _, r := range tail {
+				if r < '0' || r > '9' {
+					digits = false
+					break
+				}
+			}
+			if digits {
+				return base[:i], true
+			}
+		}
+	}
+	return "", false
+}
+
 func isSSHMaterialProbe(p string) bool {
 	base := path.Base(p)
 	if strings.Contains(p, "/.ssh/") {
@@ -208,7 +306,7 @@ func isSSHMaterialProbe(p string) bool {
 		}
 	}
 	switch base {
-	case "id_ecdsa", "id_dsa", "host.key", "server.key", "localhost.key", "privatekey.key", "key.pem", "private-key":
+	case "id_ecdsa", "id_dsa", "id_rsa.pub", "host.key", "server.key", "localhost.key", "privatekey.key", "private.key", "key.pem", "private-key":
 		return true
 	}
 	return strings.HasPrefix(p, "/ssl/") && strings.HasSuffix(base, ".key")
