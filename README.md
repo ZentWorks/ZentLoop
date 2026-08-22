@@ -16,10 +16,10 @@ It combines an HTTP deception trap, an optional fully virtual SSH **Rabbit Hole*
 
 - HTTP deception for scanner, bot and exploit-path activity
 - Adaptive scanner-fed Web families keep WordPress/Rails/PHP discoveries story-consistent instead of making every probed technology exist at once
-- Optional SSH deception listener with a fully virtual filesystem and command environment
+- Optional SSH deception listener with a fully virtual filesystem, command environment and bounded source-bound user-systemd state
 - Shared synthetic world across HTTP and SSH
 - Actor intelligence with compact Web + SSH cross-protocol observations
-- Evidence-backed Attack Traces only when ZentLoop can prove a direct deception follow or synthetic canary reuse
+- Evidence-backed Attack Traces only when ZentLoop can prove a direct deception follow, synthetic canary reuse or exact source-bound SSH staged-file execution
 - Dedicated per-IP intelligence view with Web/SSH statistics, hardened heuristic campaign correlation and one JSON export
 - SSH highlights and unified Web/SSH realtime session observability
 - Responsive Web administration interface with first-party login sessions, Live/Intelligence drawers and iPhone/iPad home-screen Web App metadata

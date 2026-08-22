@@ -116,8 +116,10 @@ func (s *Store) attackTracesLocked(ip string) []model.AttackTrace {
 		}
 	}
 	for _, e := range s.intelEvents {
-		if e.IP == ip && strings.EqualFold(e.Protocol, "ssh") && e.Kind == "canary" && strings.TrimSpace(e.Canary) != "" {
-			intel = append(intel, e)
+		if e.IP == ip && strings.EqualFold(e.Protocol, "ssh") {
+			if (e.Kind == "canary" && strings.TrimSpace(e.Canary) != "") || (e.Kind == "payload" && strings.TrimSpace(e.Filename) != "") {
+				intel = append(intel, e)
+			}
 		}
 	}
 	sort.Slice(httpEvents, func(i, j int) bool { return httpEvents[i].At.Before(httpEvents[j].At) })
@@ -167,6 +169,9 @@ func (s *Store) attackTracesLocked(ip string) []model.AttackTrace {
 	// credentials. Reuse of one over SSH after ZentLoop served that exact canary
 	// label over Web is therefore strong cross-protocol evidence, not coincidence.
 	for _, sig := range intel {
+		if sig.Kind != "canary" {
+			continue
+		}
 		label := strings.TrimSpace(sig.Canary)
 		var cause *model.Event
 		for i := len(httpEvents) - 1; i >= 0; i-- {
@@ -221,6 +226,56 @@ func (s *Store) attackTracesLocked(ip string) []model.AttackTrace {
 			Steps: []model.AttackTraceStep{
 				{At: cause.At, Protocol: "web", SessionID: cause.SessionID, EventID: cause.ID, Kind: "cause", Path: cause.Path, Summary: cause.Message + " exposed canary " + label},
 				effectStep,
+			},
+		})
+	}
+
+	// Source-bound SSH reality gives us a second class of direct evidence: a file
+	// accepted by the virtual host and later executed at the exact same path. The
+	// path is mutable only inside this source's isolated world, so this is a real
+	// staged-file -> execution relationship rather than timing correlation.
+	for _, effect := range intel {
+		if effect.Kind != "payload" || effect.Technique != "staged-payload-execution" {
+			continue
+		}
+		filename := strings.TrimSpace(effect.Filename)
+		if filename == "" {
+			continue
+		}
+		var cause *model.IntelSignal
+		for i := len(intel) - 1; i >= 0; i-- {
+			sig := intel[i]
+			if sig.At.After(effect.At) || sig.Kind != "payload" || strings.TrimSpace(sig.Filename) != filename {
+				continue
+			}
+			if effect.At.Sub(sig.At) > 24*time.Hour {
+				break
+			}
+			if sig.Technique != "scp-upload-staging" && sig.Technique != "exec-stdin-staging" {
+				continue
+			}
+			if !strings.Contains(strings.ToLower(sig.Summary), "completed") {
+				continue
+			}
+			cp := sig
+			cause = &cp
+			break
+		}
+		if cause == nil {
+			continue
+		}
+		id := traceID(ip, cause.ID, effect.ID, "staged-payload-execution", filename)
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		traces = append(traces, model.AttackTrace{
+			ID: id, IP: ip, Confidence: "confirmed", Relation: "staged-payload-execution",
+			Evidence:  "source-bound virtual file accepted over SSH was later executed at the exact same path",
+			FirstSeen: cause.At, LastSeen: effect.At,
+			Steps: []model.AttackTraceStep{
+				{At: cause.At, Protocol: "ssh", SessionID: cause.SessionID, EventID: cause.ID, Kind: "cause", Summary: cause.Summary},
+				{At: effect.At, Protocol: "ssh", SessionID: effect.SessionID, EventID: effect.ID, Kind: "effect", Summary: effect.Summary},
 			},
 		})
 	}

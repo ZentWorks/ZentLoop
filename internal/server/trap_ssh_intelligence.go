@@ -1,12 +1,56 @@
 package server
 
 import (
+	"encoding/hex"
+	"regexp"
 	"strings"
 	"time"
 
 	"zentloop/internal/model"
 	"zentloop/internal/store"
 )
+
+var sshPayloadRedirectRE = regexp.MustCompile(`(?i)\bcat\s*>\s*["']?([^"'\s;&|]+)`)
+
+func (w *virtualSSHWorld) observeImplicitPayloadStage(command string, result *virtualSSHResult) {
+	if w == nil || result == nil || result.PayloadStage != "" || result.StdinBytes <= 0 || result.StdinSHA256 == "" {
+		return
+	}
+	kind := strings.ToLower(strings.TrimSpace(result.StdinKind))
+	if kind != "script" && !strings.Contains(kind, "elf") {
+		return
+	}
+	m := sshPayloadRedirectRE.FindStringSubmatch(command)
+	if len(m) != 2 {
+		return
+	}
+	target := w.resolve(strings.TrimSpace(m[1]))
+	if !w.isVirtualPayloadStagingPath(target) {
+		return
+	}
+	raw, err := hex.DecodeString(result.StdinSHA256)
+	if err != nil || len(raw) != 32 {
+		return
+	}
+	var sum [32]byte
+	copy(sum[:], raw)
+	previous, had := w.stagingPayloadHash[target]
+	w.stagingAttempts[target]++
+	w.stagingPayloadHash[target] = sum
+	result.PayloadPath = target
+	result.PayloadStage = "completed"
+	result.Family = "execution"
+	result.Depth = maxInt(result.Depth, 6)
+	result.Risk = maxInt(result.Risk, 97)
+	result.Persona = "payload-staging"
+	result.Message = "virtual payload staging completed"
+	if had && previous == sum {
+		result.PayloadStage = "retry"
+		result.LoopInc++
+		result.Risk = maxInt(result.Risk, 98)
+		result.Message = "identical virtual payload staging retry"
+	}
+}
 
 func sshBehaviorFingerprint(result virtualSSHResult, command string) string {
 	low := strings.ToLower(command)

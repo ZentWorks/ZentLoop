@@ -558,6 +558,7 @@ func (s *TrapSSH) recordSSHAuth(auth sshAuthState, client, user, method string, 
 
 func (s *TrapSSH) recordSSHCommand(base model.SSHEvent, eventType, command string, world *virtualSSHWorld, result virtualSSHResult, actor model.ActorType) {
 	canaries := world.CanaryTouches(command)
+	world.observeImplicitPayloadStage(command, &result)
 	analysis := analyzeSSHCommand(command, result)
 	applySSHCommandAnalysis(&result, analysis)
 	fingerprint := sshBehaviorFingerprint(result, command)
@@ -585,7 +586,12 @@ func (s *TrapSSH) recordSSHCommand(base model.SSHEvent, eventType, command strin
 		if result.CommandName == "scp" {
 			technique = "scp-upload-staging"
 		}
-		_ = s.store.AddIntelSignal(model.IntelSignal{ID: newID(6), At: time.Now(), IP: base.IP, Protocol: "ssh", SessionID: base.SessionID, Kind: "payload", Technique: technique, Filename: result.PayloadPath, Summary: "SSH payload staging " + result.PayloadStage + ": " + result.PayloadPath})
+		summary := "SSH payload staging " + result.PayloadStage + ": " + result.PayloadPath
+		if result.PayloadStage == "executed" {
+			technique = "staged-payload-execution"
+			summary = "Previously staged SSH payload executed: " + result.PayloadPath
+		}
+		_ = s.store.AddIntelSignal(model.IntelSignal{ID: newID(6), At: time.Now(), IP: base.IP, Protocol: "ssh", SessionID: base.SessionID, Kind: "payload", Technique: technique, Filename: result.PayloadPath, Summary: summary})
 	}
 	switch {
 	case strings.Contains(result.Message, "command budget"):

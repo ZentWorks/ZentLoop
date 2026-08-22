@@ -33,6 +33,9 @@ func analyzeSSHCommand(command string, result virtualSSHResult) sshCommandAnalys
 	case looksLikeObservedResourceCleanup(low) && hasSSHLocalPayloadExecution(low):
 		a.Primary, a.Family, a.Intent, a.Message = primarySSHCommand(a.Stages, "crontab"), "execution", "resource-hijack-payload-execution", "competitor cleanup followed by local payload execution"
 		a.Fingerprint, a.Depth, a.Risk, a.Persona = "ssh:resource-hijack-execution", 7, 100, "payload-execution"
+	case looksLikeCompoundPayloadExecution(low):
+		a.Primary, a.Family, a.Intent, a.Message = primarySSHCommand(a.Stages, "crontab"), "execution", "compound-payload-execution", "local payload execution with cleanup and anti-forensics"
+		a.Fingerprint, a.Depth, a.Risk, a.Persona = "ssh:compound-payload-execution", 7, 100, "payload-execution"
 	case looksLikeObservedResourceCleanup(low):
 		a.Primary, a.Family, a.Intent, a.Message = primarySSHCommand(a.Stages, "crontab"), "execution", "competitor-resource-cleanup", "virtual competitor/resource cleanup"
 		a.Fingerprint, a.Depth, a.Risk, a.Persona = "ssh:resource-hijack-preparation", 7, 99, "resource-hijack-preparation"
@@ -91,6 +94,19 @@ func analyzeSSHCommand(command string, result virtualSSHResult) sshCommandAnalys
 	}
 
 	return a
+}
+
+func looksLikeCompoundPayloadExecution(low string) bool {
+	if !hasSSHLocalPayloadExecution(low) {
+		return false
+	}
+	markers := 0
+	for _, needle := range []string{"crontab -r", "chattr ", "rm -rf ", "pkill ", "killall ", "history -c", ".bash_history", "disown"} {
+		if strings.Contains(low, needle) {
+			markers++
+		}
+	}
+	return markers >= 3
 }
 
 func hasSSHLocalPayloadExecution(low string) bool {

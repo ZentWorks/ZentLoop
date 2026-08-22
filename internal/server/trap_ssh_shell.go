@@ -57,6 +57,16 @@ type virtualFileMeta struct {
 	Kind    string
 }
 
+type virtualUserService struct {
+	UnitPath    string
+	Description string
+	ExecStart   string
+	Enabled     bool
+	Active      bool
+	Since       time.Time
+	PID         int
+}
+
 type virtualSSHSharedState struct {
 	mu                 sync.Mutex
 	files              map[string]string
@@ -69,6 +79,7 @@ type virtualSSHSharedState struct {
 	stagingPayloadHash map[string][32]byte
 	installerSignals   map[string]bool
 	installedPackages  map[string]bool
+	userServices       map[string]virtualUserService
 	nextPID            int
 }
 
@@ -77,7 +88,7 @@ func newVirtualSSHSharedState() *virtualSSHSharedState {
 		files: make(map[string]string), fileMeta: make(map[string]virtualFileMeta), dirs: make(map[string]bool),
 		processes: make(map[int]*virtualSSHProcess), fileAttrs: make(map[string]string), fileModes: make(map[string]uint32),
 		stagingAttempts: make(map[string]int), stagingPayloadHash: make(map[string][32]byte), installerSignals: make(map[string]bool),
-		installedPackages: map[string]bool{"curl": true, "openssh-server": true, "vim": true}, nextPID: 2841,
+		installedPackages: map[string]bool{"curl": true, "openssh-server": true, "vim": true}, userServices: make(map[string]virtualUserService), nextPID: 2841,
 	}
 }
 
@@ -1507,6 +1518,9 @@ func (w *virtualSSHWorld) executeOneDepth(raw, input string, aliasDepth int) vir
 		r.LoopInc = 1
 		return r
 	case "systemctl", "service":
+		if cmd == "systemctl" && containsArg(args, "--user") {
+			return w.virtualUserSystemctl(args)
+		}
 		r := base("persistence", 6, 97, "persistence", "service discovery or modification")
 		if strings.Contains(raw, "status") {
 			snap := w.system.snapshot()
@@ -1751,15 +1765,21 @@ func (w *virtualSSHWorld) executeOneDepth(raw, input string, aliasDepth int) vir
 		if containsArg(args, "--version") || containsArg(args, "-V") || (cmd == "perl" && containsArg(args, "-v")) || (cmd == "php" && containsArg(args, "-v")) {
 			return w.fakeInterpreterVersion(cmd)
 		}
-		if (cmd == "bash" || cmd == "sh" || cmd == "dash") && len(args) >= 2 && args[0] == "-c" {
-			res := w.Execute(strings.Join(args[1:], " "))
-			res.CommandName = cmd
-			res.Family = "execution"
-			res.Depth = maxInt(res.Depth, 6)
-			res.Risk = maxInt(res.Risk, 98)
-			res.Persona = "command-execution"
-			res.Message = "simulated shell interpreter command"
-			return res
+		if cmd == "bash" || cmd == "sh" || cmd == "dash" {
+			if inner, ok := virtualShellInlineCommand(args); ok {
+				res := w.ExecuteWithInput(inner, input)
+				res.CommandName = cmd
+				res.Family = "execution"
+				res.Depth = maxInt(res.Depth, 6)
+				res.Risk = maxInt(res.Risk, 98)
+				if res.Persona == "" || res.Persona == "command-execution" {
+					res.Persona = "command-execution"
+				}
+				if res.Message == "" || res.Message == "virtual command processed" {
+					res.Message = "simulated shell interpreter command"
+				}
+				return res
+			}
 		}
 		if input != "" && (cmd == "bash" || cmd == "sh" || cmd == "dash") {
 			return w.fakeExecute("stdin-script")
@@ -2048,6 +2068,191 @@ func (w *virtualSSHWorld) fakeNestedSSH(args []string) virtualSSHResult {
 	return r
 }
 
+func virtualShellInlineCommand(args []string) (string, bool) {
+	for i, arg := range args {
+		if arg == "-c" || arg == "-lc" || arg == "-cl" {
+			if i+1 < len(args) {
+				return strings.Join(args[i+1:], " "), true
+			}
+			return "", false
+		}
+		if strings.HasPrefix(arg, "-") && !strings.HasPrefix(arg, "--") && strings.Contains(arg[1:], "c") {
+			if i+1 < len(args) {
+				return strings.Join(args[i+1:], " "), true
+			}
+			return "", false
+		}
+	}
+	return "", false
+}
+
+func virtualUserUnitMetadata(content string) (description, execStart string) {
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(line, "Description="):
+			description = strings.TrimSpace(strings.TrimPrefix(line, "Description="))
+		case strings.HasPrefix(line, "ExecStart="):
+			execStart = strings.TrimSpace(strings.TrimPrefix(line, "ExecStart="))
+		}
+	}
+	return description, execStart
+}
+
+func (w *virtualSSHWorld) startVirtualUserService(svc virtualUserService) virtualUserService {
+	if svc.Active {
+		return svc
+	}
+	svc.Active = true
+	svc.Since = w.system.snapshot().Now
+	words := virtualWords(svc.ExecStart)
+	if len(words) > 0 {
+		target := w.resolve(words[0])
+		if _, ok := w.virtualReadFile(target); ok {
+			p := w.ensureVirtualPayloadProcess(target)
+			if p != nil {
+				p.Command = svc.ExecStart
+				p.CPU = 0.3
+				p.Mem = 0.5
+				svc.PID = p.PID
+			}
+		}
+	}
+	return svc
+}
+
+func (w *virtualSSHWorld) stopVirtualUserService(svc virtualUserService) virtualUserService {
+	svc.Active = false
+	if svc.PID != 0 {
+		if p := w.processes[svc.PID]; p != nil {
+			p.Alive = false
+		}
+		svc.PID = 0
+	}
+	return svc
+}
+
+func (w *virtualSSHWorld) virtualUserSystemctl(args []string) virtualSSHResult {
+	r := virtualSSHResult{CommandName: "systemctl", Family: "persistence", Depth: 6, Risk: 97, Persona: "persistence", Message: "user service discovery or modification"}
+	filtered := make([]string, 0, len(args))
+	for _, a := range args {
+		if a == "--user" || a == "--no-pager" || a == "--quiet" || a == "-q" {
+			continue
+		}
+		filtered = append(filtered, a)
+	}
+	if len(filtered) == 0 {
+		r.Output = "systemctl: no command specified"
+		r.Status = 1
+		return r
+	}
+	action := filtered[0]
+	unit := ""
+	for _, a := range filtered[1:] {
+		if strings.HasPrefix(a, "-") || a == "now" {
+			continue
+		}
+		unit = path.Base(a)
+		break
+	}
+	if action == "daemon-reload" {
+		r.Output = ""
+		return r
+	}
+	if unit == "" {
+		r.Output = "Failed to get unit: Unit name is required."
+		r.Status = 1
+		return r
+	}
+	key := safeVirtualName(w.user) + "|" + unit
+	unitPath := path.Join(w.homeDir(), ".config/systemd/user", unit)
+	svc, exists := w.shared.userServices[key]
+	if !exists {
+		svc = virtualUserService{UnitPath: unitPath}
+	}
+	unitContent, unitExists := w.virtualReadFile(unitPath)
+	if unitExists {
+		description, execStart := virtualUserUnitMetadata(unitContent)
+		if description != "" {
+			svc.Description = description
+		}
+		if execStart != "" {
+			svc.ExecStart = execStart
+		}
+	}
+	if !unitExists && action != "disable" && action != "stop" {
+		r.Output = "Failed to " + action + " unit: Unit " + unit + " not found."
+		r.Status = 5
+		return r
+	}
+	now := w.system.snapshot().Now
+	switch action {
+	case "enable":
+		svc.Enabled = true
+		if containsArg(filtered, "--now") {
+			svc = w.startVirtualUserService(svc)
+		}
+		w.shared.userServices[key] = svc
+		r.Output = "Created symlink " + path.Join(w.homeDir(), ".config/systemd/user/default.target.wants", unit) + " → " + unitPath + "."
+	case "disable":
+		svc.Enabled = false
+		w.shared.userServices[key] = svc
+		r.Output = "Removed " + path.Join(w.homeDir(), ".config/systemd/user/default.target.wants", unit) + "."
+	case "start":
+		svc = w.startVirtualUserService(svc)
+		w.shared.userServices[key] = svc
+	case "restart":
+		svc = w.stopVirtualUserService(svc)
+		svc = w.startVirtualUserService(svc)
+		w.shared.userServices[key] = svc
+	case "stop":
+		svc = w.stopVirtualUserService(svc)
+		w.shared.userServices[key] = svc
+	case "is-active":
+		if svc.Active {
+			r.Output = "active"
+		} else {
+			r.Output, r.Status = "inactive", 3
+		}
+	case "is-enabled":
+		if svc.Enabled {
+			r.Output = "enabled"
+		} else {
+			r.Output, r.Status = "disabled", 1
+		}
+	case "status":
+		loaded := "disabled"
+		if svc.Enabled {
+			loaded = "enabled"
+		}
+		active := "inactive (dead)"
+		since := ""
+		if svc.Active {
+			active = "active (running)"
+			started := svc.Since
+			if started.IsZero() {
+				started = now.Add(-17 * time.Second)
+			}
+			since = " since " + started.Format("Mon 2006-01-02 15:04:05 UTC") + "; " + strings.TrimPrefix(virtualUptimePretty(now.Sub(started)), "up ") + " ago"
+		}
+		description := svc.Description
+		if description == "" {
+			description = "User Service"
+		}
+		r.Output = "● " + unit + " - " + description + "\n     Loaded: loaded (" + unitPath + "; " + loaded + "; preset: enabled)\n     Active: " + active + since
+		if svc.Active && svc.PID != 0 {
+			r.Output += fmt.Sprintf("\n   Main PID: %d (%s)", svc.PID, path.Base(strings.Fields(svc.ExecStart)[0]))
+		}
+		if !svc.Active {
+			r.Status = 3
+		}
+	default:
+		r.Output = "Unknown command verb " + action + "."
+		r.Status = 1
+	}
+	return r
+}
+
 func (w *virtualSSHWorld) fakeExecute(target string) virtualSSHResult {
 	word := strings.Fields(target)
 	name := target
@@ -2069,7 +2274,10 @@ func (w *virtualSSHWorld) fakeExecute(target string) virtualSSHResult {
 			return r
 		}
 	}
-	r.Output = "[+] checking architecture\n[+] installing service\n[+] registering worker\n[+] starting worker\n[+] done"
+	// Unknown local executables are allowed to run silently. Real droppers and
+	// service helpers frequently produce no stdout; fabricated installer banners
+	// are a stronger honeypot fingerprint than an empty successful execution.
+	r.Output = ""
 	return r
 }
 
