@@ -30,6 +30,15 @@ func analyzeSSHCommand(command string, result virtualSSHResult) sshCommandAnalys
 	a.Primary = primarySSHCommand(a.Stages, result.CommandName)
 
 	switch {
+	case looksLikeRemotePayloadBootstrap(low):
+		a.Primary, a.Family, a.Intent, a.Message = "scp", "execution", "remote-payload-bootstrap", "credential-assisted remote payload fetch and execution with cleanup"
+		a.Fingerprint, a.Depth, a.Risk, a.Persona = "ssh:remote-payload-bootstrap", 7, 100, "payload-execution"
+	case strings.Contains(low, "systemctl --user") && strings.Contains(low, ".service"):
+		a.Primary, a.Family, a.Intent, a.Message = "systemctl", "persistence", "user-systemd-persistence", "user systemd service discovery or modification"
+		a.Fingerprint, a.Depth, a.Risk, a.Persona = "ssh:user-systemd-persistence", 6, 98, "persistence"
+		if result.PayloadStage == "executed" {
+			a.Intent, a.Message, a.Depth, a.Risk, a.Persona = "user-systemd-payload-execution", "user systemd service started a previously staged payload", 7, 100, "payload-execution"
+		}
 	case looksLikeObservedResourceCleanup(low) && hasSSHLocalPayloadExecution(low):
 		a.Primary, a.Family, a.Intent, a.Message = primarySSHCommand(a.Stages, "crontab"), "execution", "resource-hijack-payload-execution", "competitor cleanup followed by local payload execution"
 		a.Fingerprint, a.Depth, a.Risk, a.Persona = "ssh:resource-hijack-execution", 7, 100, "payload-execution"
@@ -94,6 +103,14 @@ func analyzeSSHCommand(command string, result virtualSSHResult) sshCommandAnalys
 	}
 
 	return a
+}
+
+func looksLikeRemotePayloadBootstrap(low string) bool {
+	credentialStage := strings.Contains(low, "begin openssh private key") || strings.Contains(low, "identityfile") || strings.Contains(low, " -i ")
+	remoteFetch := (strings.Contains(low, "scp ") && strings.Contains(low, "@") && strings.Contains(low, ":")) || strings.Contains(low, "wget ") || strings.Contains(low, "curl ")
+	execStage := strings.Contains(low, "| sh") || strings.Contains(low, "| bash") || strings.Contains(low, " sh out_") || strings.Contains(low, "./out_") || strings.Contains(low, "chmod +x")
+	cleanup := strings.Contains(low, "rm -rf") || strings.Contains(low, "rm -f")
+	return credentialStage && remoteFetch && execStage && cleanup
 }
 
 func looksLikeCompoundPayloadExecution(low string) bool {
@@ -198,11 +215,66 @@ func collectSSHCommandStages(command string) []string {
 				}
 			}
 		}
+		for _, nested := range collectSSHCommandSubstitutions(line) {
+			addLine(nested, depth+1)
+		}
 		for _, name := range collectSSHFlatStages(line) {
 			add(name)
 		}
 	}
 	addLine(command, 0)
+	return out
+}
+
+func collectSSHCommandSubstitutions(line string) []string {
+	var out []string
+	for start := 0; start < len(line)-2; {
+		i := strings.Index(line[start:], "$(")
+		if i < 0 {
+			break
+		}
+		i += start
+		depth := 1
+		quote := byte(0)
+		escaped := false
+		for j := i + 2; j < len(line); j++ {
+			c := line[j]
+			if escaped {
+				escaped = false
+				continue
+			}
+			if c == '\\' {
+				escaped = true
+				continue
+			}
+			if quote != 0 {
+				if c == quote {
+					quote = 0
+				}
+				continue
+			}
+			if c == '\'' || c == '"' {
+				quote = c
+				continue
+			}
+			if c == '(' {
+				depth++
+			}
+			if c == ')' {
+				depth--
+				if depth == 0 {
+					if inner := strings.TrimSpace(line[i+2 : j]); inner != "" {
+						out = append(out, inner)
+					}
+					start = j + 1
+					break
+				}
+			}
+			if j == len(line)-1 {
+				start = len(line)
+			}
+		}
+	}
 	return out
 }
 

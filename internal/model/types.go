@@ -547,6 +547,7 @@ type SSHSession struct {
 	AuthAttempts    int            `json:"auth_attempts"`
 	AuthAccepted    bool           `json:"auth_accepted"`
 	ShellOpened     bool           `json:"shell_opened"`
+	SFTPOpened      bool           `json:"sftp_opened,omitempty"`
 	ExecRequests    int            `json:"exec_requests"`
 	CommandCount    int            `json:"command_count"`
 	CurrentCommand  string         `json:"current_command,omitempty"`

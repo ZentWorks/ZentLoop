@@ -439,8 +439,15 @@ func (s *TrapSSH) handleTrapSSHSession(conn net.Conn, channel ssh.Channel, reque
 				_, _ = channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{uint32(result.Status)}))
 				return
 			case "subsystem":
+				var payload struct{ Name string }
+				if err := ssh.Unmarshal(req.Payload, &payload); err == nil && strings.EqualFold(strings.TrimSpace(payload.Name), "sftp") {
+					replySSHRequest(req, true)
+					s.recordSSHEvent(base, "request", "subsystem", "file-transfer", world.cwd, "virtual SFTP subsystem opened", 88, 5, 0, 0, classifySSHActor(base.ClientVersion, false))
+					s.runVirtualSFTP(channel, base, world)
+					return
+				}
 				replySSHRequest(req, false)
-				s.recordSSHEvent(base, "request", "subsystem", "file-transfer", "", "subsystem/SFTP rejected", 88, 5, 0, 1, classifySSHActor(base.ClientVersion, false))
+				s.recordSSHEvent(base, "request", "subsystem", "file-transfer", "", "unsupported subsystem rejected", 72, 3, 0, 0, classifySSHActor(base.ClientVersion, false))
 			case "auth-agent-req@openssh.com", "x11-req":
 				replySSHRequest(req, false)
 				s.recordSSHEvent(base, "request", "forwarding", "network", "", "forwarding request rejected: "+cleanSSHField(req.Type, 64), 90, 6, 0, 1, classifySSHActor(base.ClientVersion, false))

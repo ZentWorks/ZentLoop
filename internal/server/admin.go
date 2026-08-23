@@ -591,7 +591,7 @@ func (s *AdminServer) sshHighlightsExport(w http.ResponseWriter, r *http.Request
 }
 
 func sshHistoryAuthenticated(ss model.SSHSession) bool {
-	return ss.AuthAccepted && (ss.ShellOpened || ss.ExecRequests > 0 || ss.CommandCount > 0)
+	return ss.AuthAccepted && (ss.ShellOpened || ss.SFTPOpened || ss.ExecRequests > 0 || ss.CommandCount > 0)
 }
 
 type sshHistoryPage struct {

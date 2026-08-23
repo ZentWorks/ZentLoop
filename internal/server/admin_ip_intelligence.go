@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-const currentZentLoopVersion = "0.3.6"
+const currentZentLoopVersion = "0.3.7"
 
 func parseIPIntelligencePath(path string) (ip string, export bool, ok bool) {
 	raw := strings.TrimPrefix(path, "/api/ip/")

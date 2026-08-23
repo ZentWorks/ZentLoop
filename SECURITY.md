@@ -24,7 +24,7 @@ The optional `ZENTLOOP_SSH_ENABLED` listener is a deception service, not an oper
 - Interactive `vim`/`vi`, `nano` and `top` render only to the attacker's SSH TTY and read/write only session-local virtual state. They do not launch host programs or open real files.
 - The attacker-visible virtual filesystem is an in-memory map containing synthetic data. It cannot expose `/data`, `/etc`, application files or other paths from the real container filesystem. The only SSH decoy state persisted by the server itself outside event logs is the fixed-path `/data/ssh-system.json` synthetic boot/seed record; attacker commands cannot choose or read that host path.
 - Simulated `curl`, `wget`, `ssh`, `scp`, `ping`, `nc` and related behavior never opens an attacker-directed outbound connection. Content-aware download bodies, headers, sizes and file metadata are generated locally.
-- TCP/remote forwarding, agent forwarding, X11 and SFTP/subsystems are rejected.
+- TCP/remote forwarding, agent forwarding and X11 are rejected. The public deception listener supports only a bounded synthetic SFTP v3 subset backed by source-bound in-memory state; it never exposes the host filesystem.
 - Global concurrent sessions, per-IP sessions, authentication attempts, idle time, total session time, input length and stored output are bounded.
 - Clearly aggressive repeat SSH sources may receive a small adaptive banner delay. The delay is capped at three seconds, uses a separate maximum-eight-slot semaphore and is skipped when that budget is occupied; it does not change authentication acceptance or the 60-second human-pacing auth timeout.
 - SSH passwords are not persisted. Authentication logs retain password-presence/length metadata only.

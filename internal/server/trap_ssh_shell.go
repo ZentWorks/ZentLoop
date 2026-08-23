@@ -2250,6 +2250,20 @@ func (w *virtualSSHWorld) virtualUserSystemctl(args []string) virtualSSHResult {
 		r.Output = "Unknown command verb " + action + "."
 		r.Status = 1
 	}
+	if (action == "enable" || action == "start" || action == "restart") && svc.Active && svc.ExecStart != "" {
+		words := virtualWords(svc.ExecStart)
+		if len(words) > 0 {
+			target := w.resolve(words[0])
+			if _, staged := w.stagingPayloadHash[target]; staged {
+				r.PayloadStage = "executed"
+				r.PayloadPath = target
+				r.Depth = 7
+				r.Risk = 100
+				r.Persona = "payload-execution"
+				r.Message = "user systemd service started a previously staged payload"
+			}
+		}
+	}
 	return r
 }
 

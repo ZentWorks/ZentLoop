@@ -122,7 +122,7 @@ ZENTLOOP_SSH_HOST_KEY_PATH=/data/ssh_trap_host_ed25519_key
 
 The generic Docker bridge example uses host TCP/2222 so it does not accidentally replace the Docker host's real SSH service on TCP/22. With a dedicated ZentLoop IP, the trap can instead listen on TCP/22 on that address.
 
-ZentLoop's SSH environment is synthetic. It simulates reconnaissance, files, processes, services, shell state, downloads and common operator workflows while keeping execution inside the deception engine. TCP forwarding, agent forwarding, X11 and SFTP/subsystems are rejected.
+ZentLoop's SSH environment is synthetic. It simulates reconnaissance, files, processes, services, shell state, downloads and common operator workflows while keeping execution inside the deception engine. TCP forwarding, agent forwarding and X11 are rejected. Public SFTP is limited to a bounded synthetic v3 subset backed only by ZentLoop's source-bound virtual filesystem.
 
 Clearly aggressive repeat SSH sources may receive a small bounded, jittered banner delay. This adaptive tarpit is capped at three seconds, uses a separate small semaphore and never changes credential acceptance or exposes a real shell.
 
