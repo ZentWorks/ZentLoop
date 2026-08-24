@@ -566,6 +566,7 @@ func (s *TrapSSH) recordSSHAuth(auth sshAuthState, client, user, method string, 
 func (s *TrapSSH) recordSSHCommand(base model.SSHEvent, eventType, command string, world *virtualSSHWorld, result virtualSSHResult, actor model.ActorType) {
 	canaries := world.CanaryTouches(command)
 	world.observeImplicitPayloadStage(command, &result)
+	world.confirmPreviouslyStagedExecution(command, &result)
 	analysis := analyzeSSHCommand(command, result)
 	applySSHCommandAnalysis(&result, analysis)
 	fingerprint := sshBehaviorFingerprint(result, command)

@@ -35,6 +35,12 @@ func normalizeProbePath(raw string) string {
 	if strings.HasPrefix(p, "/static../") {
 		p = "/" + strings.TrimPrefix(p, "/static../")
 	}
+	// Some scanner wordlists append a bare semicolon to secret/config paths
+	// (for example /.env;). Treat that mutation as matching noise only; the raw
+	// requested path is still retained in events and unknown-path exports.
+	if strings.HasSuffix(p, ";") && !strings.Contains(strings.TrimSuffix(p, ";"), ";") {
+		p = strings.TrimSuffix(p, ";")
+	}
 	p = path.Clean(p)
 	if p == "." {
 		return "/"
@@ -60,6 +66,12 @@ func identifyProbeFamily(raw string) (probeInfo, bool) {
 	}
 	if info, ok := identifyObservedWebProbe(p); ok {
 		return info, true
+	}
+	if isDockerAPIProbe(p) {
+		return probeInfo{"Docker Engine API discovery / exec probing", "Docker Engine API", ""}, true
+	}
+	if isLaravelLivewireProbe(p) {
+		return probeInfo{"Laravel Livewire / diagnostics discovery", "Laravel / Livewire", ""}, true
 	}
 	if isCIBuildProbe(p) {
 		return probeInfo{"CI/CD build configuration discovery", "CI/CD / build tooling", ""}, true
@@ -88,7 +100,7 @@ func identifyProbeFamily(raw string) (probeInfo, bool) {
 	if isPHPWebshellProbe(p) {
 		return probeInfo{"PHP webshell / backdoor discovery", "PHP web application", ""}, true
 	}
-	if p == "/info" || base == "phpinfo.php" || base == "phpinfo.php3" || base == "info.php" || base == "pinfo.php" || base == "i.php" || p == "/_profiler" || strings.HasPrefix(p, "/_profiler/phpinfo") {
+	if isPHPDiagnosticsProbe(p) {
 		return probeInfo{"PHP runtime / profiler discovery", "PHP / Symfony", ""}, true
 	}
 	if p == "/index.php" || p == "/temp.php" || isHiddenPHPProbe(p) {
@@ -128,6 +140,33 @@ func identifyProbeFamily(raw string) (probeInfo, bool) {
 		return probeInfo{"Frontend runtime configuration discovery", "JavaScript web application", ""}, true
 	}
 	return probeInfo{}, false
+}
+
+func isDockerAPIProbe(p string) bool {
+	if p == "/containers/json" || p == "/images/json" || p == "/version" || p == "/info" {
+		return true
+	}
+	if strings.HasPrefix(p, "/containers/") {
+		return strings.HasSuffix(p, "/json") || strings.HasSuffix(p, "/logs") || strings.HasSuffix(p, "/exec")
+	}
+	return false
+}
+
+func isLaravelLivewireProbe(p string) bool {
+	return p == "/livewire/update" || p == "/livewire/message" || strings.HasPrefix(p, "/livewire/message/") || p == "/_debugbar" || p == "/__clockwork" || p == "/elmah"
+}
+
+func isPHPDiagnosticsProbe(p string) bool {
+	base := path.Base(p)
+	if p == "/info" || p == "/phpinfo" || p == "/phpinfo/" || base == "phpinfo.php" || base == "phpinfo.php3" || base == "info.php" || base == "pinfo.php" || base == "i.php" || p == "/_profiler" || strings.HasPrefix(p, "/_profiler/phpinfo") || strings.Contains(p, "/_profiler/phpinfo") {
+		return true
+	}
+	for _, suffix := range []string{".bak", ".old", ".save", "~"} {
+		if strings.HasSuffix(base, suffix) && strings.HasPrefix(strings.TrimSuffix(base, suffix), "phpinfo.php") {
+			return true
+		}
+	}
+	return false
 }
 
 func isCIBuildProbe(p string) bool {
@@ -227,6 +266,9 @@ func isWordPressSurfaceProbe(p string) bool {
 }
 
 func isPHPWebshellProbe(p string) bool {
+	if strings.EqualFold(p, "/ALFA_DATA/alfacgiapi") || strings.EqualFold(p, "/alfa_data/alfacgiapi") {
+		return true
+	}
 	base := strings.ToLower(path.Base(p))
 	name, ok := suspiciousPHPProbeName(base)
 	if !ok || strings.Contains(p, "/wp-includes/") || strings.Contains(p, "/wp-content/") {
@@ -322,6 +364,9 @@ func isManagementSurfaceProbe(p string) bool {
 
 func isApplicationConfigProbe(p string) bool {
 	base := path.Base(p)
+	if p == "/.vscode/sftp.json" || p == "/docker-cloud.yml" || p == "/docker-cloud.yaml" || p == "/app/config/parameters.yml" || p == "/app/config/parameters.yml.dist" || strings.HasPrefix(p, "/.chalice/") {
+		return true
+	}
 	if base == ".bash_history" || base == "secrets.yml" || base == "secrets.yaml" || strings.HasPrefix(base, "config.php.") {
 		return true
 	}

@@ -459,6 +459,17 @@ func (w *virtualSSHWorld) executeWithInput(line, initialInput string) virtualSSH
 		combined.Interactive = res.Interactive
 		combined.Target = res.Target
 		combined.TerminalAction = res.TerminalAction
+		// Preserve payload evidence from inner commands of sh/bash compound lines.
+		// Without this, a successful systemctl --user start or nested staged-file
+		// execution could be visible in the virtual world but disappear from the
+		// outer exec event, preventing evidence-backed Attack Trace correlation.
+		if res.PayloadStage != "" {
+			combined.PayloadStage = res.PayloadStage
+			combined.PayloadPath = res.PayloadPath
+		}
+		if res.StdinBytes > 0 {
+			combined.StdinBytes, combined.StdinSHA256, combined.StdinKind = res.StdinBytes, res.StdinSHA256, res.StdinKind
+		}
 		if res.Depth >= combined.Depth {
 			combined.Depth, combined.Risk, combined.Family, combined.CommandName, combined.Persona, combined.Message = res.Depth, res.Risk, res.Family, res.CommandName, res.Persona, res.Message
 		}

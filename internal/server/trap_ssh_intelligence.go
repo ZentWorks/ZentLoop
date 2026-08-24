@@ -52,9 +52,33 @@ func (w *virtualSSHWorld) observeImplicitPayloadStage(command string, result *vi
 	}
 }
 
+func (w *virtualSSHWorld) confirmPreviouslyStagedExecution(command string, result *virtualSSHResult) {
+	if w == nil || result == nil || result.PayloadStage != "" {
+		return
+	}
+	// Only exact local execution paths that already carry a source-bound staging
+	// hash qualify. Random filenames and timing alone never create trace evidence.
+	for _, target := range w.virtualLocalExecutionTargets(command) {
+		target = w.resolve(target)
+		if _, ok := w.stagingPayloadHash[target]; !ok {
+			continue
+		}
+		result.PayloadStage = "executed"
+		result.PayloadPath = target
+		result.Depth = maxInt(result.Depth, 7)
+		result.Risk = maxInt(result.Risk, 100)
+		result.Persona = "payload-execution"
+		return
+	}
+}
+
 func sshBehaviorFingerprint(result virtualSSHResult, command string) string {
 	low := strings.ToLower(command)
 	switch {
+	case strings.TrimSpace(command) == "ssh -V" || strings.TrimSpace(command) == "ssh --version":
+		return "ssh:ssh-client-discovery"
+	case strings.HasPrefix(strings.TrimSpace(low), "mount"):
+		return "ssh:filesystem-discovery"
 	case looksLikeObservedResourceCleanup(low):
 		return "ssh:resource-hijack-preparation"
 	case strings.Contains(low, "ipinfo.io/org"):

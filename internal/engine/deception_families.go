@@ -84,6 +84,9 @@ func buildFamilyDeception(r *http.Request, ss *model.Session, a, b string) (Resp
 		return buildSQLDumpFamily(ss, canaries), true
 	}
 
+	if isLaravelLivewireFamily(p) {
+		return buildLaravelLivewireFamily(r, ss, a), true
+	}
 	if isDebugToolFamily(p) {
 		return buildDebugToolFamily(p, ss, a, b), true
 	}
@@ -184,7 +187,7 @@ func isDockerAPIFamily(p string) bool {
 	case "/containers/json", "/images/json", "/version", "/info":
 		return true
 	}
-	return strings.HasPrefix(p, "/containers/") && (strings.HasSuffix(p, "/json") || strings.HasSuffix(p, "/logs"))
+	return strings.HasPrefix(p, "/containers/") && (strings.HasSuffix(p, "/json") || strings.HasSuffix(p, "/logs") || strings.HasSuffix(p, "/exec"))
 }
 
 func buildDockerAPIFamily(p string, ss *model.Session, a string) Response {
@@ -199,6 +202,8 @@ func buildDockerAPIFamily(p string, ss *model.Session, a string) Response {
 		return Response{Status: 200, ContentType: "application/json", Label: "fake-docker-api-version", Depth: depth, Body: mustJSON(map[string]any{"Version": "27.1.1", "ApiVersion": "1.46", "MinAPIVersion": "1.24", "GitCommit": "6312585", "GoVersion": "go1.22.5", "Os": "linux", "Arch": "amd64"})}
 	case p == "/info":
 		return Response{Status: 200, ContentType: "application/json", Label: "fake-docker-api-info", Depth: max(depth, 4), Body: mustJSON(map[string]any{"Containers": 2, "ContainersRunning": 2, "Images": 7, "Driver": "overlay2", "Name": "prod-app-02", "ServerVersion": "27.1.1", "OperatingSystem": "Ubuntu 24.04.3 LTS", "Architecture": "x86_64", "NCPU": 4})}
+	case strings.HasSuffix(p, "/exec"):
+		return Response{Status: http.StatusCreated, ContentType: "application/json", Label: "fake-docker-api-exec-create", Depth: max(depth, 6), Body: mustJSON(map[string]any{"Id": "exec-" + a[:12]})}
 	case strings.HasSuffix(p, "/logs"):
 		return Response{Status: 200, ContentType: "text/plain; charset=utf-8", Label: "fake-docker-api-logs", Depth: max(depth, 5), Body: []byte("2026-08-16T02:00:01Z backup sync started profile=legacy\n2026-08-16T02:00:04Z archive target=backup-01 status=ok\n")}
 	default:
@@ -261,7 +266,15 @@ func isEnvFamily(p string) bool {
 
 func isPHPInfoFamily(p string) bool {
 	base := path.Base(p)
-	return p == "/info" || base == "phpinfo.php" || base == "phpinfo.php3" || base == "info.php" || base == "pinfo.php" || base == "i.php" || p == "/_profiler" || strings.HasPrefix(p, "/_profiler/phpinfo")
+	if p == "/info" || p == "/phpinfo" || p == "/phpinfo/" || base == "phpinfo.php" || base == "phpinfo.php3" || base == "info.php" || base == "pinfo.php" || base == "i.php" || p == "/_profiler" || strings.HasPrefix(p, "/_profiler/phpinfo") || strings.Contains(p, "/_profiler/phpinfo") {
+		return true
+	}
+	for _, suffix := range []string{".bak", ".old", ".save", "~"} {
+		if strings.HasSuffix(base, suffix) && strings.HasPrefix(strings.TrimSuffix(base, suffix), "phpinfo.php") {
+			return true
+		}
+	}
+	return false
 }
 
 func isFrontendConfigFamily(p string) bool {
@@ -555,8 +568,20 @@ func buildSQLDumpFamily(ss *model.Session, canaries map[string]string) Response 
 	return Response{Status: 200, ContentType: "application/sql; charset=utf-8", Label: "fake-database-dump", Depth: max(ss.Depth, 5), Body: []byte(body)}
 }
 
+func isLaravelLivewireFamily(p string) bool {
+	return p == "/livewire/update" || p == "/livewire/message" || strings.HasPrefix(p, "/livewire/message/")
+}
+
+func buildLaravelLivewireFamily(r *http.Request, ss *model.Session, a string) Response {
+	depth := max(ss.Depth, 3)
+	if r.Method != http.MethodPost {
+		return Response{Status: http.StatusMethodNotAllowed, ContentType: "text/html; charset=utf-8", Label: "fake-livewire-method", Depth: depth, Headers: map[string]string{"Allow": "POST"}, Body: []byte("<!doctype html><html><body><h1>405 Method Not Allowed</h1></body></html>")}
+	}
+	return Response{Status: http.StatusUnprocessableEntity, ContentType: "application/json", Label: "fake-livewire-update", Depth: max(depth, 4), Body: mustJSON(map[string]any{"message": "The snapshot is missing or invalid.", "exception": "Livewire\\Mechanisms\\HandleComponents\\CorruptComponentPayloadException", "ref": a})}
+}
+
 func isDebugToolFamily(p string) bool {
-	return strings.HasPrefix(p, "/horizon/") || strings.HasPrefix(p, "/telescope/") || strings.HasPrefix(p, "/_debugbar/") || p == "/log-viewer" || strings.HasPrefix(p, "/rails/info/") || strings.HasPrefix(p, "/_profiler/") || p == "/__debug__/" || p == "/trace.axd" || p == "/elmah.axd" || strings.Contains(p, "/app_dev.php/_profiler") || p == "/_ignition/health-check" || p == "/nginx_status" || p == "/server-info" || p == "/health" || p == "/api/health"
+	return strings.HasPrefix(p, "/horizon/") || strings.HasPrefix(p, "/telescope/") || p == "/_debugbar" || strings.HasPrefix(p, "/_debugbar/") || p == "/__clockwork" || strings.HasPrefix(p, "/__clockwork/") || p == "/elmah" || p == "/elmah.axd" || p == "/log-viewer" || strings.HasPrefix(p, "/rails/info/") || strings.HasPrefix(p, "/_profiler/") || p == "/__debug__/" || p == "/trace.axd" || p == "/elmah.axd" || strings.Contains(p, "/app_dev.php/_profiler") || p == "/_ignition/health-check" || p == "/nginx_status" || p == "/server-info" || p == "/health" || p == "/api/health"
 }
 
 func buildDebugToolFamily(p string, ss *model.Session, a, b string) Response {
@@ -671,6 +696,12 @@ func normalizeFamilyPath(raw string) string {
 	if strings.HasPrefix(p, "/static../") {
 		p = "/" + strings.TrimPrefix(p, "/static../")
 	}
+	// Some scanner wordlists append a bare semicolon to secret/config paths
+	// (for example /.env;). Treat that mutation as matching noise only; the raw
+	// requested path is still retained in events and unknown-path exports.
+	if strings.HasSuffix(p, ";") && !strings.Contains(strings.TrimSuffix(p, ";"), ";") {
+		p = strings.TrimSuffix(p, ";")
+	}
 	p = path.Clean(p)
 	if p == "." {
 		return "/"
@@ -713,6 +744,9 @@ func buildCloudCredentialFamily(p string, ss *model.Session, a string, canaries 
 
 func isApplicationConfigFamily(p string) bool {
 	base := path.Base(p)
+	if p == "/.vscode/sftp.json" || p == "/docker-cloud.yml" || p == "/docker-cloud.yaml" || p == "/app/config/parameters.yml" || p == "/app/config/parameters.yml.dist" || strings.HasPrefix(p, "/.chalice/") {
+		return true
+	}
 	if base == ".bash_history" || base == "secrets.yml" || base == "secrets.yaml" || strings.HasPrefix(base, "config.php.") {
 		return true
 	}
@@ -734,6 +768,17 @@ func isApplicationConfigFamily(p string) bool {
 func buildConfigFamily(p string, ss *model.Session, a, b string, canaries map[string]string) Response {
 	r := Response{Status: 200, ContentType: "text/plain; charset=utf-8", Label: "fake-app-config", Depth: max(ss.Depth, 2)}
 	switch {
+	case p == "/.vscode/sftp.json":
+		r.ContentType = "application/json"
+		r.Label = "fake-devops-sftp-config"
+		r.Body = mustJSON(map[string]any{"name": "production", "host": "prod-app-02", "protocol": "sftp", "port": 22, "username": "deploy", "remotePath": "/var/www/platform/current", "privateKeyPath": "~/.ssh/id_ed25519", "ignore": []string{".git", ".env"}})
+	case p == "/app/config/parameters.yml" || p == "/app/config/parameters.yml.dist":
+		r.Label = "fake-symfony-parameters"
+		r.Body = []byte("parameters:\n  database_host: db-primary\n  database_name: customers\n  database_user: svc_web\n  redis_host: cache-01\n  backup_host: backup-01\n  internal_api_token: " + canaries["internal-api"] + "\n")
+	case strings.HasPrefix(p, "/.chalice/"):
+		r.ContentType = "application/json"
+		r.Label = "fake-chalice-config"
+		r.Body = mustJSON(map[string]any{"version": "2.0", "app_name": "platform-api", "stage": "prod", "region": "eu-central-1", "environment_variables": map[string]string{"INTERNAL_API_TOKEN": canaries["internal-api"], "BACKUP_HOST": "backup-01"}})
 	case strings.HasSuffix(p, ".json"):
 		r.ContentType = "application/json"
 		r.Body = mustJSON(map[string]any{"environment": "production", "database": map[string]string{"host": "db-primary", "name": "customers"}, "registry": "registry.internal", "backupHost": "backup-01", "apiToken": canaries["internal-api"], "backupToken": canaries["backup"]})

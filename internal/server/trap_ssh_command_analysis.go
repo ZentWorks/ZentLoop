@@ -30,6 +30,12 @@ func analyzeSSHCommand(command string, result virtualSSHResult) sshCommandAnalys
 	a.Primary = primarySSHCommand(a.Stages, result.CommandName)
 
 	switch {
+	case isSSHVersionDiscovery(command):
+		a.Primary, a.Family, a.Intent, a.Message = "ssh", "recon", "ssh-client-version-discovery", "SSH client version discovery"
+		a.Fingerprint, a.Depth, a.Risk, a.Persona = "ssh:ssh-client-discovery", 3, 82, "tool-discovery"
+	case isMountDiscovery(low):
+		a.Primary, a.Family, a.Intent, a.Message = "mount", "recon", "filesystem-mount-discovery", "filesystem mount discovery"
+		a.Fingerprint, a.Depth, a.Risk, a.Persona = "ssh:filesystem-discovery", 4, 87, "system-recon"
 	case looksLikeRemotePayloadBootstrap(low):
 		a.Primary, a.Family, a.Intent, a.Message = "scp", "execution", "remote-payload-bootstrap", "credential-assisted remote payload fetch and execution with cleanup"
 		a.Fingerprint, a.Depth, a.Risk, a.Persona = "ssh:remote-payload-bootstrap", 7, 100, "payload-execution"
@@ -165,6 +171,26 @@ func sshAnalysisOwnsReconPersona(intent string) bool {
 	return false
 }
 
+func isSSHVersionDiscovery(command string) bool {
+	words := virtualWords(strings.TrimSpace(command))
+	if len(words) < 2 || path.Base(words[0]) != "ssh" {
+		return false
+	}
+	if len(words) != 2 {
+		return false
+	}
+	return words[1] == "-V" || words[1] == "--version"
+}
+
+func isMountDiscovery(low string) bool {
+	words := virtualWords(strings.TrimSpace(low))
+	return len(words) > 0 && path.Base(words[0]) == "mount"
+}
+
+func shellExecFlag(v string) bool {
+	return v == "-c" || v == "-lc" || v == "-cl" || v == "-ec" || v == "-ce"
+}
+
 func collectSSHCommandStages(command string) []string {
 	seen := make(map[string]bool)
 	var out []string
@@ -210,7 +236,7 @@ func collectSSHCommandStages(command string) []string {
 				}
 				cmd := path.Base(words[idx])
 				add(cmd)
-				if (cmd == "sh" || cmd == "bash" || cmd == "dash") && idx+2 < len(words) && words[idx+1] == "-c" {
+				if (cmd == "sh" || cmd == "bash" || cmd == "dash") && idx+2 < len(words) && shellExecFlag(words[idx+1]) {
 					addLine(strings.Join(words[idx+2:], " "), depth+1)
 				}
 			}
