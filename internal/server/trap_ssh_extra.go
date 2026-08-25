@@ -65,7 +65,7 @@ func (w *virtualSSHWorld) executeExtraCommand(cmd string, args []string, raw, in
 		}
 		allowed := map[string]bool{"cat": true, "cut": true, "echo": true, "grep": true, "head": true, "sed": true, "tail": true, "tr": true, "uname": true, "wc": true}
 		if !allowed[args[0]] {
-			r.Output = args[0] + ": applet not found"
+			r.Output = "busybox: applet not found"
 			r.Status = 127
 			return r, true
 		}
@@ -1703,9 +1703,32 @@ func virtualLineCount(args []string, fallback int) int {
 				return n
 			}
 		}
+		if strings.HasPrefix(a, "--lines=") {
+			if n, err := strconv.Atoi(strings.TrimPrefix(a, "--lines=")); err == nil && n > 0 && n <= 200 {
+				return n
+			}
+		}
 		if strings.HasPrefix(a, "-n") && len(a) > 2 {
 			if n, err := strconv.Atoi(a[2:]); err == nil && n > 0 && n <= 200 {
 				return n
+			}
+		}
+		// GNU/POSIX head and tail accept the common compact form `-1`, `-20`, ... .
+		// Treat only an all-digit short option as a line count so normal flags are
+		// not reinterpreted.
+		if len(a) > 1 && a[0] == '-' {
+			digits := a[1:]
+			allDigits := digits != ""
+			for _, r := range digits {
+				if r < '0' || r > '9' {
+					allDigits = false
+					break
+				}
+			}
+			if allDigits {
+				if n, err := strconv.Atoi(digits); err == nil && n > 0 && n <= 200 {
+					return n
+				}
 			}
 		}
 	}

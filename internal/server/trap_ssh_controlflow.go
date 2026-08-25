@@ -191,13 +191,19 @@ func (w *virtualSSHWorld) executeVirtualIf(line, input string) (virtualSSHResult
 	}
 	r := virtualSSHResult{Status: 0, Family: "execution", CommandName: "if", Depth: 5, Risk: 94, Persona: "shell-control-flow", Message: "simulated shell conditional"}
 	if body != "" {
-		r = w.Execute(body)
+		// Exec-request stdin belongs to the selected branch as well. Droppers
+		// commonly use `if [ ! -f x ]; then cat > x; fi`; dropping input here turns
+		// a completed upload into a false staging intent and breaks later exact-path
+		// execution evidence.
+		r = w.ExecuteWithInput(body, input)
 		r.CommandName = "if"
 		r.Family = "execution"
 		r.Depth = maxInt(r.Depth, 5)
 		r.Risk = maxInt(r.Risk, 94)
-		r.Persona = "shell-control-flow"
-		r.Message = "simulated shell conditional"
+		if r.PayloadStage == "" {
+			r.Persona = "shell-control-flow"
+			r.Message = "simulated shell conditional"
+		}
 	}
 	if suffix != "" && !r.Exit {
 		tail := w.Execute(suffix)

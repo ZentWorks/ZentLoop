@@ -239,6 +239,10 @@ func (w *virtualSSHWorld) removeVirtualPattern(raw string) bool {
 }
 
 func (w *virtualSSHWorld) virtualLocalExecutionTargets(command string) []string {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return nil
+	}
 	baseDir := w.cwd
 	for _, candidate := range []string{"/dev/shm", "/var/tmp", "/tmp"} {
 		if strings.Contains(command, "cd "+candidate) || strings.Contains(command, "cd "+candidate+"/") {
@@ -248,13 +252,20 @@ func (w *virtualSSHWorld) virtualLocalExecutionTargets(command string) []string 
 	}
 	seen := make(map[string]bool)
 	var targets []string
-	for offset := 0; ; {
-		i := strings.Index(command[offset:], "./")
-		if i < 0 {
+	for offset := 0; offset < len(command); {
+		rel := strings.Index(command[offset:], "./")
+		if rel < 0 {
 			break
 		}
-		i += offset + 2
-		j := i
+		marker := offset + rel
+		nameStart := marker + 2
+		// A bare terminal "./" is a valid malformed/probe token but has no
+		// executable name. Never advance beyond len(command): this parser runs on
+		// attacker-controlled input and must fail closed instead of panicking.
+		if nameStart >= len(command) {
+			break
+		}
+		j := nameStart
 		for j < len(command) {
 			c := command[j]
 			if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.' {
@@ -263,8 +274,8 @@ func (w *virtualSSHWorld) virtualLocalExecutionTargets(command string) []string 
 			}
 			break
 		}
-		if j > i {
-			name := command[i:j]
+		if j > nameStart {
+			name := command[nameStart:j]
 			if name != "." && name != ".." && len(name) <= 48 {
 				target := path.Join(baseDir, name)
 				if !seen[target] {
@@ -273,10 +284,16 @@ func (w *virtualSSHWorld) virtualLocalExecutionTargets(command string) []string 
 				}
 			}
 		}
-		offset = j
-		if offset <= i {
-			offset = i + 1
+		// j is always <= len(command). If no valid name character followed the
+		// marker, move past "./" only; otherwise continue after the parsed name.
+		next := j
+		if next <= nameStart {
+			next = nameStart
 		}
+		if next <= offset {
+			next = offset + 1
+		}
+		offset = next
 	}
 	return targets
 }

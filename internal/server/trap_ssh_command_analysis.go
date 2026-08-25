@@ -54,6 +54,12 @@ func analyzeSSHCommand(command string, result virtualSSHResult) sshCommandAnalys
 	case looksLikeObservedResourceCleanup(low):
 		a.Primary, a.Family, a.Intent, a.Message = primarySSHCommand(a.Stages, "crontab"), "execution", "competitor-resource-cleanup", "virtual competitor/resource cleanup"
 		a.Fingerprint, a.Depth, a.Risk, a.Persona = "ssh:resource-hijack-preparation", 7, 99, "resource-hijack-preparation"
+	case strings.Contains(low, "/etc/os-release"):
+		a.Primary, a.Family, a.Intent, a.Message = firstStageOr(a.Stages, "cat"), "recon", "os-release-discovery", "operating system release discovery"
+		a.Fingerprint, a.Depth, a.Risk, a.Persona = "ssh:os-discovery", 4, 86, "system-recon"
+	case isRootFilesystemDiscovery(low):
+		a.Primary, a.Family, a.Intent, a.Message = "ls", "filesystem", "root-filesystem-discovery", "root filesystem discovery"
+		a.Fingerprint, a.Depth, a.Risk, a.Persona = "ssh:filesystem-discovery", 4, 86, "file-discovery"
 	case strings.Contains(low, "/proc/cpuinfo") && (strings.Contains(low, "processor") || strings.Contains(low, "model name")):
 		a.Primary, a.Family, a.Intent, a.Message = firstStageOr(a.Stages, "cat"), "recon", "cpu-topology-discovery", "CPU topology discovery"
 		a.Fingerprint, a.Depth, a.Risk, a.Persona = "ssh:hardware-recon", 4, 88, "system-recon"
@@ -165,7 +171,7 @@ func applySSHCommandAnalysis(result *virtualSSHResult, a sshCommandAnalysis) {
 
 func sshAnalysisOwnsReconPersona(intent string) bool {
 	switch intent {
-	case "system-identity-discovery", "architecture-discovery", "hostname-discovery", "kernel-release-discovery", "uptime-discovery", "cpu-topology-discovery", "cpu-resource-discovery":
+	case "system-identity-discovery", "architecture-discovery", "hostname-discovery", "kernel-release-discovery", "uptime-discovery", "cpu-topology-discovery", "cpu-resource-discovery", "filesystem-mount-discovery", "os-release-discovery", "root-filesystem-discovery":
 		return true
 	}
 	return false
@@ -185,6 +191,19 @@ func isSSHVersionDiscovery(command string) bool {
 func isMountDiscovery(low string) bool {
 	words := virtualWords(strings.TrimSpace(low))
 	return len(words) > 0 && path.Base(words[0]) == "mount"
+}
+
+func isRootFilesystemDiscovery(low string) bool {
+	words := virtualWords(strings.TrimSpace(low))
+	if len(words) == 0 || path.Base(words[0]) != "ls" {
+		return false
+	}
+	for _, word := range words[1:] {
+		if word == "/" {
+			return true
+		}
+	}
+	return false
 }
 
 func shellExecFlag(v string) bool {

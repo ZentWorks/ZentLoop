@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -144,6 +145,7 @@ func (s *TrapSSH) acceptConn(conn net.Conn) {
 	if err := s.store.AddSSHEvent(base); err != nil {
 		log.Printf("SSH event store: %v", err)
 	}
+	defer s.recoverSSHWorkerPanic(base, "connection")
 	s.applyAdaptiveSSHTarpit(conn, ip)
 	s.handleConn(conn, sshAuthState{sessionID: sessionID, ip: ip, country: country, countrySource: countrySource})
 }
@@ -278,6 +280,24 @@ func (s *TrapSSH) handleConn(conn net.Conn, auth sshAuthState) {
 	s.recordSSHEvent(base, "disconnect", "", "", "", "SSH connection closed", 70, 0, 0, 0, actor)
 }
 
+func withVirtualSSHSharedLock(shared *virtualSSHSharedState, fn func() virtualSSHResult) virtualSSHResult {
+	if shared == nil {
+		return fn()
+	}
+	shared.mu.Lock()
+	defer shared.mu.Unlock()
+	return fn()
+}
+
+func (s *TrapSSH) recoverSSHWorkerPanic(base model.SSHEvent, scope string) {
+	if recovered := recover(); recovered != nil {
+		if s.store != nil {
+			s.store.RecordHealth("ssh_worker_panic_recovered")
+		}
+		log.Printf("SSH trap recovered panic scope=%s session=%s ip=%s: %v\n%s", scope, base.SessionID, base.IP, recovered, debug.Stack())
+	}
+}
+
 func (s *TrapSSH) sharedRealityForSource(ip string) *virtualSSHSharedState {
 	ip = strings.TrimSpace(ip)
 	if ip == "" {
@@ -317,6 +337,7 @@ func (s *TrapSSH) sharedRealityForSource(ip string) *virtualSSHSharedState {
 }
 
 func (s *TrapSSH) handleGlobalSSHRequests(base model.SSHEvent, requests <-chan *ssh.Request) {
+	defer s.recoverSSHWorkerPanic(base, "global-request")
 	for req := range requests {
 		switch req.Type {
 		case "keepalive@openssh.com", "keepalive@libssh2.org", "keepalive@putty.projects.tartarus.org":
@@ -332,6 +353,7 @@ func (s *TrapSSH) handleGlobalSSHRequests(base model.SSHEvent, requests <-chan *
 }
 
 func (s *TrapSSH) handleTrapSSHSession(conn net.Conn, channel ssh.Channel, requests <-chan *ssh.Request, base model.SSHEvent, shared *virtualSSHSharedState) {
+	defer s.recoverSSHWorkerPanic(base, "session")
 	defer channel.Close()
 	world := newVirtualSSHWorldForSourceShared(base.SessionID, base.Username, base.IP, s.system, shared)
 	started := false
@@ -382,9 +404,10 @@ func (s *TrapSSH) handleTrapSSHSession(conn net.Conn, channel ssh.Channel, reque
 				replySSHRequest(req, true)
 				s.recordSSHEvent(base, "shell", "shell", "interactive", world.cwd, "interactive virtual shell opened", 82, 2, 0, 0, classifySSHActor(base.ClientVersion, true))
 				go func() {
+					defer func() { done <- struct{}{} }()
+					defer s.recoverSSHWorkerPanic(base, "interactive-shell")
 					s.runVirtualSSHShell(conn, channel, base, world)
 					_, _ = channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{0}))
-					done <- struct{}{}
 				}()
 			case "exec":
 				if started {
@@ -401,9 +424,9 @@ func (s *TrapSSH) handleTrapSSHSession(conn net.Conn, channel ssh.Channel, reque
 				command := cleanSSHCommand(payload.Command, maxSSHExecCommandBytes)
 				world.addHistory(command)
 				if isVirtualSCPSink(command) {
-					shared.mu.Lock()
-					result := world.runVirtualSCPSink(channel, command)
-					shared.mu.Unlock()
+					result := withVirtualSSHSharedLock(shared, func() virtualSSHResult {
+						return world.runVirtualSCPSink(channel, command)
+					})
 					s.recordSSHCommand(base, "exec", command, world, result, classifySSHActor(base.ClientVersion, false))
 					_, _ = channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{uint32(result.Status)}))
 					return
@@ -413,9 +436,9 @@ func (s *TrapSSH) handleTrapSSHSession(conn net.Conn, channel ssh.Channel, reque
 				if commandMayConsumeExecStdin(command) {
 					stdin, stdinTruncated = readVirtualExecStdin(channel)
 				}
-				shared.mu.Lock()
-				result := world.ExecuteWithInput(command, string(stdin))
-				shared.mu.Unlock()
+				result := withVirtualSSHSharedLock(shared, func() virtualSSHResult {
+					return world.ExecuteWithInput(command, string(stdin))
+				})
 				annotateVirtualExecStdin(&result, stdin, stdinTruncated)
 				switch result.Interactive {
 				case "ping":
@@ -565,17 +588,13 @@ func (s *TrapSSH) recordSSHAuth(auth sshAuthState, client, user, method string, 
 
 func (s *TrapSSH) recordSSHCommand(base model.SSHEvent, eventType, command string, world *virtualSSHWorld, result virtualSSHResult, actor model.ActorType) {
 	canaries := world.CanaryTouches(command)
-	world.observeImplicitPayloadStage(command, &result)
-	world.confirmPreviouslyStagedExecution(command, &result)
+	if recovered := world.applySSHPayloadEvidence(command, &result); recovered != nil {
+		s.store.RecordHealth("ssh_payload_evidence_recovered")
+		log.Printf("SSH payload-evidence parser recovered session=%s ip=%s: %v", base.SessionID, base.IP, recovered)
+	}
 	analysis := analyzeSSHCommand(command, result)
 	applySSHCommandAnalysis(&result, analysis)
-	fingerprint := sshBehaviorFingerprint(result, command)
-	if analysis.Fingerprint != "" {
-		fingerprint = analysis.Fingerprint
-	}
-	if installer := world.sshInstallerSequenceFingerprint(result, command); installer != "" && analysis.Fingerprint != "ssh:resource-hijack-execution" && (fingerprint == "" || result.PayloadStage == "retry" || result.PayloadStage == "executed") {
-		fingerprint = installer
-	}
+	fingerprint := selectSSHCommandFingerprint(world, result, command, analysis)
 	e := model.SSHEvent{
 		ID: newID(6), At: time.Now(), SessionID: base.SessionID, IP: base.IP, Country: base.Country, CountrySource: base.CountrySource,
 		ClientVersion: base.ClientVersion, Username: base.Username, Type: eventType, Command: sanitizeLogText(command, maxSSHLoggedCommandBytes), CommandName: result.CommandName,

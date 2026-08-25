@@ -12,6 +12,15 @@ import (
 
 var sshPayloadRedirectRE = regexp.MustCompile(`(?i)\bcat\s*>\s*["']?([^"'\s;&|]+)`)
 
+func (w *virtualSSHWorld) applySSHPayloadEvidence(command string, result *virtualSSHResult) (recovered any) {
+	defer func() {
+		recovered = recover()
+	}()
+	w.observeImplicitPayloadStage(command, result)
+	w.confirmPreviouslyStagedExecution(command, result)
+	return nil
+}
+
 func (w *virtualSSHWorld) observeImplicitPayloadStage(command string, result *virtualSSHResult) {
 	if w == nil || result == nil || result.PayloadStage != "" || result.StdinBytes <= 0 || result.StdinSHA256 == "" {
 		return
@@ -136,6 +145,24 @@ func sshBehaviorFingerprint(result virtualSSHResult, command string) string {
 		return "ssh:network-recon"
 	}
 	return ""
+}
+
+func selectSSHCommandFingerprint(w *virtualSSHWorld, result virtualSSHResult, command string, analysis sshCommandAnalysis) string {
+	fingerprint := sshBehaviorFingerprint(result, command)
+	if analysis.Fingerprint != "" {
+		fingerprint = analysis.Fingerprint
+	}
+	if w == nil {
+		return fingerprint
+	}
+	// Automated-installer is an aggregate workflow signal, not a replacement for
+	// stronger per-command evidence. In particular, do not hide confirmed staged
+	// execution, compound payload execution or user-systemd persistence behind the
+	// generic installer label.
+	if installer := w.sshInstallerSequenceFingerprint(result, command); installer != "" && analysis.Fingerprint == "" && (fingerprint == "" || result.PayloadStage == "retry") {
+		fingerprint = installer
+	}
+	return fingerprint
 }
 
 func (w *virtualSSHWorld) sshInstallerSequenceFingerprint(result virtualSSHResult, command string) string {
