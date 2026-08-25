@@ -81,6 +81,7 @@ type Store struct {
 	retentionDays         int
 	retentionStop         chan struct{}
 	retentionDone         chan struct{}
+	sshHighlightHistory   map[string]model.SSHHighlight
 }
 
 func eventStorageBytes(dataDir string) int64 {
@@ -96,7 +97,7 @@ func newStoreState(dataDir string, retentionDays int) *Store {
 		sessions: make(map[string]*model.Session), fingerprints: make(map[string]string),
 		realtimeSubs: make(map[*realtimeSubscriber]struct{}), pathCounts: make(map[string]int64), dayCounts: make(map[string]int64), httpHourCounts: make(map[int64]map[string]int64), ipDailyActivity: make(map[string]map[int64]*model.IPActivityBucket), targetCounts: make(map[string]int64), requestHostStats: make(map[string]*rawHostStat), unknownPaths: make(map[string]*model.UnknownPath), probeStats: make(map[string]*model.ProbeStat), catchAllHosts: make(map[string]*model.CatchAllHost), integrationCounts: make(map[string]int64),
 		actors: make(map[string]*model.ActorProfile), actorTimeline: make(map[string][]model.ActorActivity), actorSessionLast: make(map[string]time.Time), actorFingerprints: make(map[string]int64), sshActorLastCommand: make(map[string]string), sshActorLastCommandAt: make(map[string]time.Time), actorSSHUsers: make(map[string]map[string]struct{}),
-		sshSessions: make(map[string]*model.SSHSession), sshUserCounts: make(map[string]int64), sshCommandCounts: make(map[string]int64), sshFamilyCounts: make(map[string]int64), sshCountryCounts: make(map[string]int64), sshClientCounts: make(map[string]int64), sshDayConnections: make(map[string]int64), sshDayAuth: make(map[string]int64), sshDayShells: make(map[string]int64), sshDayCommands: make(map[string]int64), sshHourCounts: make(map[int64]int64), sshHighlightStates: make(map[string]*sshHighlightState),
+		sshSessions: make(map[string]*model.SSHSession), sshHighlightHistory: make(map[string]model.SSHHighlight), sshUserCounts: make(map[string]int64), sshCommandCounts: make(map[string]int64), sshFamilyCounts: make(map[string]int64), sshCountryCounts: make(map[string]int64), sshClientCounts: make(map[string]int64), sshDayConnections: make(map[string]int64), sshDayAuth: make(map[string]int64), sshDayShells: make(map[string]int64), sshDayCommands: make(map[string]int64), sshHourCounts: make(map[int64]int64), sshHighlightStates: make(map[string]*sshHighlightState),
 		integrationPeers: make(map[string]*model.IntegrationPeer), integrationPersist: make(map[string]time.Time),
 		trustedManual: make(map[string]model.TrustedDomain),
 		started:       time.Now(), dataDir: dataDir, retentionDays: retentionDays,
@@ -192,8 +193,16 @@ func (s *Store) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var first error
+	for _, f := range []*os.File{s.eventFile, s.sshEventFile, s.intelEventFile} {
+		if f == nil {
+			continue
+		}
+		if err := f.Sync(); err != nil && first == nil {
+			first = err
+		}
+	}
 	if s.eventFile != nil {
-		if err := s.eventFile.Close(); err != nil {
+		if err := s.eventFile.Close(); err != nil && first == nil {
 			first = err
 		}
 	}

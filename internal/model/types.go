@@ -524,6 +524,7 @@ type HealthOverview struct {
 	StorageCleanupTargetBytes  int64  `json:"storage_cleanup_target_bytes"`
 	StoragePressure            string `json:"storage_pressure"`
 	StorageCompactions         int64  `json:"storage_compactions"`
+	StorageSyncFailures        int64  `json:"storage_sync_failures"`
 	HTTPEventsInMemory         int    `json:"http_events_in_memory"`
 	SSHEventsInMemory          int    `json:"ssh_events_in_memory"`
 	IntelEventsInMemory        int    `json:"intel_events_in_memory"`
@@ -626,9 +627,12 @@ type SSHOverview struct {
 }
 
 type SSHSessionDetail struct {
-	Session     SSHSession    `json:"session"`
-	Events      []SSHEvent    `json:"events"`
-	AttackTrace []AttackTrace `json:"attack_trace"`
+	Session          SSHSession    `json:"session"`
+	Events           []SSHEvent    `json:"events"`
+	Intel            []IntelSignal `json:"intel,omitempty"`
+	AttackTrace      []AttackTrace `json:"attack_trace"`
+	Highlight        *SSHHighlight `json:"highlight,omitempty"`
+	TranscriptStatus string        `json:"transcript_status"`
 }
 
 type SSHLiveFeedItem struct {
@@ -662,13 +666,15 @@ type SSHHighlightPage struct {
 }
 
 type SSHSessionExport struct {
-	ExportedAt  time.Time     `json:"exported_at"`
-	Version     string        `json:"version"`
-	Session     SSHSession    `json:"session"`
-	Events      []SSHEvent    `json:"events"`
-	Actor       *ActorProfile `json:"actor,omitempty"`
-	Intel       []IntelSignal `json:"intel,omitempty"`
-	AttackTrace []AttackTrace `json:"attack_trace"`
+	ExportedAt       time.Time     `json:"exported_at"`
+	Version          string        `json:"version"`
+	Session          SSHSession    `json:"session"`
+	Events           []SSHEvent    `json:"events"`
+	Actor            *ActorProfile `json:"actor,omitempty"`
+	Intel            []IntelSignal `json:"intel,omitempty"`
+	AttackTrace      []AttackTrace `json:"attack_trace"`
+	Highlight        *SSHHighlight `json:"highlight,omitempty"`
+	TranscriptStatus string        `json:"transcript_status"`
 }
 
 type ScanBurst struct {

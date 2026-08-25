@@ -12,18 +12,25 @@ import (
 	"time"
 )
 
-const retentionSweepInterval = 5 * time.Minute
+const (
+	retentionSweepInterval = 5 * time.Minute
+	durableSyncInterval    = 5 * time.Second
+)
 
 func (s *Store) retentionLoop() {
 	defer close(s.retentionDone)
 	ticker := time.NewTicker(retentionSweepInterval)
+	syncTicker := time.NewTicker(durableSyncInterval)
 	defer ticker.Stop()
+	defer syncTicker.Stop()
 	for {
 		select {
 		case <-ticker.C:
 			if err := s.pruneExpired(time.Now()); err != nil {
 				log.Printf("ZentLoop retention cleanup failed: %v", err)
 			}
+		case <-syncTicker.C:
+			_ = s.syncEventFiles()
 		case <-s.retentionStop:
 			return
 		}
@@ -35,6 +42,11 @@ func (s *Store) pruneExpired(now time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pruneActivityAggregatesLocked(cutoff)
+	for id, h := range s.sshHighlightHistory {
+		if h.At.Before(cutoff) {
+			delete(s.sshHighlightHistory, id)
+		}
+	}
 
 	targets := []struct {
 		name string

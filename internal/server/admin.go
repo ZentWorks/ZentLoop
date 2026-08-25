@@ -731,13 +731,33 @@ func writeSSHExportText(w http.ResponseWriter, ex model.SSHSessionExport) {
 	if ex.Actor != nil {
 		fmt.Fprintf(w, "Actor: %s\nFingerprints: %s\nEngagement: %ds\nCanary touches: %d\nPayload signals: %d\n", ex.Actor.ID, strings.Join(ex.Actor.Fingerprints, ", "), ex.Actor.EngagementSeconds, ex.Actor.CanaryTouches, ex.Actor.PayloadAttempts)
 	}
+	fmt.Fprintf(w, "Transcript source: %s\n", firstPresent(ex.TranscriptStatus, "unknown"))
+	if ex.Highlight != nil {
+		fmt.Fprintf(w, "Highlight: %s %d/100 · %s\nReason: %s\n", strings.ToUpper(ex.Highlight.Rating), ex.Highlight.Score, strings.Join(ex.Highlight.Tags, ", "), ex.Highlight.Reason)
+	}
 	if len(ex.Intel) > 0 {
 		fmt.Fprintln(w, "\nIntelligence:")
 		for _, x := range ex.Intel {
 			fmt.Fprintf(w, "%s  %s  %s\n", x.At.Format(time.RFC3339), x.Kind, x.Summary)
 		}
 	}
+	if len(ex.AttackTrace) > 0 {
+		fmt.Fprintln(w, "\nAttack trace:")
+		for _, tr := range ex.AttackTrace {
+			fmt.Fprintf(w, "%s · %s · %s\n", strings.ToUpper(tr.Confidence), tr.Relation, tr.Evidence)
+			for _, step := range tr.Steps {
+				fmt.Fprintf(w, "  %s · %s · %s · %s\n", step.At.Format(time.RFC3339), strings.ToUpper(step.Protocol), step.SessionID, firstPresent(step.Summary, step.Path))
+			}
+		}
+	}
 	fmt.Fprintln(w, "\nVirtual transcript:")
+	if len(ex.Events) == 0 {
+		if ex.TranscriptStatus == "expired" {
+			fmt.Fprintln(w, "Raw SSH transcript is no longer retained. Session summary, intelligence and verified attack trace remain available.")
+		} else {
+			fmt.Fprintln(w, "No raw SSH transcript events are available.")
+		}
+	}
 	for _, e := range ex.Events {
 		fmt.Fprintf(w, "\n%s · %s", e.At.Format(time.RFC3339), strings.ToUpper(e.Type))
 		if e.CommandFamily != "" {

@@ -426,73 +426,15 @@ func (s *Store) SSHEvents(limit int) []model.SSHEvent {
 }
 
 func (s *Store) SSHSessionDetail(id string, limit int) (model.SSHSessionDetail, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	ss, ok := s.sshSessions[id]
-	if !ok {
-		return model.SSHSessionDetail{}, false
-	}
-	rows := make([]model.SSHEvent, 0, 64)
-	for i := len(s.sshEvents) - 1; i >= 0; i-- {
-		if s.sshEvents[i].SessionID != id {
-			continue
-		}
-		rows = append(rows, s.sshEvents[i])
-		if limit > 0 && len(rows) >= limit {
-			break
-		}
-	}
-	for i, j := 0, len(rows)-1; i < j; i, j = i+1, j-1 {
-		rows[i], rows[j] = rows[j], rows[i]
-	}
-	traces := s.attackTracesLocked(ss.IP)
-	filtered := make([]model.AttackTrace, 0, len(traces))
-	for _, trace := range traces {
-		for _, step := range trace.Steps {
-			if step.SessionID == id {
-				filtered = append(filtered, trace)
-				break
-			}
-		}
-	}
-	return model.SSHSessionDetail{Session: cloneSSHSession(ss), Events: rows, AttackTrace: filtered}, true
+	return s.sshSessionDetailRetained(id, limit)
 }
 
 func (s *Store) SSHSessionExport(id, version string) (model.SSHSessionExport, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	ss, ok := s.sshSessions[id]
+	detail, actor, ok := s.sshSessionEvidence(id, 0)
 	if !ok {
 		return model.SSHSessionExport{}, false
 	}
-	events := make([]model.SSHEvent, 0, 128)
-	for _, e := range s.sshEvents {
-		if e.SessionID == id {
-			events = append(events, e)
-		}
-	}
-	var actor *model.ActorProfile
-	if a := s.actors[actorID(ss.IP)]; a != nil {
-		c := cloneActor(a)
-		actor = &c
-	}
-	intel := make([]model.IntelSignal, 0, 16)
-	for _, e := range s.intelEvents {
-		if e.SessionID == id {
-			intel = append(intel, e)
-		}
-	}
-	traces := s.attackTracesLocked(ss.IP)
-	filtered := make([]model.AttackTrace, 0, len(traces))
-	for _, trace := range traces {
-		for _, step := range trace.Steps {
-			if step.SessionID == id {
-				filtered = append(filtered, trace)
-				break
-			}
-		}
-	}
-	return model.SSHSessionExport{ExportedAt: time.Now().UTC(), Version: version, Session: cloneSSHSession(ss), Events: events, Actor: actor, Intel: intel, AttackTrace: filtered}, true
+	return model.SSHSessionExport{ExportedAt: time.Now().UTC(), Version: version, Session: detail.Session, Events: detail.Events, Actor: actor, Intel: detail.Intel, AttackTrace: detail.AttackTrace, Highlight: detail.Highlight, TranscriptStatus: detail.TranscriptStatus}, true
 }
 
 func (s *Store) SSHOverviewRange(enabled bool, from, to time.Time) model.SSHOverview {
@@ -603,7 +545,13 @@ func (s *Store) pruneSSHSessionsLocked(target int) {
 	sort.Slice(rows, func(i, j int) bool { return rows[i].at.Before(rows[j].at) })
 	remove := len(rows) - target
 	for i := 0; i < remove; i++ {
-		delete(s.sshSessions, rows[i].id)
-		delete(s.sshHighlightStates, rows[i].id)
+		id := rows[i].id
+		if ss := s.sshSessions[id]; ss != nil {
+			if h, ok := scoreSSHHighlightState(cloneSSHSession(ss), s.sshHighlightStates[id]); ok {
+				s.sshHighlightHistory[id] = h
+			}
+		}
+		delete(s.sshSessions, id)
+		delete(s.sshHighlightStates, id)
 	}
 }
