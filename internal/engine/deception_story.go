@@ -192,6 +192,24 @@ func storyArtifactAllowed(profile *webStoryProfile, p, label string) bool {
 	return true
 }
 
+func engagedDevOpsArtifactFamily(ss *model.Session, p, label string) bool {
+	if ss == nil {
+		return false
+	}
+	p = canonicalObservedWebPath(p)
+	base := path.Base(p)
+	label = strings.ToLower(label)
+	isEnv := strings.HasPrefix(label, "fake-env") || strings.HasPrefix(base, ".env") || strings.HasSuffix(base, ".env")
+	if !isEnv {
+		return false
+	}
+	// Keep the existing sparse dictionary behavior for shallow scanners. Once a
+	// source has clearly committed to the DevOps/secret-discovery story, nearby
+	// environment aliases should behave like one configuration family instead of
+	// randomly oscillating between 200 and 404.
+	return ss.Persona == "devops" && (ss.Depth >= 4 || ss.RequestCount >= 80)
+}
+
 func storyEnvBody(resp Response, p string, profile *webStoryProfile) Response {
 	if resp.Status != http.StatusOK || !strings.HasPrefix(strings.ToLower(resp.Label), "fake-env") || !strings.HasPrefix(resp.ContentType, "text/plain") {
 		return resp
@@ -335,7 +353,11 @@ func (d *Deception) finalizeWebStoryResponse(r *http.Request, ss *model.Session,
 		// provider identity; their content is still synthetic and inert.
 	}
 
-	if resp.Status >= 200 && resp.Status < 300 && !storyArtifactAllowed(profile, p, resp.Label) {
+	artifactAllowed := storyArtifactAllowed(profile, p, resp.Label)
+	if !artifactAllowed && engagedDevOpsArtifactFamily(ss, p, resp.Label) {
+		artifactAllowed = true
+	}
+	if resp.Status >= 200 && resp.Status < 300 && !artifactAllowed {
 		miss := storyMiss(ss, "artifact")
 		miss.Label = "story-artifact-miss"
 		miss.Delay = delay

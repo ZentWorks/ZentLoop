@@ -28,6 +28,7 @@ func analyzeSSHCommand(command string, result virtualSSHResult) sshCommandAnalys
 	low := strings.ToLower(strings.TrimSpace(command))
 	a := sshCommandAnalysis{Stages: collectSSHCommandStages(command)}
 	a.Primary = primarySSHCommand(a.Stages, result.CommandName)
+	shape := inspectSSHShellShape(command)
 
 	switch {
 	case isSSHVersionDiscovery(command):
@@ -39,6 +40,12 @@ func analyzeSSHCommand(command string, result virtualSSHResult) sshCommandAnalys
 	case looksLikeRemotePayloadBootstrap(low):
 		a.Primary, a.Family, a.Intent, a.Message = "scp", "execution", "remote-payload-bootstrap", "credential-assisted remote payload fetch and execution with cleanup"
 		a.Fingerprint, a.Depth, a.Risk, a.Persona = "ssh:remote-payload-bootstrap", 7, 100, "payload-execution"
+	case looksLikeArchitectureAwareDownloadExecute(low, shape):
+		a.Primary, a.Family, a.Intent, a.Message = primarySSHCommand(a.Stages, "curl"), "execution", "architecture-aware-download-execute", "architecture-aware payload download, execution and cleanup"
+		a.Fingerprint, a.Depth, a.Risk, a.Persona = "ssh:download-execute", 7, 100, "payload-execution"
+	case looksLikeCompoundEnvironmentFingerprint(low, shape):
+		a.Primary, a.Family, a.Intent, a.Message = primarySSHCommand(a.Stages, "uname"), "recon", "environment-fingerprint-discovery", "compound operating-system, hardware and shell-behavior fingerprinting"
+		a.Fingerprint, a.Depth, a.Risk, a.Persona = "ssh:environment-fingerprinting", 6, 96, "system-recon"
 	case strings.Contains(low, "systemctl --user") && strings.Contains(low, ".service"):
 		a.Primary, a.Family, a.Intent, a.Message = "systemctl", "persistence", "user-systemd-persistence", "user systemd service discovery or modification"
 		a.Fingerprint, a.Depth, a.Risk, a.Persona = "ssh:user-systemd-persistence", 6, 98, "persistence"
@@ -63,6 +70,9 @@ func analyzeSSHCommand(command string, result virtualSSHResult) sshCommandAnalys
 	case strings.Contains(low, "/proc/cpuinfo") && (strings.Contains(low, "processor") || strings.Contains(low, "model name")):
 		a.Primary, a.Family, a.Intent, a.Message = firstStageOr(a.Stages, "cat"), "recon", "cpu-topology-discovery", "CPU topology discovery"
 		a.Fingerprint, a.Depth, a.Risk, a.Persona = "ssh:hardware-recon", 4, 88, "system-recon"
+		if looksLikePrivilegeFallbackChain(low, shape) {
+			a.Intent, a.Message, a.Depth, a.Risk = "cpu-topology-discovery-with-privilege-fallback", "CPU topology discovery through sudo/direct fallback chain", 6, 96
+		}
 	case strings.Contains(low, "ps ") || strings.HasPrefix(low, "ps\t"):
 		a.Primary, a.Family = "ps", "recon"
 		a.Depth, a.Risk, a.Persona = 4, 88, "system-recon"
@@ -92,6 +102,9 @@ func analyzeSSHCommand(command string, result virtualSSHResult) sshCommandAnalys
 	case strings.Contains(low, "nproc") || strings.Contains(low, "lscpu") || strings.Contains(low, "getconf _nprocessors"):
 		a.Family, a.Intent, a.Message = "recon", "cpu-resource-discovery", "CPU resource discovery"
 		a.Fingerprint, a.Depth, a.Risk, a.Persona = "ssh:hardware-recon", 4, 87, "system-recon"
+		if looksLikePrivilegeFallbackChain(low, shape) {
+			a.Intent, a.Message, a.Depth, a.Risk = "cpu-resource-discovery-with-privilege-fallback", "CPU resource discovery through sudo/direct fallback chain", 6, 96
+		}
 	case strings.Contains(low, "uname"):
 		a.Primary, a.Family, a.Depth, a.Risk, a.Persona = "uname", "recon", 3, 84, "system-recon"
 		switch {
@@ -171,7 +184,7 @@ func applySSHCommandAnalysis(result *virtualSSHResult, a sshCommandAnalysis) {
 
 func sshAnalysisOwnsReconPersona(intent string) bool {
 	switch intent {
-	case "system-identity-discovery", "architecture-discovery", "hostname-discovery", "kernel-release-discovery", "uptime-discovery", "cpu-topology-discovery", "cpu-resource-discovery", "filesystem-mount-discovery", "os-release-discovery", "root-filesystem-discovery":
+	case "system-identity-discovery", "architecture-discovery", "hostname-discovery", "kernel-release-discovery", "uptime-discovery", "cpu-topology-discovery", "cpu-resource-discovery", "cpu-topology-discovery-with-privilege-fallback", "cpu-resource-discovery-with-privilege-fallback", "environment-fingerprint-discovery", "filesystem-mount-discovery", "os-release-discovery", "root-filesystem-discovery":
 		return true
 	}
 	return false

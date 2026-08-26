@@ -187,7 +187,16 @@ func isDockerAPIFamily(p string) bool {
 	case "/containers/json", "/images/json", "/version", "/info":
 		return true
 	}
-	return strings.HasPrefix(p, "/containers/") && (strings.HasSuffix(p, "/json") || strings.HasSuffix(p, "/logs") || strings.HasSuffix(p, "/exec"))
+	if strings.HasPrefix(p, "/containers/") && (strings.HasSuffix(p, "/json") || strings.HasSuffix(p, "/logs") || strings.HasSuffix(p, "/exec")) {
+		return true
+	}
+	// Docker's two-step exec flow is a high-value follow-up after POST
+	// /containers/<id>/exec. Keep it bounded to synthetic exec ids instead of
+	// turning arbitrary /exec paths into a jackpot.
+	if strings.HasPrefix(p, "/exec/exec-") {
+		return strings.HasSuffix(p, "/start") || strings.HasSuffix(p, "/json") || strings.HasSuffix(p, "/resize")
+	}
+	return false
 }
 
 func buildDockerAPIFamily(p string, ss *model.Session, a string) Response {
@@ -204,6 +213,12 @@ func buildDockerAPIFamily(p string, ss *model.Session, a string) Response {
 		return Response{Status: 200, ContentType: "application/json", Label: "fake-docker-api-info", Depth: max(depth, 4), Body: mustJSON(map[string]any{"Containers": 2, "ContainersRunning": 2, "Images": 7, "Driver": "overlay2", "Name": "prod-app-02", "ServerVersion": "27.1.1", "OperatingSystem": "Ubuntu 24.04.3 LTS", "Architecture": "x86_64", "NCPU": 4})}
 	case strings.HasSuffix(p, "/exec"):
 		return Response{Status: http.StatusCreated, ContentType: "application/json", Label: "fake-docker-api-exec-create", Depth: max(depth, 6), Body: mustJSON(map[string]any{"Id": "exec-" + a[:12]})}
+	case strings.HasPrefix(p, "/exec/exec-") && strings.HasSuffix(p, "/start"):
+		return Response{Status: http.StatusOK, ContentType: "application/octet-stream", Label: "fake-docker-api-exec-start", Depth: max(depth, 7), Body: []byte("uid=0(root) gid=0(root) groups=0(root)\n")}
+	case strings.HasPrefix(p, "/exec/exec-") && strings.HasSuffix(p, "/json"):
+		return Response{Status: http.StatusOK, ContentType: "application/json", Label: "fake-docker-api-exec-inspect", Depth: max(depth, 7), Body: mustJSON(map[string]any{"ID": path.Base(path.Dir(p)), "Running": false, "ExitCode": 0, "OpenStdin": false, "OpenStdout": true, "OpenStderr": true})}
+	case strings.HasPrefix(p, "/exec/exec-") && strings.HasSuffix(p, "/resize"):
+		return Response{Status: http.StatusCreated, ContentType: "text/plain; charset=utf-8", Label: "fake-docker-api-exec-resize", Depth: max(depth, 6), Body: nil}
 	case strings.HasSuffix(p, "/logs"):
 		return Response{Status: 200, ContentType: "text/plain; charset=utf-8", Label: "fake-docker-api-logs", Depth: max(depth, 5), Body: []byte("2026-08-16T02:00:01Z backup sync started profile=legacy\n2026-08-16T02:00:04Z archive target=backup-01 status=ok\n")}
 	default:

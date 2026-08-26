@@ -103,7 +103,7 @@ func (s *AdminServer) Handler() http.Handler {
 	public.HandleFunc("/api/auth/session", s.adminSessionInfo)
 	public.HandleFunc("/api/auth/logout", s.adminLogout)
 	public.HandleFunc("/login", s.adminLoginPage(sub))
-	for _, path := range []string{"/login.js", "/login.css", "/favicon.png", "/zentloop-logo.png", "/manifest.webmanifest"} {
+	for _, path := range []string{"/login.js", "/login.css", "/favicon.png", "/zentloop-logo.png", "/pwa-icon-192.png", "/pwa-icon-512.png", "/pwa-maskable-512.png", "/manifest.webmanifest", "/service-worker.js"} {
 		public.Handle(path, static)
 	}
 	public.Handle("/", s.adminSessionAuth(protected))

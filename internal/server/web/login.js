@@ -1,3 +1,4 @@
+if('serviceWorker' in navigator&&window.isSecureContext){navigator.serviceWorker.register('/service-worker.js',{scope:'/'}).catch(()=>{});}
 const form=document.getElementById('loginForm');
 const button=document.getElementById('loginButton');
 const statusNode=document.getElementById('loginStatus');
