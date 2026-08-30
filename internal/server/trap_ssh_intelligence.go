@@ -100,6 +100,8 @@ func sshBehaviorFingerprint(result virtualSSHResult, command string) string {
 		return "ssh:payload-presence-check"
 	case strings.Contains(low, "ps ") && (strings.Contains(low, "pcpu") || strings.Contains(low, "%cpu") || strings.Contains(low, "--sort=-pcpu")):
 		return "ssh:resource-recon"
+	case looksLikeGPUCapacityProfiling(low):
+		return "ssh:gpu-capacity-profiling"
 	case strings.Contains(low, "/proc/cpuinfo") || strings.Contains(low, "nvidia-smi") || strings.Contains(low, "lspci") || strings.Contains(low, "lscpu") || strings.Contains(low, "nproc"):
 		return "ssh:hardware-recon"
 	case looksLikeMinerCleanupSequence(low) && (strings.Contains(low, "chmod 777") || strings.Contains(low, "history -c")):
@@ -155,11 +157,15 @@ func selectSSHCommandFingerprint(w *virtualSSHWorld, result virtualSSHResult, co
 	if w == nil {
 		return fingerprint
 	}
-	// Automated-installer is an aggregate workflow signal, not a replacement for
-	// stronger per-command evidence. In particular, do not hide confirmed staged
-	// execution, compound payload execution or user-systemd persistence behind the
-	// generic installer label.
-	if installer := w.sshInstallerSequenceFingerprint(result, command); installer != "" && analysis.Fingerprint == "" && (fingerprint == "" || result.PayloadStage == "retry") {
+	// Always feed the aggregate sequence detector so a process-presence probe can
+	// be correlated with a later matching staged filename. The precise
+	// presence->install relationship may override the generic per-command staging
+	// label; ordinary automated-installer remains subordinate to stronger evidence.
+	installer := w.sshInstallerSequenceFingerprint(result, command)
+	if installer == "ssh:payload-presence-to-install" {
+		return installer
+	}
+	if installer != "" && analysis.Fingerprint == "" && (fingerprint == "" || result.PayloadStage == "retry") {
 		fingerprint = installer
 	}
 	return fingerprint
@@ -179,12 +185,24 @@ func (w *virtualSSHWorld) sshInstallerSequenceFingerprint(result virtualSSHResul
 	if result.PayloadStage != "" || strings.Contains(low, "cat >") || strings.Contains(low, "cat  >") {
 		w.installerSignals["staging"] = true
 	}
+	if result.CommandName == "sftp" && (result.PayloadStage == "completed" || result.PayloadStage == "retry") {
+		w.installerSignals["sftp-staging"] = true
+	}
 	if strings.Contains(low, "crontab") || strings.Contains(low, "@reboot") {
 		w.installerSignals["persistence"] = true
 	}
 	currentProcessCheck := strings.Contains(low, "ps ") || strings.Contains(low, "pgrep ") || strings.Contains(low, "pidof ")
 	if currentProcessCheck {
 		w.installerSignals["process-check"] = true
+		if target := sshProcessProbeTarget(command); target != "" {
+			w.installerSignals["process-target:"+strings.ToLower(pathBaseSafe(target))] = true
+		}
+	}
+	if result.PayloadPath != "" && (result.PayloadStage == "completed" || result.PayloadStage == "retry") {
+		base := strings.ToLower(pathBaseSafe(result.PayloadPath))
+		if base != "" && w.installerSignals["process-target:"+base] {
+			return "ssh:payload-presence-to-install"
+		}
 	}
 	if result.PayloadStage == "executed" || strings.Contains(low, "chmod +x") {
 		w.installerSignals["execution"] = true
@@ -221,4 +239,12 @@ func recordSSHIntelligence(st *store.Store, base model.SSHEvent, command string,
 	for _, label := range canaries {
 		_ = st.AddIntelSignal(model.IntelSignal{ID: newID(6), At: time.Now(), IP: base.IP, Protocol: "ssh", SessionID: base.SessionID, Kind: "canary", Canary: label, Summary: "decoy token reused in SSH command: " + label})
 	}
+}
+
+func pathBaseSafe(v string) string {
+	v = strings.TrimSpace(strings.ReplaceAll(v, "\\", "/"))
+	if i := strings.LastIndex(v, "/"); i >= 0 {
+		v = v[i+1:]
+	}
+	return strings.Trim(v, "'\" ")
 }

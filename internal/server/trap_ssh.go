@@ -608,10 +608,28 @@ func (s *TrapSSH) recordSSHCommand(base model.SSHEvent, eventType, command strin
 		log.Printf("SSH event store: %v", err)
 	}
 	recordSSHIntelligence(s.store, base, command, canaries)
+	if world.installerSignals["sftp-staging"] && (analysis.Intent == "download-execute-cleanup" || analysis.Intent == "architecture-aware-download-execute") {
+		_ = s.store.AddIntelSignal(model.IntelSignal{ID: newID(6), At: time.Now(), IP: base.IP, Protocol: "ssh", SessionID: base.SessionID, Kind: "payload", Technique: "multi-channel-payload-fallback", Summary: "SSH payload deployment switched from prior SFTP staging to HTTP download/execute fallback"})
+	}
+	// Preserve a lightweight, evidence-bound payload lifecycle around the same
+	// source-bound virtual path. These signals are descriptive only; confirmed
+	// staged->execution traces still require the existing staging hash check.
+	for _, target := range world.virtualStagedPayloadTargetsInCommand(command) {
+		lowCommand := strings.ToLower(command)
+		if strings.Contains(lowCommand, "chmod") {
+			_ = s.store.AddIntelSignal(model.IntelSignal{ID: newID(6), At: time.Now(), IP: base.IP, Protocol: "ssh", SessionID: base.SessionID, Kind: "payload", Technique: "staged-payload-permission-change", Filename: target, Summary: "Previously staged SSH payload made executable: " + target})
+		}
+		if strings.Contains(lowCommand, "rm ") || strings.Contains(lowCommand, "rm -") {
+			_ = s.store.AddIntelSignal(model.IntelSignal{ID: newID(6), At: time.Now(), IP: base.IP, Protocol: "ssh", SessionID: base.SessionID, Kind: "payload", Technique: "staged-payload-cleanup", Filename: target, Summary: "Previously staged SSH payload cleanup attempted: " + target})
+		}
+	}
 	if result.PayloadStage == "intent" || result.PayloadStage == "retry" || result.PayloadStage == "completed" || result.PayloadStage == "executed" {
 		technique := "exec-stdin-staging"
-		if result.CommandName == "scp" {
+		switch result.CommandName {
+		case "scp":
 			technique = "scp-upload-staging"
+		case "sftp":
+			technique = "sftp-upload-staging"
 		}
 		summary := "SSH payload staging " + result.PayloadStage + ": " + result.PayloadPath
 		if result.PayloadStage == "executed" {

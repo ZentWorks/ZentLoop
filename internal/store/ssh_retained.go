@@ -135,7 +135,7 @@ func stagedPayloadTracesFromIntel(ip string, intel []model.IntelSignal) []model.
 			if effect.At.Sub(sig.At) > 24*time.Hour {
 				break
 			}
-			if sig.Technique != "scp-upload-staging" && sig.Technique != "exec-stdin-staging" {
+			if sig.Technique != "scp-upload-staging" && sig.Technique != "sftp-upload-staging" && sig.Technique != "exec-stdin-staging" {
 				continue
 			}
 			if !strings.Contains(strings.ToLower(sig.Summary), "completed") {

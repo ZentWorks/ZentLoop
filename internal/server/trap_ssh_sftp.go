@@ -395,7 +395,8 @@ func (s *TrapSSH) runVirtualSFTP(ch ssh.Channel, base model.SSHEvent, world *vir
 					sum = sha256.Sum256(h.data)
 				}
 				kind := inferVirtualFileKind(h.path, string(h.data))
-				isPayload := world.isVirtualPayloadStagingPath(h.path) && (kind == "script" || strings.Contains(strings.ToLower(kind), "elf"))
+				isPayloadKind := kind == "script" || strings.Contains(strings.ToLower(kind), "elf")
+				isPayload := isPayloadKind && (world.isVirtualPayloadStagingPath(h.path) || isStealthPayloadPath(h.path))
 				result := virtualSSHResult{CommandName: "sftp", Family: "file-transfer", Depth: 5, Risk: 92, Persona: "file-transfer", Message: "virtual SFTP upload received", StdinBytes: int(h.total), StdinSHA256: hex.EncodeToString(sum[:]), StdinKind: kind}
 				if isPayload {
 					lock()

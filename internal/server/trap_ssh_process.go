@@ -295,7 +295,46 @@ func (w *virtualSSHWorld) virtualLocalExecutionTargets(command string) []string 
 		}
 		offset = next
 	}
+	// SFTP and other deployment tools commonly execute an absolute hidden path
+	// (for example /home/admin/.b0s) rather than ./name. Only accept paths that
+	// are both source-bound in stagingPayloadHash and observed as an actual command
+	// stage. This prevents `chmod /home/admin/.b0s` or `rm /home/admin/.b0s` from
+	// being mistaken for execution merely because the staged path is an argument.
+	stageNames := make(map[string]bool)
+	for _, stage := range collectSSHCommandStages(command) {
+		stageNames[path.Base(stage)] = true
+	}
+	for _, word := range virtualWords(command) {
+		candidate := strings.Trim(word, "'\"(){}[];,|&")
+		if !strings.HasPrefix(candidate, "/") {
+			continue
+		}
+		target := path.Clean(candidate)
+		if _, ok := w.stagingPayloadHash[target]; !ok || seen[target] || !stageNames[path.Base(target)] {
+			continue
+		}
+		seen[target] = true
+		targets = append(targets, target)
+	}
 	return targets
+}
+
+func (w *virtualSSHWorld) virtualStagedPayloadTargetsInCommand(command string) []string {
+	if w == nil {
+		return nil
+	}
+	seen := make(map[string]bool)
+	var out []string
+	for target := range w.stagingPayloadHash {
+		if target == "" || !strings.Contains(command, target) {
+			continue
+		}
+		if !seen[target] {
+			seen[target] = true
+			out = append(out, target)
+		}
+	}
+	return out
 }
 
 func (w *virtualSSHWorld) seedDropperExecutionTargets(command string) {

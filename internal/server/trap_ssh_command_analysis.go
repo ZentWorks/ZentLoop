@@ -31,21 +31,47 @@ func analyzeSSHCommand(command string, result virtualSSHResult) sshCommandAnalys
 	shape := inspectSSHShellShape(command)
 
 	switch {
+	case result.PayloadStage == "executed" && result.PayloadPath != "":
+		a.Primary, a.Family, a.Intent, a.Message = path.Base(result.PayloadPath), "execution", "staged-payload-execution", "previously staged payload executed at exact virtual path"
+		a.Depth, a.Risk, a.Persona = 7, 100, "payload-execution"
+	case (result.PayloadStage == "completed" || result.PayloadStage == "retry") && result.PayloadPath != "":
+		a.Primary, a.Family, a.Intent = firstStageOr(a.Stages, result.CommandName), "execution", "payload-staging"
+	case strings.Contains(strings.ToLower(result.Message), "payload permission/ownership change"):
+		a.Primary, a.Family, a.Intent, a.Message = primarySSHCommand(a.Stages, "chmod"), "execution", "payload-permission-change", "payload permission/ownership change"
+		a.Depth, a.Risk, a.Persona = 6, 98, "payload-preparation"
 	case isSSHVersionDiscovery(command):
 		a.Primary, a.Family, a.Intent, a.Message = "ssh", "recon", "ssh-client-version-discovery", "SSH client version discovery"
 		a.Fingerprint, a.Depth, a.Risk, a.Persona = "ssh:ssh-client-discovery", 3, 82, "tool-discovery"
 	case isMountDiscovery(low):
 		a.Primary, a.Family, a.Intent, a.Message = "mount", "recon", "filesystem-mount-discovery", "filesystem mount discovery"
 		a.Fingerprint, a.Depth, a.Risk, a.Persona = "ssh:filesystem-discovery", 4, 87, "system-recon"
+	case looksLikeImmutableAuthorizedKeyPersistence(low):
+		a.Primary, a.Family, a.Intent, a.Message = primarySSHCommand(a.Stages, "chattr"), "persistence", "immutable-authorized-key-persistence", "SSH authorized key installed and protected with immutable attributes"
+		a.Fingerprint, a.Depth, a.Risk, a.Persona = "ssh:immutable-authorized-key", 7, 100, "persistence"
+	case looksLikeAuthorizedKeyPersistence(low):
+		a.Primary, a.Family, a.Intent, a.Message = primarySSHCommand(a.Stages, "echo"), "persistence", "authorized-key-persistence", "SSH authorized key persistence installed"
+		a.Fingerprint, a.Depth, a.Risk, a.Persona = "ssh:authorized-key-persistence", 7, 100, "persistence"
+	case looksLikeScriptBootstrap(low):
+		a.Primary, a.Family, a.Intent, a.Message = primarySSHCommand(a.Stages, "sh"), "execution", "script-bootstrap-execution", "staged helper scripts executed and removed during bootstrap"
+		a.Fingerprint, a.Depth, a.Risk, a.Persona = "ssh:script-dropper-execution", 6, 98, "payload-execution"
 	case looksLikeRemotePayloadBootstrap(low):
 		a.Primary, a.Family, a.Intent, a.Message = "scp", "execution", "remote-payload-bootstrap", "credential-assisted remote payload fetch and execution with cleanup"
 		a.Fingerprint, a.Depth, a.Risk, a.Persona = "ssh:remote-payload-bootstrap", 7, 100, "payload-execution"
 	case looksLikeArchitectureAwareDownloadExecute(low, shape):
 		a.Primary, a.Family, a.Intent, a.Message = primarySSHCommand(a.Stages, "curl"), "execution", "architecture-aware-download-execute", "architecture-aware payload download, execution and cleanup"
 		a.Fingerprint, a.Depth, a.Risk, a.Persona = "ssh:download-execute", 7, 100, "payload-execution"
+	case looksLikeDownloadExecuteCleanup(low):
+		a.Primary, a.Family, a.Intent, a.Message = primarySSHCommand(a.Stages, "curl"), "execution", "download-execute-cleanup", "payload download, execution and cleanup with transport fallback"
+		a.Fingerprint, a.Depth, a.Risk, a.Persona = "ssh:download-execute", 7, 100, "payload-execution"
 	case looksLikeCompoundEnvironmentFingerprint(low, shape):
 		a.Primary, a.Family, a.Intent, a.Message = primarySSHCommand(a.Stages, "uname"), "recon", "environment-fingerprint-discovery", "compound operating-system, hardware and shell-behavior fingerprinting"
 		a.Fingerprint, a.Depth, a.Risk, a.Persona = "ssh:environment-fingerprinting", 6, 96, "system-recon"
+	case looksLikeFilesystemPermissionProbe(low, shape):
+		a.Primary, a.Family, a.Intent, a.Message = primarySSHCommand(a.Stages, "touch"), "filesystem", "filesystem-permission-probe", "filesystem write capability probe through privilege/direct fallbacks"
+		a.Fingerprint, a.Depth, a.Risk, a.Persona = "ssh:filesystem-permission-probe", 6, 94, "privilege-escalation"
+	case looksLikeGPUCapacityProfiling(low):
+		a.Primary, a.Family, a.Intent, a.Message = primarySSHCommand(a.Stages, "nvidia-smi"), "recon", "gpu-capacity-profiling", "GPU/accelerator capacity and model profiling"
+		a.Fingerprint, a.Depth, a.Risk, a.Persona = "ssh:gpu-capacity-profiling", 5, 92, "resource-discovery"
 	case strings.Contains(low, "systemctl --user") && strings.Contains(low, ".service"):
 		a.Primary, a.Family, a.Intent, a.Message = "systemctl", "persistence", "user-systemd-persistence", "user systemd service discovery or modification"
 		a.Fingerprint, a.Depth, a.Risk, a.Persona = "ssh:user-systemd-persistence", 6, 98, "persistence"
@@ -99,12 +125,18 @@ func analyzeSSHCommand(command string, result virtualSSHResult) sshCommandAnalys
 	case strings.Contains(low, "> /tmp/d.log") || strings.Contains(low, ">/tmp/d.log"):
 		a.Primary, a.Family, a.Intent, a.Message = primarySSHCommand(a.Stages, "echo"), "filesystem", "execution-marker-write", "execution/campaign marker written"
 		a.Fingerprint, a.Depth, a.Risk, a.Persona = "ssh:execution-marker", 5, 91, result.Persona
+	case strings.Contains(low, "nvidia-smi"):
+		a.Primary, a.Family, a.Intent, a.Message = "nvidia-smi", "recon", "gpu-capacity-profiling", "GPU/accelerator capacity and model profiling"
+		a.Fingerprint, a.Depth, a.Risk, a.Persona = "ssh:gpu-capacity-profiling", 5, 92, "resource-discovery"
 	case strings.Contains(low, "nproc") || strings.Contains(low, "lscpu") || strings.Contains(low, "getconf _nprocessors"):
 		a.Family, a.Intent, a.Message = "recon", "cpu-resource-discovery", "CPU resource discovery"
 		a.Fingerprint, a.Depth, a.Risk, a.Persona = "ssh:hardware-recon", 4, 87, "system-recon"
 		if looksLikePrivilegeFallbackChain(low, shape) {
 			a.Intent, a.Message, a.Depth, a.Risk = "cpu-resource-discovery-with-privilege-fallback", "CPU resource discovery through sudo/direct fallback chain", 6, 96
 		}
+	case looksLikeEncodedExecutionMarker(low):
+		a.Primary, a.Family, a.Intent, a.Message = primarySSHCommand(a.Stages, "echo"), "execution", "encoded-execution-marker", "encoded execution/success marker emitted"
+		a.Fingerprint, a.Depth, a.Risk, a.Persona = "ssh:execution-marker", 5, 91, "file-manipulation"
 	case strings.Contains(low, "uname"):
 		a.Primary, a.Family, a.Depth, a.Risk, a.Persona = "uname", "recon", 3, 84, "system-recon"
 		switch {
