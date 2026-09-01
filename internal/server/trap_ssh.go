@@ -602,7 +602,7 @@ func (s *TrapSSH) recordSSHCommand(base model.SSHEvent, eventType, command strin
 		Frustration: world.frustration, Persona: result.Persona, RiskScore: result.Risk, Classification: model.ClassHostile, Actor: actor, Message: result.Message,
 		CanaryTouches: canaries, Fingerprint: fingerprint,
 		StdinBytes: result.StdinBytes, StdinSHA256: result.StdinSHA256, StdinKind: result.StdinKind,
-		PayloadStage: result.PayloadStage, PayloadPath: result.PayloadPath,
+		PayloadStage: result.PayloadStage, PayloadPath: result.PayloadPath, PayloadRelation: result.PayloadRelation,
 	}
 	if err := s.store.AddSSHEvent(e); err != nil {
 		log.Printf("SSH event store: %v", err)
@@ -637,6 +637,13 @@ func (s *TrapSSH) recordSSHCommand(base model.SSHEvent, eventType, command strin
 			summary = "Previously staged SSH payload executed: " + result.PayloadPath
 		}
 		_ = s.store.AddIntelSignal(model.IntelSignal{ID: newID(6), At: time.Now(), IP: base.IP, Protocol: "ssh", SessionID: base.SessionID, Kind: "payload", Technique: technique, Filename: result.PayloadPath, Summary: summary})
+		if result.PayloadRelation != "" && result.PayloadRelation != "new-payload" && result.PayloadRelation != "staged-payload-execution" {
+			relationSummary := "SSH payload relationship observed: " + result.PayloadRelation
+			if result.PayloadPath != "" {
+				relationSummary += " · " + result.PayloadPath
+			}
+			_ = s.store.AddIntelSignal(model.IntelSignal{ID: newID(6), At: time.Now(), IP: base.IP, Protocol: "ssh", SessionID: base.SessionID, Kind: "payload", Technique: "payload-" + result.PayloadRelation, Filename: result.PayloadPath, Summary: relationSummary})
+		}
 	}
 	switch {
 	case strings.Contains(result.Message, "command budget"):

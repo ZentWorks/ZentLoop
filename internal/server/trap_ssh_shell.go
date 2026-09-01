@@ -23,26 +23,27 @@ const (
 )
 
 type virtualSSHResult struct {
-	Output         string
-	Status         int
-	Exit           bool
-	Interactive    string
-	Target         string
-	TerminalAction string
-	Family         string
-	CommandName    string
-	Depth          int
-	Risk           int
-	LoopInc        int
-	Persona        string
-	Message        string
-	Delay          time.Duration
-	StreamCount    int
-	StdinBytes     int
-	StdinSHA256    string
-	StdinKind      string
-	PayloadStage   string
-	PayloadPath    string
+	Output          string
+	Status          int
+	Exit            bool
+	Interactive     string
+	Target          string
+	TerminalAction  string
+	Family          string
+	CommandName     string
+	Depth           int
+	Risk            int
+	LoopInc         int
+	Persona         string
+	Message         string
+	Delay           time.Duration
+	StreamCount     int
+	StdinBytes      int
+	StdinSHA256     string
+	StdinKind       string
+	PayloadStage    string
+	PayloadPath     string
+	PayloadRelation string
 }
 
 type virtualSSHContext struct {
@@ -132,6 +133,7 @@ type virtualSSHWorld struct {
 	historyCleared     bool
 	stagingAttempts    map[string]int
 	stagingPayloadHash map[string][32]byte
+	sessionPayloadHash map[string][32]byte
 	installerSignals   map[string]bool
 	ttyMu              sync.RWMutex
 }
@@ -167,7 +169,7 @@ func newVirtualSSHWorldForSourceShared(sessionID, username, sourceIP string, sys
 		sourceIP: sourceIP, peerKey: sourceIP + "|" + user, canaries: lures.CanaryLabels(sourceIP), interests: make(map[string]int),
 		processes: shared.processes, jobs: make(map[int]int), nextJob: 1,
 		crontabExists: true, crontabContent: "0 2 * * * /usr/local/bin/backupctl sync --profile legacy >/var/log/backup.log 2>&1\n", fileAttrs: shared.fileAttrs, fileModes: shared.fileModes, installedPackages: shared.installedPackages,
-		stagingAttempts: shared.stagingAttempts, stagingPayloadHash: shared.stagingPayloadHash, installerSignals: shared.installerSignals,
+		stagingAttempts: shared.stagingAttempts, stagingPayloadHash: shared.stagingPayloadHash, sessionPayloadHash: make(map[string][32]byte), installerSignals: shared.installerSignals,
 	}
 	if peer := system.peerState(w.peerKey); peer.Initialized {
 		w.crontabExists = peer.CrontabExists
@@ -466,6 +468,7 @@ func (w *virtualSSHWorld) executeWithInput(line, initialInput string) virtualSSH
 		if res.PayloadStage != "" {
 			combined.PayloadStage = res.PayloadStage
 			combined.PayloadPath = res.PayloadPath
+			combined.PayloadRelation = res.PayloadRelation
 		}
 		if res.StdinBytes > 0 {
 			combined.StdinBytes, combined.StdinSHA256, combined.StdinKind = res.StdinBytes, res.StdinSHA256, res.StdinKind
@@ -688,7 +691,7 @@ func (w *virtualSSHWorld) executePipeline(line string, initialInput ...string) v
 			words := virtualWords(clean)
 			if len(words) > 0 && path.Base(words[0]) == "curl" {
 				args := words[1:]
-				if optionValue(args, "-o", "--output") == "" && !containsArg(args, "-O") {
+				if curlOptionValue(args, 'o', "--output") == "" && !containsCurlShortFlag(args, 'O') {
 					clean += " --output -"
 				}
 			}
@@ -1929,8 +1932,8 @@ func (w *virtualSSHWorld) fakeCurl(args []string) virtualSSHResult {
 		return r
 	}
 
-	outFile := optionValue(args, "-o", "--output")
-	if outFile == "" && containsArg(args, "-O") {
+	outFile := curlOptionValue(args, 'o', "--output")
+	if outFile == "" && containsCurlShortFlag(args, 'O') {
 		outFile = payload.Filename
 	}
 	forceStdout := outFile == "-"
@@ -1939,7 +1942,7 @@ func (w *virtualSSHWorld) fakeCurl(args []string) virtualSSHResult {
 			r.Output, r.Status = "curl: (23) Failed writing body (No space left on device)", 23
 			return r
 		}
-		if !containsArg(args, "-s") && !containsArg(args, "--silent") && !containsArg(args, "-S") {
+		if !containsCurlShortFlag(args, 's') && !containsArg(args, "--silent") {
 			r.Output = virtualCurlProgress(payload.Size)
 		}
 		return r
@@ -2286,7 +2289,8 @@ func (w *virtualSSHWorld) fakeExecute(target string) virtualSSHResult {
 	}
 	resolved := w.resolve(name)
 	r := virtualSSHResult{CommandName: path.Base(name), Family: "execution", Depth: 6, Risk: 100, Persona: "payload-execution", Message: "simulated payload execution", LoopInc: 1, Delay: 400 * time.Millisecond}
-	if w.isVirtualPayloadStagingPath(resolved) {
+	_, sourceBoundStaged := w.stagingPayloadHash[resolved]
+	if w.isVirtualPayloadStagingPath(resolved) || sourceBoundStaged {
 		if _, ok := w.virtualReadFile(resolved); ok {
 			p := w.ensureVirtualPayloadProcess(resolved)
 			r.Output = ""
@@ -2532,6 +2536,59 @@ func lastURLLike(args []string) string {
 	for i := len(args) - 1; i >= 0; i-- {
 		if strings.Contains(args[i], "://") {
 			return args[i]
+		}
+	}
+	return ""
+}
+
+func containsCurlShortFlag(args []string, flag byte) bool {
+	for _, arg := range args {
+		if len(arg) < 2 || arg[0] != '-' || strings.HasPrefix(arg, "--") {
+			continue
+		}
+		for i := 1; i < len(arg); i++ {
+			if arg[i] == flag {
+				return true
+			}
+			// curl short options taking values terminate a cluster. Everything after
+			// that option is its argument, not another flag.
+			if strings.ContainsRune("odeuwxHAFKTP", rune(arg[i])) {
+				break
+			}
+		}
+	}
+	return false
+}
+
+func curlOptionValue(args []string, short byte, long string) string {
+	shortName := "-" + string(short)
+	for i, arg := range args {
+		if arg == long || arg == shortName {
+			if i+1 < len(args) {
+				return args[i+1]
+			}
+			return ""
+		}
+		if strings.HasPrefix(arg, long+"=") {
+			return strings.TrimPrefix(arg, long+"=")
+		}
+		if len(arg) < 2 || arg[0] != '-' || strings.HasPrefix(arg, "--") {
+			continue
+		}
+		for j := 1; j < len(arg); j++ {
+			c := arg[j]
+			if c == short {
+				if j+1 < len(arg) {
+					return arg[j+1:]
+				}
+				if i+1 < len(args) {
+					return args[i+1]
+				}
+				return ""
+			}
+			if strings.ContainsRune("odeuwxHAFKTP", rune(c)) {
+				break
+			}
 		}
 	}
 	return ""

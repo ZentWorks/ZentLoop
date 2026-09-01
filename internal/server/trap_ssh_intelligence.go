@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/hex"
+	"path"
 	"regexp"
 	"strings"
 	"time"
@@ -19,6 +20,48 @@ func (w *virtualSSHWorld) applySSHPayloadEvidence(command string, result *virtua
 	w.observeImplicitPayloadStage(command, result)
 	w.confirmPreviouslyStagedExecution(command, result)
 	return nil
+}
+
+func (w *virtualSSHWorld) classifyVirtualPayloadStage(target string, sum [32]byte) (stage, relation, message string) {
+	if w == nil {
+		return "completed", "new-payload", "virtual payload staging completed"
+	}
+	target = path.Clean(target)
+	if w.sessionPayloadHash == nil {
+		w.sessionPayloadHash = make(map[string][32]byte)
+	}
+	if previous, ok := w.sessionPayloadHash[target]; ok {
+		w.sessionPayloadHash[target] = sum
+		if previous == sum {
+			return "retry", "same-path-retry", "identical virtual payload staging retry"
+		}
+		return "completed", "payload-replacement", "virtual payload replaced at previously staged path"
+	}
+	for other, previous := range w.sessionPayloadHash {
+		if other == target {
+			continue
+		}
+		if previous == sum {
+			w.sessionPayloadHash[target] = sum
+			return "completed", "payload-relocation", "identical payload staged at a second virtual path"
+		}
+	}
+	if len(w.sessionPayloadHash) > 0 {
+		w.sessionPayloadHash[target] = sum
+		return "completed", "companion-payload", "additional companion payload staged in the same SSH session"
+	}
+	if previous, ok := w.stagingPayloadHash[target]; ok && previous == sum {
+		w.sessionPayloadHash[target] = sum
+		return "completed", "recurring-campaign-payload", "previously observed payload staged again in a new SSH session"
+	}
+	for other, previous := range w.stagingPayloadHash {
+		if other != target && previous == sum {
+			w.sessionPayloadHash[target] = sum
+			return "completed", "recurring-payload-relocation", "previously observed payload staged again at a different virtual path"
+		}
+	}
+	w.sessionPayloadHash[target] = sum
+	return "completed", "new-payload", "virtual payload staging completed"
 }
 
 func (w *virtualSSHWorld) observeImplicitPayloadStage(command string, result *virtualSSHResult) {
@@ -43,21 +86,20 @@ func (w *virtualSSHWorld) observeImplicitPayloadStage(command string, result *vi
 	}
 	var sum [32]byte
 	copy(sum[:], raw)
-	previous, had := w.stagingPayloadHash[target]
+	stage, relation, message := w.classifyVirtualPayloadStage(target, sum)
 	w.stagingAttempts[target]++
 	w.stagingPayloadHash[target] = sum
 	result.PayloadPath = target
-	result.PayloadStage = "completed"
+	result.PayloadStage = stage
+	result.PayloadRelation = relation
 	result.Family = "execution"
 	result.Depth = maxInt(result.Depth, 6)
 	result.Risk = maxInt(result.Risk, 97)
 	result.Persona = "payload-staging"
-	result.Message = "virtual payload staging completed"
-	if had && previous == sum {
-		result.PayloadStage = "retry"
+	result.Message = message
+	if stage == "retry" {
 		result.LoopInc++
 		result.Risk = maxInt(result.Risk, 98)
-		result.Message = "identical virtual payload staging retry"
 	}
 }
 
@@ -74,6 +116,10 @@ func (w *virtualSSHWorld) confirmPreviouslyStagedExecution(command string, resul
 		}
 		result.PayloadStage = "executed"
 		result.PayloadPath = target
+		result.PayloadRelation = "staged-payload-execution"
+		if sum, ok := w.stagingPayloadHash[target]; ok {
+			result.StdinSHA256 = hex.EncodeToString(sum[:])
+		}
 		result.Depth = maxInt(result.Depth, 7)
 		result.Risk = maxInt(result.Risk, 100)
 		result.Persona = "payload-execution"

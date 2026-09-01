@@ -133,6 +133,14 @@ func fingerprintHTTP(e model.Event) string {
 	if e.HostSweep {
 		return "web:host-header-sweep"
 	}
+	switch e.GraphQLOperation {
+	case "introspection":
+		return "http:graphql-introspection"
+	case "mutation":
+		return "http:graphql-mutation-probe"
+	case "subscription":
+		return "http:graphql-subscription-probe"
+	}
 	ua := strings.ToLower(e.UserAgent)
 	for _, p := range []struct{ needle, label string }{
 		{"infrawatch", "http:internet-measurement"}, {"nuclei", "http:nuclei"}, {"sqlmap", "http:sqlmap"}, {"nikto", "http:nikto"}, {"masscan", "http:masscan"},
@@ -194,6 +202,27 @@ func fingerprintSSH(e model.SSHEvent) string {
 		if strings.Contains(client, p.needle) {
 			return p.label
 		}
+	}
+	return ""
+}
+
+func sshPayloadHashFingerprint(e model.SSHEvent) string {
+	h := strings.ToLower(strings.TrimSpace(e.StdinSHA256))
+	if len(h) < 16 {
+		return ""
+	}
+	for _, r := range h[:16] {
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f')) {
+			return ""
+		}
+	}
+	kind := strings.ToLower(strings.TrimSpace(e.StdinKind))
+	if kind == "script" || strings.Contains(kind, "elf") {
+		return "ssh:payload-sha256:" + h[:16]
+	}
+	low := strings.ToLower(e.Command)
+	if kind == "text" && strings.Contains(low, "systemctl --user") && strings.Contains(low, ".service") {
+		return "ssh:service-unit-sha256:" + h[:16]
 	}
 	return ""
 }
@@ -311,6 +340,11 @@ func (s *Store) applyActorSSHEventLocked(e model.SSHEvent) {
 	fp := fingerprintSSH(e)
 	if addFingerprint(a, fp) {
 		s.actorFingerprints[fp]++
+	}
+	if payloadFP := sshPayloadHashFingerprint(e); payloadFP != "" {
+		if addFingerprint(a, payloadFP) {
+			s.actorFingerprints[payloadFP]++
+		}
 	}
 	if (e.Type == "exec" || e.Type == "command") && fp == "ssh:environment-fingerprint-probe" && strings.TrimSpace(e.Command) != "" {
 		seenSessions := map[string]struct{}{}

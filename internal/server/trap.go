@@ -111,6 +111,24 @@ func (s *TrapServer) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	ass.Automation = clampInt(ass.Automation+behavior.AutomationBoost, 0, 100)
 	ass.Risk = clampInt(ass.Risk+behavior.RiskBoost, 0, 100)
+	// Automation evidence is sticky within a resumed session. A single slower
+	// interval or browser-looking request must not turn a scanner back into a
+	// human after the session already crossed the automation threshold.
+	if ss.Actor == model.ActorAutomated || ss.AutomationScore >= 65 {
+		floor := ss.AutomationScore - 8
+		if floor < 65 {
+			floor = 65
+		}
+		if ass.Automation < floor {
+			ass.Automation = floor
+		}
+		ass.Actor = model.ActorAutomated
+		if ass.Automation >= 85 {
+			ass.Confidence = "high"
+		} else {
+			ass.Confidence = "medium"
+		}
+	}
 	claim := s.bots.Verify(ip, r.UserAgent())
 	ss.BotProvider, ss.BotName, ss.BotClaimed, ss.BotVerified = claim.Provider, claim.Bot, claim.Claimed, claim.Verified
 	if activityPubInbox {
@@ -250,7 +268,7 @@ func (s *TrapServer) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		addJourney(ss, now, r.URL.Path, label)
 	} else if ss.Classification == model.ClassHostile || looksLikeBait(r.URL.Path) {
-		resp := s.deception.Build(r, ss)
+		resp := s.deception.BuildWithBody(r, ss, bodySample)
 		if resp.Delay > 0 {
 			time.Sleep(resp.Delay)
 		}
@@ -291,7 +309,8 @@ func (s *TrapServer) handle(w http.ResponseWriter, r *http.Request) {
 		bytesWritten = cw.bytes
 	}
 	s.store.UpsertSession(ss, fp)
-	e := model.Event{ID: newID(6), At: now, SessionID: ss.ID, SessionFirstSeen: ss.FirstSeen, SessionRequests: ss.RequestCount, SessionVisits: ss.VisitCount, SessionVisitStarted: ss.VisitStarted, SessionVisitRequests: ss.VisitRequestCount, SessionVisitFirstPath: ss.VisitFirstPath, IP: ss.IP, IPSource: ss.IPSource, Proxy: ss.Proxy, Country: ss.Country, CountrySource: ss.CountrySource, CloudflareRay: ss.CloudflareRay, CloudflareColo: ss.CloudflareColo, Referrer: requestMeta.Referrer, ReferrerHost: requestMeta.ReferrerHost, RequestHost: requestMeta.RequestHost, Target: ss.Target, TargetTrust: ss.TargetTrust, SelfOrigin: ss.SelfOrigin, HostSweep: ss.HostSweep, HostSweepHosts: ss.HostSweepHosts, ProbeName: probe.Name, ProbeProduct: probe.Product, ProbeCVE: probe.CVE, KnownProbe: knownProbe, Origin: requestMeta.Origin, AcceptLanguage: requestMeta.AcceptLanguage, HTTPProtocol: requestMeta.HTTPProtocol, Integration: requestMeta.Integration, IntegrationTrust: requestMeta.IntegrationTrust, CatchAll: requestMeta.CatchAll, Method: r.Method, Path: r.URL.Path, Status: status, Bytes: bytesWritten, RiskScore: ss.RiskScore, AutomationScore: ss.AutomationScore, Classification: ss.Classification, Actor: ss.Actor, Confidence: ss.Confidence, AvgIntervalMS: ss.AvgIntervalMS, IntervalVarMS: ss.IntervalVarMS, Persona: ss.Persona, WebStory: ss.WebStory, WebStoryConfidence: ss.WebStoryConfidence, WebStoryLocked: ss.WebStoryLocked, Depth: ss.Depth, Loop: ss.Loop, Frustration: ss.Frustration, Category: ass.Category, Message: label, UserAgent: ss.UserAgent, BotProvider: ss.BotProvider, BotName: ss.BotName, BotClaimed: ss.BotClaimed, BotVerified: ss.BotVerified}
+	graphqlObs := engine.AnalyzeGraphQLRequest(r.URL.Path, r.URL.RawQuery, bodySample)
+	e := model.Event{ID: newID(6), At: now, SessionID: ss.ID, SessionFirstSeen: ss.FirstSeen, SessionRequests: ss.RequestCount, SessionVisits: ss.VisitCount, SessionVisitStarted: ss.VisitStarted, SessionVisitRequests: ss.VisitRequestCount, SessionVisitFirstPath: ss.VisitFirstPath, IP: ss.IP, IPSource: ss.IPSource, Proxy: ss.Proxy, Country: ss.Country, CountrySource: ss.CountrySource, CloudflareRay: ss.CloudflareRay, CloudflareColo: ss.CloudflareColo, Referrer: requestMeta.Referrer, ReferrerHost: requestMeta.ReferrerHost, RequestHost: requestMeta.RequestHost, Target: ss.Target, TargetTrust: ss.TargetTrust, SelfOrigin: ss.SelfOrigin, HostSweep: ss.HostSweep, HostSweepHosts: ss.HostSweepHosts, ProbeName: probe.Name, ProbeProduct: probe.Product, ProbeCVE: probe.CVE, KnownProbe: knownProbe, Origin: requestMeta.Origin, AcceptLanguage: requestMeta.AcceptLanguage, HTTPProtocol: requestMeta.HTTPProtocol, Integration: requestMeta.Integration, IntegrationTrust: requestMeta.IntegrationTrust, CatchAll: requestMeta.CatchAll, Method: r.Method, Path: r.URL.Path, RequestBodyBytes: graphqlObs.BodyBytes, RequestBodySHA256: graphqlObs.BodySHA256, GraphQLOperation: graphqlObs.Operation, GraphQLOperationName: graphqlObs.OperationName, GraphQLFields: graphqlObs.Fields, Status: status, Bytes: bytesWritten, RiskScore: ss.RiskScore, AutomationScore: ss.AutomationScore, Classification: ss.Classification, Actor: ss.Actor, Confidence: ss.Confidence, AvgIntervalMS: ss.AvgIntervalMS, IntervalVarMS: ss.IntervalVarMS, Persona: ss.Persona, WebStory: ss.WebStory, WebStoryConfidence: ss.WebStoryConfidence, WebStoryLocked: ss.WebStoryLocked, Depth: ss.Depth, Loop: ss.Loop, Frustration: ss.Frustration, Category: ass.Category, Message: label, UserAgent: ss.UserAgent, BotProvider: ss.BotProvider, BotName: ss.BotName, BotClaimed: ss.BotClaimed, BotVerified: ss.BotVerified}
 	if err := s.store.AddEvent(e); err != nil {
 		log.Printf("event store: %v", err)
 	}

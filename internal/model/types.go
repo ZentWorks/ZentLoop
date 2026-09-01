@@ -134,6 +134,11 @@ type Event struct {
 	CatchAll              bool           `json:"catch_all,omitempty"`
 	Method                string         `json:"method"`
 	Path                  string         `json:"path"`
+	RequestBodyBytes      int            `json:"request_body_bytes,omitempty"`
+	RequestBodySHA256     string         `json:"request_body_sha256,omitempty"`
+	GraphQLOperation      string         `json:"graphql_operation,omitempty"`
+	GraphQLOperationName  string         `json:"graphql_operation_name,omitempty"`
+	GraphQLFields         []string       `json:"graphql_fields,omitempty"`
 	Status                int            `json:"status"`
 	Bytes                 int            `json:"bytes"`
 	RiskScore             int            `json:"risk_score"`
@@ -603,6 +608,7 @@ type SSHEvent struct {
 	StdinKind        string         `json:"stdin_kind,omitempty"`
 	PayloadStage     string         `json:"payload_stage,omitempty"`
 	PayloadPath      string         `json:"payload_path,omitempty"`
+	PayloadRelation  string         `json:"payload_relation,omitempty"`
 	NetworkTarget    string         `json:"network_target,omitempty"`
 	NetworkPort      int            `json:"network_port,omitempty"`
 }

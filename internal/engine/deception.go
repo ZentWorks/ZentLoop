@@ -41,6 +41,10 @@ func tokens(sessionID string) (string, string) {
 }
 
 func (d *Deception) Build(r *http.Request, ss *model.Session) Response {
+	return d.BuildWithBody(r, ss, "")
+}
+
+func (d *Deception) BuildWithBody(r *http.Request, ss *model.Session, bodySample string) Response {
 	p := strings.ToLower(r.URL.Path)
 	a, b := tokens(ss.ID)
 	canaries := lures.CanaryLabels(ss.IP)
@@ -259,7 +263,31 @@ func (d *Deception) Build(r *http.Request, ss *model.Session) Response {
 		resp.ContentType = "application/json"
 		resp.Label = "fake-graphql"
 		resp.Depth = max(depth, 1)
-		resp.Body = mustJSON(map[string]any{"errors": []map[string]any{{"message": "GET query missing", "extensions": map[string]string{"internal_schema": "/api/v1/internal/" + a}}}})
+		obs := AnalyzeGraphQLRequest(r.URL.Path, r.URL.RawQuery, bodySample)
+		switch obs.Operation {
+		case "introspection":
+			resp.Label = "fake-graphql-introspection-disabled"
+			resp.Body = mustJSON(map[string]any{"errors": []map[string]any{{"message": "GraphQL introspection is disabled in production", "extensions": map[string]any{"code": "INTROSPECTION_DISABLED", "request_id": a}}}})
+		case "typename":
+			resp.Label = "fake-graphql-typename"
+			resp.Body = mustJSON(map[string]any{"data": map[string]any{"__typename": "Query"}})
+		case "mutation":
+			resp.Label = "fake-graphql-mutation-auth"
+			resp.Body = mustJSON(map[string]any{"data": nil, "errors": []map[string]any{{"message": "Authentication required", "extensions": map[string]any{"code": "UNAUTHENTICATED", "request_id": a}}}})
+		case "subscription":
+			resp.Label = "fake-graphql-subscription-upgrade"
+			resp.Status = http.StatusBadRequest
+			resp.Body = mustJSON(map[string]any{"errors": []map[string]any{{"message": "Subscriptions require a WebSocket transport", "extensions": map[string]any{"code": "BAD_REQUEST"}}}})
+		case "query":
+			resp.Label = "fake-graphql-auth-required"
+			resp.Body = mustJSON(map[string]any{"data": nil, "errors": []map[string]any{{"message": "Authentication required", "extensions": map[string]any{"code": "UNAUTHENTICATED", "request_id": a}}}})
+		default:
+			message := "Must provide query string."
+			if r.Method == http.MethodGet {
+				message = "GET query missing"
+			}
+			resp.Body = mustJSON(map[string]any{"errors": []map[string]any{{"message": message, "extensions": map[string]any{"internal_schema": "/api/v1/internal/" + a}}}})
+		}
 	case strings.Contains(p, "/solr/"):
 		resp.ContentType = "application/json"
 		resp.Label = "fake-solr-admin"

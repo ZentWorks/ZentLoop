@@ -20,6 +20,19 @@ type virtualDownloadPayload struct {
 	Binary      bool
 }
 
+func looksLikeVirtualExecutableDownload(name string) bool {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return false
+	}
+	for _, suffix := range []string{"_x86_64", "_amd64", "_aarch64", "_arm64", "_armv7", "_armv7l", ".x86_64", ".amd64", ".aarch64"} {
+		if strings.HasSuffix(name, suffix) {
+			return true
+		}
+	}
+	return strings.HasPrefix(name, ".") && !strings.Contains(strings.TrimPrefix(name, "."), ".")
+}
+
 func (w *virtualSSHWorld) virtualPayloadForURL(raw string) virtualDownloadPayload {
 	parsed, _ := url.Parse(raw)
 	cleanPath := parsed.Path
@@ -69,8 +82,8 @@ func (w *virtualSSHWorld) virtualPayloadForURL(raw string) virtualDownloadPayloa
 		payload.Body, payload.ContentType, payload.Kind, payload.Size, payload.Binary = "!<arch>\ndebian-binary/\n", "application/vnd.debian.binary-package", "deb", 7_924_816, true
 	case strings.HasSuffix(lower, ".rpm"):
 		payload.Body, payload.ContentType, payload.Kind, payload.Size, payload.Binary = "\xed\xab\xee\xdbRPM-PAYLOAD\n", "application/x-rpm", "rpm", 8_614_204, true
-	case strings.HasSuffix(lower, ".so"), strings.HasSuffix(lower, ".bin"):
-		payload.Body, payload.ContentType, payload.Kind, payload.Size, payload.Binary = "\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00GLIBC_2.34\x00worker\n", "application/octet-stream", "elf", 1_274_944, true
+	case strings.HasSuffix(lower, ".so"), strings.HasSuffix(lower, ".bin"), looksLikeVirtualExecutableDownload(name):
+		payload.Body, payload.ContentType, payload.Kind, payload.Size, payload.Binary = "\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00GLIBC_2.34\x00worker\n", "application/octet-stream", "elf", 1_724_416, true
 	case strings.HasSuffix(lower, ".conf"), strings.HasSuffix(lower, ".ini"), strings.HasSuffix(lower, ".env"), strings.HasSuffix(lower, ".yaml"), strings.HasSuffix(lower, ".yml"):
 		body := "environment=production\nendpoint=https://api.internal\nworkers=4\n"
 		payload.Body, payload.ContentType, payload.Kind, payload.Size, payload.Binary = body, "text/plain", "text", int64(len(body)), false

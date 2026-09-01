@@ -26,7 +26,7 @@ func (s *Store) HTTPBehavior(ip, currentUA string, now time.Time) HTTPBehaviorSi
 	uas := map[string]struct{}{}
 	paths := map[string]struct{}{}
 	botClaims := map[string]struct{}{}
-	ssrfPaths, credentialPaths, fileReadPaths, phpPaths, wordpressPaths := 0, 0, 0, 0, 0
+	ssrfPaths, credentialPaths, fileReadPaths, phpPaths, wordpressPaths, structuredAPIPaths := 0, 0, 0, 0, 0, 0
 	for i := len(s.events) - 1; i >= 0; i-- {
 		e := s.events[i]
 		age := now.Sub(e.At)
@@ -59,6 +59,9 @@ func (s *Store) HTTPBehavior(ip, currentUA string, now time.Time) HTTPBehaviorSi
 			}
 			if strings.Contains(lowPath, "/wp-includes/") || strings.Contains(lowPath, "/wp-content/") || strings.Contains(lowPath, "/wp-") {
 				wordpressPaths++
+			}
+			if strings.HasPrefix(lowPath, "/api/json/settings/") {
+				structuredAPIPaths++
 			}
 		}
 		if c := botClaimLabel(e.UserAgent); c != "" {
@@ -117,6 +120,11 @@ func (s *Store) HTTPBehavior(ip, currentUA string, now time.Time) HTTPBehaviorSi
 	if wordpressPaths >= 3 {
 		out.RiskBoost += 8
 		out.Fingerprints = append(out.Fingerprints, "http:wordpress-webshell-scanner")
+	}
+	if structuredAPIPaths >= 2 {
+		out.AutomationBoost += 15
+		out.RiskBoost += 14
+		out.Fingerprints = append(out.Fingerprints, "http:structured-api-enumeration")
 	}
 	sort.Strings(out.Fingerprints)
 	return out

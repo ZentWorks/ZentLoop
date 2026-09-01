@@ -68,6 +68,19 @@ func stringSet(values []string) map[string]struct{} {
 	return out
 }
 
+func sharedFingerprintPrefix(a, b map[string]struct{}, prefix string) int {
+	n := 0
+	for value := range a {
+		if !strings.HasPrefix(value, prefix) {
+			continue
+		}
+		if _, ok := b[value]; ok {
+			n++
+		}
+	}
+	return n
+}
+
 func (s *Store) campaignPeersLocked(ip string, target *model.ActorProfile, targetUsers, targetClients map[string]struct{}) []model.IPCampaignPeer {
 	if target == nil {
 		return nil
@@ -132,6 +145,16 @@ func (s *Store) campaignPeersLocked(ip string, target *model.ActorProfile, targe
 			score += bonus
 			strongSignals++
 			strongReasons = append(strongReasons, "multiple shared behavior fingerprints")
+		}
+		if sharedFingerprintPrefix(targetFP, peerFP, "ssh:payload-sha256:") > 0 {
+			score += 30
+			strongSignals++
+			strongReasons = append(strongReasons, "identical staged payload hash")
+		}
+		if sharedFingerprintPrefix(targetFP, peerFP, "ssh:service-unit-sha256:") > 0 {
+			score += 18
+			strongSignals++
+			strongReasons = append(strongReasons, "identical persistence service payload")
 		}
 		if target.SSHMedianRevisitSeconds > 0 && peer.SSHMedianRevisitSeconds > 0 {
 			diff := target.SSHMedianRevisitSeconds - peer.SSHMedianRevisitSeconds

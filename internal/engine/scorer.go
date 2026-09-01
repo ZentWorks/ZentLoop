@@ -35,7 +35,7 @@ var pathSignals = []struct {
 	{"/webpages/login.html", 22, "appliance-enumeration", "embedded"}, {"/doc/index.html", 20, "appliance-enumeration", "embedded"}, {"/manage/account/login", 22, "admin-enumeration", "web"},
 	{"/login.jsp", 20, "admin-enumeration", "web"}, {"/login.html", 14, "login-enumeration", "web"}, {"/login.htm", 14, "login-enumeration", "web"},
 	{"/wp-login", 28, "cms-enumeration", "wordpress"}, {"/phpmyadmin", 35, "admin-enumeration", "web"}, {"/swagger", 28, "api-enumeration", "api"},
-	{"/openapi", 28, "api-enumeration", "api"}, {"/graphql", 20, "api-enumeration", "api"}, {"/actuator", 35, "framework-enumeration", "devops"},
+	{"/openapi", 28, "api-enumeration", "api"}, {"/graphql", 20, "api-enumeration", "api"}, {"/api/json/settings/", 34, "config-enumeration", "api"}, {"/actuator", 35, "framework-enumeration", "devops"},
 	{"/jenkins", 32, "ci-enumeration", "devops"}, {"/backup", 25, "backup-discovery", "web"}, {"/admin", 14, "admin-enumeration", "web"},
 	{"/server-status", 30, "server-enumeration", "web"}, {"/vendor/phpunit", 45, "exploit-probe", "web"}, {"/phpunit/", 45, "exploit-probe", "web"}, {"/lib/phpunit/", 45, "exploit-probe", "web"}, {"/containers/json", 44, "container-enumeration", "containers"}, {"/credentials.js", 38, "credential-discovery", "devops"}, {"/config.json.js", 32, "config-discovery", "devops"}, {"/settings.js", 28, "config-discovery", "devops"}, {"/administrator/manifests/files/joomla.xml", 30, "cms-enumeration", "joomla"}, {"/_next/", 18, "framework-enumeration", "web"}, {"/cgi-bin", 30, "exploit-probe", "web"},
 	{"/fetch", 32, "ssrf-discovery", "api"}, {"/proxy", 32, "ssrf-discovery", "api"}, {"/@fs/", 52, "file-read", "devops"}, {"/proc/self/environ", 52, "file-read", "devops"}, {"terraform.tfstate", 48, "credential-discovery", "cloud"}, {"terraform.tfvars", 46, "credential-discovery", "cloud"}, {".azure/", 46, "credential-discovery", "cloud"}, {".npmrc", 42, "credential-discovery", "devops"}, {".netrc", 44, "credential-discovery", "devops"}, {"rclone.conf", 44, "credential-discovery", "cloud"}, {"/latest/meta-data/", 52, "cloud-metadata-discovery", "cloud"}, {"/db.sql", 40, "backup-discovery", "database"}, {"/dump.sql", 40, "backup-discovery", "database"},
@@ -82,6 +82,11 @@ func (s *Scorer) AssessAt(r *http.Request, ss *model.Session, bodySample string,
 		}
 	}
 	ua := strings.ToLower(r.UserAgent())
+	if strings.Contains(path, "/api/json/settings/") && strings.Contains(ua, "cve-") && strings.Contains(ua, "audit") {
+		riskDelta = max(riskDelta, 48)
+		autoDelta += 35
+		cat = "vulnerability-audit-probe"
+	}
 	for _, x := range scannerUA {
 		if strings.Contains(ua, x) {
 			riskDelta += 22

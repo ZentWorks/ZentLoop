@@ -125,10 +125,10 @@ func (w *virtualSSHWorld) runVirtualSCPSink(ch ssh.Channel, command string) virt
 			}
 			sum := h.Sum(nil)
 			hashHex := hex.EncodeToString(sum)
-			prevHash, had := w.stagingPayloadHash[dest]
 			var hashArr [32]byte
-			// Full transfer hash is authoritative for retry detection and event metadata.
+			// Full transfer hash is authoritative for staging relationship and event metadata.
 			copy(hashArr[:], sum)
+			stage, relation, stageMessage := w.classifyVirtualPayloadStage(dest, hashArr)
 			if !w.setVirtualFile(dest, preview.String()) {
 				r.Status = 1
 				r.Output = "scp: " + dest + ": " + w.virtualWriteFailure(dest)
@@ -149,11 +149,18 @@ func (w *virtualSSHWorld) runVirtualSCPSink(ch ssh.Channel, command string) virt
 			r.StdinSHA256 = hashHex
 			r.StdinKind = meta.Kind
 			r.PayloadPath = dest
-			r.PayloadStage = "completed"
-			if had && prevHash == hashArr {
-				r.PayloadStage = "retry"
+			r.PayloadStage = stage
+			r.PayloadRelation = relation
+			r.Message = stageMessage
+			if stage == "retry" {
 				r.Message = "identical virtual SCP payload staging retry"
 				r.LoopInc++
+			} else if relation == "companion-payload" {
+				r.Message = "virtual SCP companion payload staging completed"
+			} else if relation == "payload-relocation" || relation == "recurring-payload-relocation" {
+				r.Message = "identical virtual SCP payload staged at a different path"
+			} else if relation == "payload-replacement" {
+				r.Message = "virtual SCP payload replaced at previously staged path"
 			}
 			_, _ = ch.Write([]byte{0})
 			return r

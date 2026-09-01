@@ -400,11 +400,17 @@ func (s *TrapSSH) runVirtualSFTP(ch ssh.Channel, base model.SSHEvent, world *vir
 				result := virtualSSHResult{CommandName: "sftp", Family: "file-transfer", Depth: 5, Risk: 92, Persona: "file-transfer", Message: "virtual SFTP upload received", StdinBytes: int(h.total), StdinSHA256: hex.EncodeToString(sum[:]), StdinKind: kind}
 				if isPayload {
 					lock()
+					stage, relation, stageMessage := world.classifyVirtualPayloadStage(h.path, sum)
 					world.stagingAttempts[h.path]++
 					world.stagingPayloadHash[h.path] = sum
 					unlock()
 					result.Depth, result.Risk, result.Persona = 6, 97, "payload-staging"
-					result.PayloadStage, result.PayloadPath = "completed", h.path
+					result.PayloadStage, result.PayloadPath, result.PayloadRelation = stage, h.path, relation
+					result.Message = stageMessage
+					if stage == "retry" {
+						result.LoopInc++
+						result.Risk = 98
+					}
 				}
 				s.recordSSHCommand(base, "request", `sftp put "`+h.path+`"`, world, result, classifySSHActor(base.ClientVersion, false))
 			}
