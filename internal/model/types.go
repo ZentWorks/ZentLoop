@@ -695,3 +695,40 @@ type ScanBurst struct {
 	Paths       []string  `json:"paths,omitempty"`
 	Fingerprint string    `json:"fingerprint,omitempty"`
 }
+
+type TargetRealityProfile struct {
+	Target         string    `json:"target"`
+	Mode           string    `json:"mode"` // automatic, guided, fixed
+	Inherit        bool      `json:"inherit"`
+	Applications   []string  `json:"applications,omitempty"`
+	Infrastructure []string  `json:"infrastructure,omitempty"`
+	Artifacts      []string  `json:"artifacts,omitempty"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+type TargetRealityState struct {
+	Target     string         `json:"target"`
+	Technology string         `json:"technology,omitempty"`
+	Confidence string         `json:"confidence,omitempty"`
+	Locked     bool           `json:"locked"`
+	Cloud      string         `json:"cloud,omitempty"`
+	Evidence   map[string]int `json:"evidence,omitempty"`
+	LastSeen   time.Time      `json:"last_seen,omitempty"`
+}
+
+type TargetRealityResolved struct {
+	Target         string             `json:"target"`
+	Mode           string             `json:"mode"`
+	Applications   []string           `json:"applications,omitempty"`
+	Infrastructure []string           `json:"infrastructure,omitempty"`
+	Artifacts      []string           `json:"artifacts,omitempty"`
+	State          TargetRealityState `json:"state"`
+	Source         string             `json:"source"`
+	Coherent       bool               `json:"coherent"`
+	Warnings       []string           `json:"warnings,omitempty"`
+}
+
+type TargetRealitySettings struct {
+	Profiles []TargetRealityProfile  `json:"profiles"`
+	Resolved []TargetRealityResolved `json:"resolved,omitempty"`
+}

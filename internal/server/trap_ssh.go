@@ -608,6 +608,14 @@ func (s *TrapSSH) recordSSHCommand(base model.SSHEvent, eventType, command strin
 		log.Printf("SSH event store: %v", err)
 	}
 	recordSSHIntelligence(s.store, base, command, canaries)
+	lowCommand := strings.ToLower(command)
+	if (strings.Contains(lowCommand, "sh clean.sh") || strings.Contains(lowCommand, "sh setup.sh")) && strings.Contains(lowCommand, "rm -") {
+		_ = s.store.AddIntelSignal(model.IntelSignal{ID: newID(6), At: time.Now(), IP: base.IP, Protocol: "ssh", SessionID: base.SessionID, Kind: "payload", Technique: "script-bootstrap-lifecycle", Summary: "Helper scripts executed and removed before follow-on persistence"})
+	}
+	if analysis.Intent == "immutable-authorized-key-persistence" {
+		_ = s.store.AddIntelSignal(model.IntelSignal{ID: newID(6), At: time.Now(), IP: base.IP, Protocol: "ssh", SessionID: base.SessionID, Kind: "persistence", Technique: "authorized-key-install", Filename: "~/.ssh/authorized_keys", Summary: "SSH authorized key installed as persistence"})
+		_ = s.store.AddIntelSignal(model.IntelSignal{ID: newID(6), At: time.Now(), IP: base.IP, Protocol: "ssh", SessionID: base.SessionID, Kind: "persistence", Technique: "immutable-file-protection", Filename: "~/.ssh/authorized_keys", Summary: "Authorized keys file protected with immutable attributes"})
+	}
 	if world.installerSignals["sftp-staging"] && (analysis.Intent == "download-execute-cleanup" || analysis.Intent == "architecture-aware-download-execute") {
 		_ = s.store.AddIntelSignal(model.IntelSignal{ID: newID(6), At: time.Now(), IP: base.IP, Protocol: "ssh", SessionID: base.SessionID, Kind: "payload", Technique: "multi-channel-payload-fallback", Summary: "SSH payload deployment switched from prior SFTP staging to HTTP download/execute fallback"})
 	}
@@ -615,7 +623,6 @@ func (s *TrapSSH) recordSSHCommand(base model.SSHEvent, eventType, command strin
 	// source-bound virtual path. These signals are descriptive only; confirmed
 	// staged->execution traces still require the existing staging hash check.
 	for _, target := range world.virtualStagedPayloadTargetsInCommand(command) {
-		lowCommand := strings.ToLower(command)
 		if strings.Contains(lowCommand, "chmod") {
 			_ = s.store.AddIntelSignal(model.IntelSignal{ID: newID(6), At: time.Now(), IP: base.IP, Protocol: "ssh", SessionID: base.SessionID, Kind: "payload", Technique: "staged-payload-permission-change", Filename: target, Summary: "Previously staged SSH payload made executable: " + target})
 		}

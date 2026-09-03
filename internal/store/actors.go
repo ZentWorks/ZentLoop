@@ -184,6 +184,25 @@ func (s *Store) applyActorHTTPEventLocked(e model.Event) {
 	if addFingerprint(a, fp) {
 		s.actorFingerprints[fp]++
 	}
+	if e.BotClaimed {
+		claim := strings.ToLower(strings.TrimSpace(e.BotProvider))
+		if claim == "" {
+			claim = strings.ToLower(strings.TrimSpace(e.BotName))
+		}
+		if claim != "" {
+			claims := s.httpActorBotClaims[e.IP]
+			if claims == nil {
+				claims = map[string]struct{}{}
+				s.httpActorBotClaims[e.IP] = claims
+			}
+			claims[claim] = struct{}{}
+			if len(claims) >= 2 {
+				if addFingerprint(a, "http:bot-identity-rotation") {
+					s.actorFingerprints["http:bot-identity-rotation"]++
+				}
+			}
+		}
+	}
 	summary := e.Method + " " + e.Path
 	if e.ProbeName != "" {
 		summary += " · " + e.ProbeName

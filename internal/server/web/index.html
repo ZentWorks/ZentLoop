@@ -325,20 +325,52 @@
       <section class="panel"><div class="panel-title"><h2>Observed timeline</h2><span id="ipRawCounts">retained events</span></div><div id="ipObservedTimeline" class="ip-observed-timeline"></div></section>
     </section>
 
-    <footer><span class="footer-version"><span id="version">ZentLoop 0.3.11</span><a id="updateBadge" class="update-badge" href="https://github.com/ZentWorks/ZentLoop" target="_blank" rel="noopener noreferrer" hidden>NEW VERSION AVAILABLE</a></span><span>Proxy: <b id="proxyMode">direct</b> · GeoIP: <b id="geoStatus">local</b> · Official bots: <b id="botStatus">waiting</b> · <a href="https://db-ip.com" target="_blank" rel="noopener noreferrer">IP Geolocation by DB-IP</a></span></footer>
+    <footer><span class="footer-version"><span id="version">ZentLoop 0.3.12</span><a id="updateBadge" class="update-badge" href="https://github.com/ZentWorks/ZentLoop" target="_blank" rel="noopener noreferrer" hidden>NEW VERSION AVAILABLE</a></span><span>Proxy: <b id="proxyMode">direct</b> · GeoIP: <b id="geoStatus">local</b> · Official bots: <b id="botStatus">waiting</b> · <a href="https://db-ip.com" target="_blank" rel="noopener noreferrer">IP Geolocation by DB-IP</a></span></footer>
   </main>
 
   <div id="settingsBackdrop" class="modal-backdrop settings-backdrop" aria-hidden="true"></div>
-  <section id="settingsModal" class="settings-modal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
-    <div class="settings-modal-head"><div><small>ZENTLOOP SETTINGS</small><h2 id="settingsTitle">Trusted Domains</h2></div><button id="closeSettings" class="modal-close" type="button" aria-label="Close settings">×</button></div>
+  <section id="settingsModal" class="settings-modal settings-modal-wide" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+    <div class="settings-modal-head"><div><small>ZENTLOOP SETTINGS</small><h2 id="settingsTitle">Configuration</h2></div><button id="closeSettings" class="modal-close" type="button" aria-label="Close settings">×</button></div>
+    <div class="settings-tabs" role="tablist"><button id="settingsTabGeneral" class="active" type="button" role="tab">Settings</button><button id="settingsTabDomains" type="button" role="tab">Domain Settings</button></div>
     <div class="settings-modal-body">
-      <p>One root domain per line. A root automatically trusts all of its subdomains. Untrusted historical hosts disappear from fake-target statistics immediately after they become trusted.</p>
-      <label for="trustedDomainsInput">Manual trusted domains</label>
-      <textarea id="trustedDomainsInput" rows="9" spellcheck="false" placeholder="example.com
-example.net"></textarea>
-      <small class="settings-hint">Enter one root domain per line. Subdomains are trusted automatically.</small>
-      <div class="settings-actions"><span id="settingsStatus"></span><button id="saveSettings" type="button">Save trusted domains</button></div>
+      <section id="settingsGeneralPane" class="settings-pane">
+        <p>Trusted Domains/IPs define your own public targets. Root domains automatically trust their subdomains; direct public IP targets are supported as well.</p>
+        <label for="trustedDomainsInput">Manual Trusted Domains / IPs</label>
+        <textarea id="trustedDomainsInput" rows="9" spellcheck="false" placeholder="example.com
+185.221.171.199"></textarea>
+        <small class="settings-hint">One target per line. Domain realities are configured in the second tab.</small>
+        <div class="settings-actions"><span id="settingsStatus"></span><button id="saveSettings" type="button">Save Trusted Targets</button></div>
+      </section>
+      <section id="settingsDomainsPane" class="settings-pane" hidden>
+        <div class="reality-intro"><div><b>Domain Reality</b><span>Persistent reality per domain/IP. IP, user-agent, and session rotation do not change an already committed target reality.</span></div><button id="addRealityTarget" type="button">+ Subdomain / Wildcard</button></div>
+        <div id="realityProfiles" class="reality-list"></div>
+        <div class="settings-inline-status" id="realityStatus" aria-live="polite"></div>
+      </section>
     </div>
+  </section>
+
+
+  <div id="realityEditorBackdrop" class="modal-backdrop nested-modal-backdrop" aria-hidden="true"></div>
+  <section id="realityEditorModal" class="settings-modal reality-editor-modal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="realityEditorTitle">
+    <div class="settings-modal-head"><div><small>DOMAIN-REALITY</small><h2 id="realityEditorTitle">Edit Reality</h2></div><button id="closeRealityEditor" class="modal-close" type="button" aria-label="Close reality editor">×</button></div>
+    <div class="settings-modal-body reality-editor-body">
+      <div id="realityEditorContent"></div>
+    </div>
+    <div class="nested-modal-actions"><span id="realityEditorStatus" aria-live="polite"></span><button id="deleteRealityProfile" class="danger-button" type="button">Delete Configuration</button><button id="cancelRealityEditor" type="button">Cancel</button><button id="saveRealityEditor" class="primary-button" type="button">Save</button></div>
+  </section>
+
+  <div id="realityAddBackdrop" class="modal-backdrop nested-modal-backdrop" aria-hidden="true"></div>
+  <section id="realityAddModal" class="settings-modal reality-add-modal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="realityAddTitle">
+    <div class="settings-modal-head"><div><small>DOMAIN-REALITY</small><h2 id="realityAddTitle">Add Subdomain</h2></div><button id="closeRealityAdd" class="modal-close" type="button" aria-label="Close subdomain dialog">×</button></div>
+    <div class="settings-modal-body">
+      <div class="reality-add-grid">
+        <div><label for="realitySubdomainPrefix">Subdomain / Wildcard</label><input id="realitySubdomainPrefix" type="text" autocomplete="off" spellcheck="false" placeholder="dev or *.dev"></div>
+        <div><label for="realityParentTarget">Trusted Domain</label><div class="zent-select"><select id="realityParentTarget"></select></div></div>
+      </div>
+      <div class="reality-target-preview"><small>Target</small><b id="realityTargetPreview">—</b></div>
+      <small class="settings-hint">Only trusted domains can be used as a parent. Direct IP addresses are intentionally not offered here.</small>
+    </div>
+    <div class="nested-modal-actions"><span id="realityAddStatus" aria-live="polite"></span><button id="cancelRealityAdd" type="button">Cancel</button><button id="createRealityTarget" class="primary-button" type="button">Create &amp; Configure</button></div>
   </section>
 
   <div id="helpBackdrop" class="modal-backdrop help-backdrop" aria-hidden="true"></div>

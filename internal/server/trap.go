@@ -48,7 +48,7 @@ func NewTrap(cfg config.Config, st *store.Store) *TrapServer {
 	}
 	bots := botverify.New(cfg.OfficialBotsCache)
 	bots.Start(context.Background(), cfg.OfficialBotsEnabled, time.Duration(cfg.OfficialBotsRefreshH)*time.Hour)
-	return &TrapServer{cfg: cfg, store: st, scorer: engine.NewScorer(cfg), deception: engine.NewDeception(cfg), geo: newGeoResolver(cfg.GeoIPDB), benign: benign, bots: bots, sem: make(chan struct{}, cfg.MaxConcurrent)}
+	return &TrapServer{cfg: cfg, store: st, scorer: engine.NewScorer(cfg), deception: engine.NewDeception(cfg, st), geo: newGeoResolver(cfg.GeoIPDB), benign: benign, bots: bots, sem: make(chan struct{}, cfg.MaxConcurrent)}
 }
 
 func (s *TrapServer) Handler() http.Handler { return http.HandlerFunc(s.handle) }

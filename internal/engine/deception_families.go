@@ -1,7 +1,9 @@
 package engine
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"html"
@@ -9,13 +11,17 @@ import (
 	"net/url"
 	"path"
 	"strings"
+	"time"
 
 	"zentloop/internal/lures"
 	"zentloop/internal/model"
 )
 
-func buildFamilyDeception(r *http.Request, ss *model.Session, a, b string) (Response, bool) {
+func buildFamilyDeception(r *http.Request, ss *model.Session, a, b, bodySample string, docker *dockerExecState) (Response, bool) {
 	p := normalizeFamilyPath(r.URL.Path)
+	if semantic := semanticArtifactPath(p); semantic != p && isEnvFamily(semantic) {
+		p = semantic
+	}
 	base := path.Base(p)
 	canaries := lures.CanaryLabels(ss.IP)
 	depth := max(ss.Depth, 1)
@@ -34,7 +40,7 @@ func buildFamilyDeception(r *http.Request, ss *model.Session, a, b string) (Resp
 	}
 
 	if isDockerAPIFamily(p) {
-		return buildDockerAPIFamily(p, ss, a), true
+		return buildDockerAPIFamily(r, p, ss, a, bodySample, docker), true
 	}
 
 	if isPHPUnitEvalFamily(p) {
@@ -187,42 +193,98 @@ func isDockerAPIFamily(p string) bool {
 	case "/containers/json", "/images/json", "/version", "/info":
 		return true
 	}
-	if strings.HasPrefix(p, "/containers/") && (strings.HasSuffix(p, "/json") || strings.HasSuffix(p, "/logs") || strings.HasSuffix(p, "/exec")) {
-		return true
-	}
-	// Docker's two-step exec flow is a high-value follow-up after POST
-	// /containers/<id>/exec. Keep it bounded to synthetic exec ids instead of
-	// turning arbitrary /exec paths into a jackpot.
-	if strings.HasPrefix(p, "/exec/exec-") {
-		return strings.HasSuffix(p, "/start") || strings.HasSuffix(p, "/json") || strings.HasSuffix(p, "/resize")
-	}
-	return false
+	return (strings.HasPrefix(p, "/containers/") && (strings.HasSuffix(p, "/json") || strings.HasSuffix(p, "/logs") || strings.HasSuffix(p, "/exec"))) || strings.HasPrefix(p, "/exec/")
 }
 
-func buildDockerAPIFamily(p string, ss *model.Session, a string) Response {
+func parseDockerExecBody(body string) (cmd []string, envKeys []string, tty bool) {
+	if len(body) > 16384 {
+		body = body[:16384]
+	}
+	var v struct {
+		Cmd []string `json:"Cmd"`
+		Env []string `json:"Env"`
+		Tty bool     `json:"Tty"`
+	}
+	if json.Unmarshal([]byte(body), &v) != nil {
+		return nil, nil, false
+	}
+	if len(v.Cmd) > 16 {
+		v.Cmd = v.Cmd[:16]
+	}
+	for _, e := range v.Env {
+		if len(envKeys) >= 16 {
+			break
+		}
+		if i := strings.IndexByte(e, '='); i > 0 {
+			envKeys = append(envKeys, e[:i])
+		}
+	}
+	return v.Cmd, envKeys, v.Tty
+}
+
+func buildDockerAPIFamily(r *http.Request, p string, ss *model.Session, a, bodySample string, state *dockerExecState) Response {
 	depth := max(ss.Depth, 3)
 	containerID := "8d4b0c7e1a2f" + a[:4]
 	switch {
 	case p == "/containers/json":
-		return Response{Status: 200, ContentType: "application/json", Label: "fake-docker-api-containers", Depth: depth, Body: mustJSON([]map[string]any{{"Id": containerID, "Names": []string{"/platform-web"}, "Image": "registry.internal/platform/web:2026.08", "State": "running", "Status": "Up 18 days", "Ports": []map[string]any{{"PrivatePort": 8081, "Type": "tcp"}}}, {"Id": "4aa2319c62b1" + a[:4], "Names": []string{"/backup-agent"}, "Image": "registry.internal/ops/backup-agent:2.4.1", "State": "running", "Status": "Up 18 days"}})}
+		return Response{Status: 200, ContentType: "application/json", Label: "fake-docker-api-containers", Depth: depth, Body: mustJSON([]map[string]any{{"Id": containerID, "Names": []string{"/platform-web"}, "Image": "registry.internal/platform/wordpress:2026.08", "State": "running", "Status": "Up 18 days", "Ports": []map[string]any{{"PrivatePort": 8081, "Type": "tcp"}}}, {"Id": "4aa2319c62b1" + a[:4], "Names": []string{"/mysql-db"}, "Image": "mysql:8.4", "State": "running", "Status": "Up 18 days"}})}
 	case p == "/images/json":
-		return Response{Status: 200, ContentType: "application/json", Label: "fake-docker-api-images", Depth: max(depth, 4), Body: mustJSON([]map[string]any{{"RepoTags": []string{"registry.internal/platform/web:2026.08"}, "Size": 318767104}, {"RepoTags": []string{"registry.internal/ops/backup-agent:2.4.1"}, "Size": 73400320}})}
+		return Response{Status: 200, ContentType: "application/json", Label: "fake-docker-api-images", Depth: max(depth, 4), Body: mustJSON([]map[string]any{{"RepoTags": []string{"registry.internal/platform/wordpress:2026.08"}, "Size": 318767104}, {"RepoTags": []string{"mysql:8.4"}, "Size": 73400320}})}
 	case p == "/version":
 		return Response{Status: 200, ContentType: "application/json", Label: "fake-docker-api-version", Depth: depth, Body: mustJSON(map[string]any{"Version": "27.1.1", "ApiVersion": "1.46", "MinAPIVersion": "1.24", "GitCommit": "6312585", "GoVersion": "go1.22.5", "Os": "linux", "Arch": "amd64"})}
 	case p == "/info":
 		return Response{Status: 200, ContentType: "application/json", Label: "fake-docker-api-info", Depth: max(depth, 4), Body: mustJSON(map[string]any{"Containers": 2, "ContainersRunning": 2, "Images": 7, "Driver": "overlay2", "Name": "prod-app-02", "ServerVersion": "27.1.1", "OperatingSystem": "Ubuntu 24.04.3 LTS", "Architecture": "x86_64", "NCPU": 4})}
 	case strings.HasSuffix(p, "/exec"):
-		return Response{Status: http.StatusCreated, ContentType: "application/json", Label: "fake-docker-api-exec-create", Depth: max(depth, 6), Body: mustJSON(map[string]any{"Id": "exec-" + a[:12]})}
-	case strings.HasPrefix(p, "/exec/exec-") && strings.HasSuffix(p, "/start"):
-		return Response{Status: http.StatusOK, ContentType: "application/octet-stream", Label: "fake-docker-api-exec-start", Depth: max(depth, 7), Body: []byte("uid=0(root) gid=0(root) groups=0(root)\n")}
-	case strings.HasPrefix(p, "/exec/exec-") && strings.HasSuffix(p, "/json"):
-		return Response{Status: http.StatusOK, ContentType: "application/json", Label: "fake-docker-api-exec-inspect", Depth: max(depth, 7), Body: mustJSON(map[string]any{"ID": path.Base(path.Dir(p)), "Running": false, "ExitCode": 0, "OpenStdin": false, "OpenStdout": true, "OpenStderr": true})}
-	case strings.HasPrefix(p, "/exec/exec-") && strings.HasSuffix(p, "/resize"):
-		return Response{Status: http.StatusCreated, ContentType: "text/plain; charset=utf-8", Label: "fake-docker-api-exec-resize", Depth: max(depth, 6), Body: nil}
+		cmd, env, tty := parseDockerExecBody(bodySample)
+		h := sha256.Sum256([]byte(ss.ID + "|" + p + "|" + bodySample))
+		id := "exec-" + hex.EncodeToString(h[:6])
+		if state != nil {
+			state.mu.Lock()
+			m := state.bySession[ss.ID]
+			if m == nil {
+				m = map[string]dockerExecObservation{}
+				state.bySession[ss.ID] = m
+			}
+			m[id] = dockerExecObservation{ID: id, Container: path.Base(path.Dir(p)), Cmd: cmd, EnvKeys: env, TTY: tty, Created: time.Now()}
+			state.mu.Unlock()
+		}
+		return Response{Status: http.StatusCreated, ContentType: "application/json", Label: "fake-docker-api-exec-create", Depth: max(depth, 6), Body: mustJSON(map[string]any{"Id": id})}
+	case strings.HasPrefix(p, "/exec/"):
+		parts := strings.Split(strings.Trim(p, "/"), "/")
+		if len(parts) < 2 {
+			return Response{Status: 404, ContentType: "application/json", Label: "fake-docker-api-exec-miss", Depth: depth, Body: []byte(`{"message":"No such exec instance"}`)}
+		}
+		id := parts[1]
+		var obs dockerExecObservation
+		ok := false
+		if state != nil {
+			state.mu.Lock()
+			if m := state.bySession[ss.ID]; m != nil {
+				obs, ok = m[id]
+			}
+			state.mu.Unlock()
+		}
+		if !ok {
+			return Response{Status: 404, ContentType: "application/json", Label: "fake-docker-api-exec-miss", Depth: depth, Body: []byte(`{"message":"No such exec instance"}`)}
+		}
+		if len(parts) >= 3 && parts[2] == "start" {
+			out := ""
+			if len(obs.Cmd) > 0 {
+				out = "uid=33(www-data) gid=33(www-data) groups=33(www-data)\n"
+			}
+			return Response{Status: 200, ContentType: "application/octet-stream", Label: "fake-docker-api-exec-start", Depth: max(depth, 7), Body: []byte(out)}
+		}
+		if len(parts) >= 3 && parts[2] == "json" {
+			return Response{Status: 200, ContentType: "application/json", Label: "fake-docker-api-exec-json", Depth: max(depth, 6), Body: mustJSON(map[string]any{"ID": id, "Running": false, "ExitCode": 0, "ProcessConfig": map[string]any{"entrypoint": strings.Join(obs.Cmd, " "), "tty": obs.TTY}, "ContainerID": obs.Container})}
+		}
+		if len(parts) >= 3 && parts[2] == "resize" {
+			return Response{Status: 200, ContentType: "application/json", Label: "fake-docker-api-exec-resize", Depth: max(depth, 6), Body: []byte(`{}`)}
+		}
+		return Response{Status: 404, ContentType: "application/json", Label: "fake-docker-api-exec-miss", Depth: depth, Body: []byte(`{"message":"No such exec endpoint"}`)}
 	case strings.HasSuffix(p, "/logs"):
-		return Response{Status: 200, ContentType: "text/plain; charset=utf-8", Label: "fake-docker-api-logs", Depth: max(depth, 5), Body: []byte("2026-08-16T02:00:01Z backup sync started profile=legacy\n2026-08-16T02:00:04Z archive target=backup-01 status=ok\n")}
+		return Response{Status: 200, ContentType: "text/plain; charset=utf-8", Label: "fake-docker-api-logs", Depth: max(depth, 5), Body: []byte("2026-08-16T02:00:01Z wordpress cron started\n2026-08-16T02:00:04Z mysql backup status=ok\n")}
 	default:
-		return Response{Status: 200, ContentType: "application/json", Label: "fake-docker-api-inspect", Depth: max(depth, 5), Body: mustJSON(map[string]any{"Id": containerID, "Name": "/platform-web", "State": map[string]any{"Status": "running", "Running": true, "Pid": 844}, "Config": map[string]any{"Image": "registry.internal/platform/web:2026.08", "Env": []string{"APP_ENV=production", "BACKUP_HOST=backup-01"}}, "NetworkSettings": map[string]any{"IPAddress": "10.10.30.21"}})}
+		return Response{Status: 200, ContentType: "application/json", Label: "fake-docker-api-inspect", Depth: max(depth, 5), Body: mustJSON(map[string]any{"Id": containerID, "Name": "/platform-web", "State": map[string]any{"Status": "running", "Running": true, "Pid": 844}, "Config": map[string]any{"Image": "registry.internal/platform/wordpress:2026.08", "Env": []string{"WORDPRESS_ENV=production", "DB_HOST=mysql-db"}}, "NetworkSettings": map[string]any{"IPAddress": "10.10.30.21"}})}
 	}
 }
 
@@ -265,13 +327,28 @@ func buildJoomlaFingerprintFamily(p string, ss *model.Session, a string) Respons
 }
 
 func isNextFingerprintFamily(p string) bool {
-	return p == "/_next/webpack-hmr" || p == "/_next/static/"
+	return strings.HasPrefix(p, "/_next/") || p == "/_next" || p == "/_rsc" || p == "/__rsc" || strings.HasPrefix(p, "/rsc/") || strings.HasPrefix(p, "/api/auth/")
 }
 
 func buildNextFingerprintFamily(p string, ss *model.Session) Response {
-	// These are commonly used existence checks. Classify them, but keep production-like
-	// behavior instead of turning the check itself into an obvious jackpot.
-	return Response{Status: http.StatusNotFound, ContentType: "text/plain; charset=utf-8", Label: "nextjs-fingerprint-miss", Depth: max(ss.Depth, 1), Headers: map[string]string{"X-Powered-By": "Next.js"}, Body: []byte("Not Found\n")}
+	depth := max(ss.Depth, 2)
+	headers := map[string]string{"X-Powered-By": "Next.js", "Cache-Control": "private, no-cache, no-store, max-age=0, must-revalidate"}
+	switch {
+	case p == "/_next/webpack-hmr" || p == "/_next/static/":
+		return Response{Status: http.StatusNotFound, ContentType: "text/plain; charset=utf-8", Label: "nextjs-fingerprint-miss", Depth: max(ss.Depth, 1), Headers: headers, Body: []byte("Not Found\n")}
+	case p == "/api/auth/session":
+		return Response{Status: 200, ContentType: "application/json", Label: "fake-nextjs-auth-session", Depth: depth, Headers: headers, Body: []byte(`{"user":null,"expires":null}`)}
+	case strings.HasPrefix(p, "/api/auth/"):
+		return Response{Status: 200, ContentType: "application/json", Label: "fake-nextjs-auth", Depth: depth, Headers: headers, Body: []byte(`{"csrfToken":"4d91c7b0f3a8","provider":"credentials"}`)}
+	case p == "/_rsc" || p == "/__rsc" || strings.HasPrefix(p, "/rsc/"):
+		return Response{Status: 200, ContentType: "text/x-component", Label: "fake-nextjs-rsc", Depth: depth, Headers: headers, Body: []byte("1:I[4786,[],\"default\"]\n0:{\"buildId\":\"p7m3d2\",\"route\":\"/\"}\n")}
+	case strings.HasPrefix(p, "/_next/image"):
+		return Response{Status: http.StatusBadRequest, ContentType: "text/plain; charset=utf-8", Label: "fake-nextjs-image", Depth: depth, Headers: headers, Body: []byte("url parameter is required\n")}
+	case strings.HasPrefix(p, "/_next/static/"):
+		return Response{Status: 200, ContentType: "application/javascript; charset=utf-8", Label: "fake-nextjs-static", Depth: depth, Headers: headers, Body: []byte("self.__next_f=self.__next_f||[];self.__next_f.push([0,{buildId:'p7m3d2'}]);\n")}
+	default:
+		return Response{Status: 200, ContentType: "text/plain; charset=utf-8", Label: "fake-nextjs-rsc-discovery", Depth: depth, Headers: headers, Body: []byte("next-router-state-tree\n")}
+	}
 }
 
 func isEnvFamily(p string) bool {

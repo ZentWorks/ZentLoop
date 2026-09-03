@@ -14,6 +14,32 @@ import (
 
 const maxWebStoryProfiles = 2048
 
+type TargetRealityProvider interface {
+	ResolveTargetReality(target string) model.TargetRealityResolved
+	ObserveTargetReality(target, candidate, cloud string, weight int, success bool) model.TargetRealityResolved
+}
+
+func normalizedRealityApp(v string) string {
+	switch v {
+	case "php":
+		return "generic-php"
+	case "asp":
+		return "aspnet"
+	default:
+		return v
+	}
+}
+
+func realityHas(values []string, want string) bool {
+	want = normalizedRealityApp(want)
+	for _, v := range values {
+		if normalizedRealityApp(v) == want {
+			return true
+		}
+	}
+	return false
+}
+
 type webStoryProfile struct {
 	Technology string
 	Locked     bool
@@ -105,6 +131,8 @@ func storyCandidate(p, label string) (string, int) {
 		return "embedded-appliance", 2
 	case isWordPressStoryPath(p) || strings.Contains(label, "wordpress"):
 		return "wordpress", 3
+	case strings.HasPrefix(p, "/_next") || p == "/_rsc" || p == "/__rsc" || strings.HasPrefix(p, "/rsc/") || strings.HasPrefix(p, "/api/auth/") || strings.Contains(label, "nextjs"):
+		return "nextjs", 3
 	case isRailsStoryPath(p) || strings.Contains(label, "rails"):
 		return "rails", 3
 	case strings.Contains(p, "/app_dev.php/_profiler") || strings.HasPrefix(p, "/_profiler") || strings.Contains(label, "phpinfo") || strings.Contains(label, "php-backdoor"):
@@ -123,7 +151,7 @@ func storyCompatible(locked, requested string) bool {
 	}
 	// WordPress commonly exposes ordinary PHP runtime surfaces. Do not let that
 	// compatibility turn into a second framework story, though.
-	if locked == "wordpress" && requested == "php" {
+	if locked == "wordpress" && normalizedRealityApp(requested) == "generic-php" {
 		return true
 	}
 	return false
@@ -156,6 +184,34 @@ func storyMiss(ss *model.Session, what string) Response {
 		Depth:       ss.Depth,
 		Body:        []byte("<!doctype html><title>404 Not Found</title><h1>Not Found</h1>"),
 	}
+}
+
+func storyArtifactFamily(p, label string) string {
+	p = canonicalObservedWebPath(p)
+	label = strings.ToLower(label)
+	switch {
+	case strings.Contains(label, "ssh-private-key") || strings.Contains(p, "/.ssh/") || strings.Contains(p, "id_rsa") || strings.Contains(p, "id_dsa") || strings.Contains(p, "id_ecdsa"):
+		return "ssh-keys"
+	case strings.Contains(label, "git") || strings.Contains(p, "/.git"):
+		return "git"
+	case strings.Contains(label, "database-dump") || strings.Contains(label, "sql-export") || strings.HasSuffix(p, ".sql"):
+		return "database-dumps"
+	case strings.Contains(label, "backup") || strings.HasSuffix(p, ".bak") || strings.HasSuffix(p, ".old"):
+		return "backups"
+	case strings.Contains(label, "debug") || strings.Contains(p, "/debug") || strings.Contains(p, "trace.axd"):
+		return "debug"
+	case strings.Contains(label, "docker-api") || strings.HasPrefix(p, "/containers/") || strings.HasPrefix(p, "/exec/"):
+		return "docker-api"
+	case strings.Contains(label, "metadata") || strings.Contains(label, "cloud-"):
+		return "cloud-metadata"
+	case strings.Contains(label, "ci-") || strings.Contains(p, "jenkins"):
+		return "cicd"
+	case strings.Contains(label, "app-config") || strings.Contains(p, "compose") || strings.Contains(p, "appsettings") || strings.Contains(p, "serverless") || strings.Contains(p, "kubernetes"):
+		return "app-config"
+	case strings.Contains(label, "env") || strings.Contains(p, ".env"):
+		return "env"
+	}
+	return ""
 }
 
 func storyArtifactAllowed(profile *webStoryProfile, p, label string) bool {
@@ -192,29 +248,25 @@ func storyArtifactAllowed(profile *webStoryProfile, p, label string) bool {
 	return true
 }
 
-func engagedDevOpsArtifactFamily(ss *model.Session, p, label string) bool {
-	if ss == nil {
-		return false
-	}
+func semanticArtifactPath(p string) string {
 	p = canonicalObservedWebPath(p)
-	base := path.Base(p)
-	label = strings.ToLower(label)
-	isEnv := strings.HasPrefix(label, "fake-env") || strings.HasPrefix(base, ".env") || strings.HasSuffix(base, ".env")
-	if !isEnv {
-		return false
+	switch p {
+	case "/@fs/proc/self/cwd/.env", "/$(pwd)/.env", "/var/www/html/.env", "/srv/app/.env":
+		return "/.env"
+	case "/@fs/root/.aws/credentials":
+		return "/.aws/credentials"
+	case "/@fs/root/.aws/config":
+		return "/.aws/config"
 	}
-	// Keep the existing sparse dictionary behavior for shallow scanners. Once a
-	// source has clearly committed to the DevOps/secret-discovery story, nearby
-	// environment aliases should behave like one configuration family instead of
-	// randomly oscillating between 200 and 404.
-	return ss.Persona == "devops" && (ss.Depth >= 4 || ss.RequestCount >= 80)
+	return p
 }
 
 func storyEnvBody(resp Response, p string, profile *webStoryProfile) Response {
 	if resp.Status != http.StatusOK || !strings.HasPrefix(strings.ToLower(resp.Label), "fake-env") || !strings.HasPrefix(resp.ContentType, "text/plain") {
 		return resp
 	}
-	name := path.Base(canonicalObservedWebPath(p))
+	p = semanticArtifactPath(p)
+	name := path.Base(p)
 	if name == "." || name == "/" || name == "" {
 		name = ".env"
 	}
@@ -297,23 +349,51 @@ func (d *Deception) finalizeWebStoryResponse(r *http.Request, ss *model.Session,
 	}
 	d.story.mu.Lock()
 	defer d.story.mu.Unlock()
-	profile := d.story.profile(storyTarget(ss), ss)
-	p := canonicalObservedWebPath(r.URL.Path)
+	target := storyTarget(ss)
+	profile := d.story.profile(target, ss)
+	p := semanticArtifactPath(canonicalObservedWebPath(r.URL.Path))
 	candidate, weight := storyCandidate(p, resp.Label)
 	follow := explicitStoryFollow(r, ss)
-
-	// A locked target identity wins over scanner dictionary guesses. Generic
-	// surfaces remain available, but contradictory product/framework jackpots do not.
-	if profile.Locked && candidate != "" && !storyCompatible(profile.Technology, candidate) {
-		miss := storyMiss(ss, candidate)
-		miss.Delay = delay
-		ss.WebStory = profile.Technology
-		ss.WebStoryLocked = true
-		ss.WebStoryConfidence = profile.Confidence
-		return miss
+	provider := d.reality
+	resolved := model.TargetRealityResolved{Target: target, Mode: "automatic", Source: "memory", Coherent: true}
+	if provider != nil {
+		resolved = provider.ResolveTargetReality(target)
+		profile.Technology, profile.Locked, profile.Confidence, profile.Cloud = resolved.State.Technology, resolved.State.Locked, resolved.State.Confidence, resolved.State.Cloud
 	}
 
-	if candidate != "" && weight > 0 {
+	configuredApps := (resolved.Mode == "guided" || resolved.Mode == "fixed") && len(resolved.Applications) > 0
+	if candidate != "" && resolved.State.Locked && resolved.State.Technology != "" && !storyCompatible(resolved.State.Technology, candidate) {
+		miss := storyMiss(ss, candidate)
+		miss.Delay = delay
+		ss.WebStory = resolved.State.Technology
+		ss.WebStoryLocked = true
+		ss.WebStoryConfidence = resolved.State.Confidence
+		return miss
+	}
+	if candidate != "" {
+		if configuredApps && !realityHas(resolved.Applications, candidate) {
+			miss := storyMiss(ss, candidate)
+			miss.Delay = delay
+			return miss
+		}
+		if !configuredApps && profile.Locked && !storyCompatible(profile.Technology, candidate) {
+			miss := storyMiss(ss, candidate)
+			miss.Delay = delay
+			ss.WebStory = profile.Technology
+			ss.WebStoryLocked = true
+			ss.WebStoryConfidence = profile.Confidence
+			return miss
+		}
+	}
+
+	providerCloud := storyCloudProvider(p, resp.Label)
+	if provider != nil {
+		if follow {
+			weight += 3
+		}
+		resolved = provider.ObserveTargetReality(target, candidate, providerCloud, weight, resp.Status >= 200 && resp.Status < 300)
+		profile.Technology, profile.Locked, profile.Confidence, profile.Cloud = resolved.State.Technology, resolved.State.Locked, resolved.State.Confidence, resolved.State.Cloud
+	} else if candidate != "" && weight > 0 {
 		if follow {
 			weight += 3
 		}
@@ -336,41 +416,45 @@ func (d *Deception) finalizeWebStoryResponse(r *http.Request, ss *model.Session,
 		}
 	}
 
-	provider := storyCloudProvider(p, resp.Label)
-	if provider != "" {
-		if profile.Cloud == "" && resp.Status >= 200 && resp.Status < 300 {
-			profile.Cloud = provider
-		} else if profile.Cloud != "" && provider != profile.Cloud {
-			miss := storyMiss(ss, "cloud-"+provider)
+	if provider == nil && providerCloud != "" && profile.Cloud == "" && resp.Status >= 200 && resp.Status < 300 {
+		profile.Cloud = providerCloud
+	}
+	if providerCloud != "" {
+		configuredClouds := []string{}
+		for _, v := range resolved.Infrastructure {
+			if v == "aws" || v == "azure" || v == "gcp" {
+				configuredClouds = append(configuredClouds, v)
+			}
+		}
+		if len(configuredClouds) > 0 && !realityHas(configuredClouds, providerCloud) {
+			miss := storyMiss(ss, "cloud-"+providerCloud)
 			miss.Delay = delay
-			ss.WebStory = profile.Technology
-			ss.WebStoryLocked = profile.Locked
-			ss.WebStoryConfidence = profile.Confidence
 			return miss
 		}
-	} else if isGenericCloudCredential(resp.Label) && profile.Cloud != "" {
-		// Generic cloud files are allowed to exist without creating a second
-		// provider identity; their content is still synthetic and inert.
+		if len(configuredClouds) == 0 && profile.Cloud != "" && providerCloud != profile.Cloud {
+			miss := storyMiss(ss, "cloud-"+providerCloud)
+			miss.Delay = delay
+			return miss
+		}
 	}
 
-	artifactAllowed := storyArtifactAllowed(profile, p, resp.Label)
-	if !artifactAllowed && engagedDevOpsArtifactFamily(ss, p, resp.Label) {
-		artifactAllowed = true
-	}
-	if resp.Status >= 200 && resp.Status < 300 && !artifactAllowed {
+	artifactFamily := storyArtifactFamily(p, resp.Label)
+	configuredArtifacts := (resolved.Mode == "guided" || resolved.Mode == "fixed") && len(resolved.Artifacts) > 0
+	if resp.Status >= 200 && resp.Status < 300 && artifactFamily != "" && configuredArtifacts && !realityHas(resolved.Artifacts, artifactFamily) {
 		miss := storyMiss(ss, "artifact")
 		miss.Label = "story-artifact-miss"
 		miss.Delay = delay
-		ss.WebStory = profile.Technology
-		ss.WebStoryLocked = profile.Locked
-		ss.WebStoryConfidence = profile.Confidence
+		return miss
+	}
+	if resp.Status >= 200 && resp.Status < 300 && !configuredArtifacts && !storyArtifactAllowed(profile, p, resp.Label) {
+		miss := storyMiss(ss, "artifact")
+		miss.Label = "story-artifact-miss"
+		miss.Delay = delay
 		return miss
 	}
 
 	resp = storyEnvBody(resp, p, profile)
 	resp.Depth = realisticWebDepth(ss, resp, p, follow)
-	// Dictionary hits are not deception loops. Only explicit followed chains and
-	// the dedicated deep loop bait may increase frustration/loop state.
 	if resp.LoopInc > 0 && !follow && !strings.Contains(strings.ToLower(resp.Label), "loop-bait") {
 		resp.LoopInc = 0
 	}

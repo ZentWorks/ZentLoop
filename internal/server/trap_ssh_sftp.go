@@ -33,6 +33,7 @@ const (
 	sftpRmdir    = 15
 	sftpRealpath = 16
 	sftpStat     = 17
+	sftpRename   = 18
 	sftpStatus   = 101
 	sftpHandle   = 102
 	sftpData     = 103
@@ -415,6 +416,34 @@ func (s *TrapSSH) runVirtualSFTP(ch ssh.Channel, base model.SSHEvent, world *vir
 				s.recordSSHCommand(base, "request", `sftp put "`+h.path+`"`, world, result, classifySSHActor(base.ClientVersion, false))
 			}
 			delete(handles, hs)
+			_ = sftpReplyStatus(ch, id, sftpFXOK, "OK")
+		case sftpRename:
+			oldp, ok1 := sftpGetString(pkt, &off)
+			newp, ok2 := sftpGetString(pkt, &off)
+			if !ok1 || !ok2 {
+				_ = sftpReplyStatus(ch, id, sftpFXFailure, "Failure")
+				continue
+			}
+			lock()
+			oldTarget, newTarget := world.resolve(oldp), world.resolve(newp)
+			content, exists := world.virtualReadFile(oldTarget)
+			if exists {
+				meta := world.fileMeta[oldTarget]
+				mode := world.fileModes[oldTarget]
+				attrs := world.fileAttrs[oldTarget]
+				exists = world.setVirtualFile(newTarget, content)
+				if exists {
+					world.fileMeta[newTarget] = meta
+					world.fileModes[newTarget] = mode
+					world.fileAttrs[newTarget] = attrs
+					world.deleteVirtualFile(oldTarget)
+				}
+			}
+			unlock()
+			if !exists {
+				_ = sftpReplyStatus(ch, id, sftpFXNoSuchFile, "No such file")
+				continue
+			}
 			_ = sftpReplyStatus(ch, id, sftpFXOK, "OK")
 		case sftpRemove:
 			p, ok := sftpGetString(pkt, &off)

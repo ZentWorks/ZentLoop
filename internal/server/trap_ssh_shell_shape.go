@@ -2,42 +2,28 @@ package server
 
 import "strings"
 
-// sshShellShape is a bounded, quote-aware structural summary of a shell line.
-// It is intentionally not a Bash parser and never executes attacker input. The
-// goal is to preserve top-level intent when useful discovery commands are nested
-// inside fallback/download/control-flow chains.
+// sshShellShape is deliberately a bounded structural summary, not a Bash parser.
+// It recognizes top-level control operators while respecting basic quotes and escapes.
 type sshShellShape struct {
-	AndCount        int
-	OrCount         int
-	SequenceCount   int
-	PipeCount       int
-	Substitutions   int
-	Groups          int
-	HasSudo         bool
-	HasShell        bool
-	HasCurl         bool
-	HasWget         bool
-	HasChmod        bool
-	HasCleanup      bool
-	HasLocalExec    bool
-	HasAntiForensic bool
-	HasReconBundle  bool
-	HasShellProbe   bool
+	AndCount, OrCount, SequenceCount, PipelineCount int
+	SubstitutionCount, GroupCount                   int
 }
 
-func inspectSSHShellShape(line string) sshShellShape {
+func inspectSSHShellShape(command string) sshShellShape {
 	var s sshShellShape
+	if len(command) > 32768 {
+		command = command[:32768]
+	}
 	var quote byte
 	escaped := false
-	parenDepth := 0
-	low := strings.ToLower(line)
-	for i := 0; i < len(line); i++ {
-		c := line[i]
+	depth := 0
+	for i := 0; i < len(command); i++ {
+		c := command[i]
 		if escaped {
 			escaped = false
 			continue
 		}
-		if c == '\\' {
+		if c == '\\' && quote != '\'' {
 			escaped = true
 			continue
 		}
@@ -47,100 +33,71 @@ func inspectSSHShellShape(line string) sshShellShape {
 			}
 			continue
 		}
-		if c == '\'' || c == '"' {
+		if c == '\'' || c == '"' || c == '`' {
 			quote = c
+			if c == '`' {
+				s.SubstitutionCount++
+			}
 			continue
 		}
-		if c == '$' && i+1 < len(line) && line[i+1] == '(' {
-			s.Substitutions++
+		if c == '$' && i+1 < len(command) && command[i+1] == '(' {
+			s.SubstitutionCount++
+			depth++
+			i++
+			continue
+		}
+		if c == '(' || c == '{' {
+			depth++
+			s.GroupCount++
+			continue
+		}
+		if c == ')' || c == '}' {
+			if depth > 0 {
+				depth--
+			}
+			continue
+		}
+		if depth != 0 {
 			continue
 		}
 		switch c {
-		case '(':
-			parenDepth++
-			s.Groups++
-		case ')':
-			if parenDepth > 0 {
-				parenDepth--
-			}
-		case ';':
-			if parenDepth == 0 {
-				s.SequenceCount++
-			}
 		case '&':
-			if i+1 < len(line) && line[i+1] == '&' {
-				if parenDepth == 0 {
-					s.AndCount++
-				}
+			if i+1 < len(command) && command[i+1] == '&' {
+				s.AndCount++
 				i++
 			}
 		case '|':
-			if i+1 < len(line) && line[i+1] == '|' {
-				if parenDepth == 0 {
-					s.OrCount++
-				}
+			if i+1 < len(command) && command[i+1] == '|' {
+				s.OrCount++
 				i++
 			} else {
-				s.PipeCount++
+				s.PipelineCount++
 			}
+		case ';':
+			s.SequenceCount++
 		}
 	}
-
-	s.HasSudo = shellWordPresent(low, "sudo")
-	s.HasShell = shellWordPresent(low, "sh") || shellWordPresent(low, "bash") || shellWordPresent(low, "dash") || strings.Contains(low, "busybox sh")
-	s.HasCurl = shellWordPresent(low, "curl")
-	s.HasWget = shellWordPresent(low, "wget")
-	s.HasChmod = shellWordPresent(low, "chmod")
-	s.HasCleanup = strings.Contains(low, "rm -f") || strings.Contains(low, "rm -rf") || strings.Contains(low, "unlink ")
-	s.HasLocalExec = hasSSHLocalPayloadExecution(low) || strings.Contains(low, "sh ") && (s.HasCurl || s.HasWget)
-	s.HasAntiForensic = strings.Contains(low, "history -c") || strings.Contains(low, ".bash_history") || strings.Contains(low, "unset histfile")
-	reconSignals := 0
-	for _, needle := range []string{"uname", "nproc", "lscpu", "lspci", "nvidia-smi", "/proc/cpuinfo", "/proc/uptime", "last ", "ipinfo.io/org"} {
-		if strings.Contains(low, needle) {
-			reconSignals++
-		}
-	}
-	s.HasReconBundle = reconSignals >= 4
-	s.HasShellProbe = strings.Contains(low, "shell_behavior") || (strings.Contains(low, "command not found") && strings.Contains(low, "no such file")) || (strings.Contains(low, "./xxxxxx") && strings.Contains(low, "xxxxxx"))
 	return s
 }
 
-func shellWordPresent(low, word string) bool {
-	for _, stage := range collectSSHCommandStages(low) {
-		if stage == word {
-			return true
-		}
-	}
-	return false
-}
-
 func looksLikeArchitectureAwareDownloadExecute(low string, shape sshShellShape) bool {
-	if !(shape.HasCurl || shape.HasWget) || !shape.HasChmod || !shape.HasCleanup {
-		return false
-	}
-	if !shape.HasLocalExec && !strings.Contains(low, "| sh") && !strings.Contains(low, "| bash") {
-		return false
-	}
-	return strings.Contains(low, "uname -m") || strings.Contains(low, "arch") || shape.Substitutions > 0
+	download := strings.Contains(low, "curl ") || strings.Contains(low, "wget ")
+	arch := strings.Contains(low, "uname -m") || strings.Contains(low, "$(uname") || strings.Contains(low, "${arch") || strings.Contains(low, "$arch") || strings.Contains(low, " aarch64") || strings.Contains(low, "x86_64")
+	exec := strings.Contains(low, "chmod +x") && (strings.Contains(low, "./") || strings.Contains(low, "sh "))
+	cleanup := strings.Contains(low, "rm ") || strings.Contains(low, "rm -")
+	return download && arch && exec && cleanup && (shape.AndCount+shape.OrCount+shape.SequenceCount >= 2)
 }
 
 func looksLikeCompoundEnvironmentFingerprint(low string, shape sshShellShape) bool {
-	if !shape.HasReconBundle {
-		return false
-	}
-	assignments := 0
-	for _, name := range []string{"uname=", "arch=", "uptime=", "cpus=", "cpu_model=", "gpu_info=", "last_output=", "filter_output="} {
-		if strings.Contains(low, name) {
-			assignments++
+	signals := 0
+	for _, n := range []string{"uname", "/proc/uptime", "nproc", "/proc/cpuinfo", "lscpu", "lspci", "nvidia", "/etc/os-release", "last ", "shell_behavior", "xxxxxx"} {
+		if strings.Contains(low, n) {
+			signals++
 		}
 	}
-	return assignments >= 4 || shape.HasShellProbe
+	return signals >= 4 && (shape.SubstitutionCount >= 2 || shape.SequenceCount >= 2 || shape.OrCount >= 2)
 }
 
 func looksLikePrivilegeFallbackChain(low string, shape sshShellShape) bool {
-	if !shape.HasSudo || shape.OrCount < 2 {
-		return false
-	}
-	// Observed installers try sudo-shell, sudo-direct, shell and direct forms.
-	return strings.Contains(low, "sudo -s") || strings.Contains(low, "sudo -s ") || (strings.Contains(low, "sudo ") && shape.HasShell)
+	return strings.Contains(low, "sudo") && (shape.OrCount >= 2 || strings.Contains(low, "|| sh -c") || strings.Contains(low, "|| nproc") || strings.Contains(low, "|| /usr/bin/"))
 }

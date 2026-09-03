@@ -60,6 +60,7 @@ type Store struct {
 	sshDayCommands        map[string]int64
 	sshHourCounts         map[int64]int64
 	sshHighlightStates    map[string]*sshHighlightState
+	sshHighlightHistory   map[string]model.SSHHighlight
 	sshConnections        int64
 	sshAuthAttempts       int64
 	sshShells             int64
@@ -72,16 +73,18 @@ type Store struct {
 	sshActorLastCommand   map[string]string
 	sshActorLastCommandAt map[string]time.Time
 	actorSSHUsers         map[string]map[string]struct{}
+	httpActorBotClaims    map[string]map[string]struct{}
 	intelEvents           []model.IntelSignal
 	intelEventFile        *os.File
 	health                model.HealthOverview
 	integrationPeers      map[string]*model.IntegrationPeer
 	integrationPersist    map[string]time.Time
 	trustedManual         map[string]model.TrustedDomain
+	realityProfiles       map[string]model.TargetRealityProfile
+	realityStates         map[string]model.TargetRealityState
 	retentionDays         int
 	retentionStop         chan struct{}
 	retentionDone         chan struct{}
-	sshHighlightHistory   map[string]model.SSHHighlight
 }
 
 func eventStorageBytes(dataDir string) int64 {
@@ -96,11 +99,12 @@ func newStoreState(dataDir string, retentionDays int) *Store {
 	return &Store{
 		sessions: make(map[string]*model.Session), fingerprints: make(map[string]string),
 		realtimeSubs: make(map[*realtimeSubscriber]struct{}), pathCounts: make(map[string]int64), dayCounts: make(map[string]int64), httpHourCounts: make(map[int64]map[string]int64), ipDailyActivity: make(map[string]map[int64]*model.IPActivityBucket), targetCounts: make(map[string]int64), requestHostStats: make(map[string]*rawHostStat), unknownPaths: make(map[string]*model.UnknownPath), probeStats: make(map[string]*model.ProbeStat), catchAllHosts: make(map[string]*model.CatchAllHost), integrationCounts: make(map[string]int64),
-		actors: make(map[string]*model.ActorProfile), actorTimeline: make(map[string][]model.ActorActivity), actorSessionLast: make(map[string]time.Time), actorFingerprints: make(map[string]int64), sshActorLastCommand: make(map[string]string), sshActorLastCommandAt: make(map[string]time.Time), actorSSHUsers: make(map[string]map[string]struct{}),
-		sshSessions: make(map[string]*model.SSHSession), sshHighlightHistory: make(map[string]model.SSHHighlight), sshUserCounts: make(map[string]int64), sshCommandCounts: make(map[string]int64), sshFamilyCounts: make(map[string]int64), sshCountryCounts: make(map[string]int64), sshClientCounts: make(map[string]int64), sshDayConnections: make(map[string]int64), sshDayAuth: make(map[string]int64), sshDayShells: make(map[string]int64), sshDayCommands: make(map[string]int64), sshHourCounts: make(map[int64]int64), sshHighlightStates: make(map[string]*sshHighlightState),
+		actors: make(map[string]*model.ActorProfile), actorTimeline: make(map[string][]model.ActorActivity), actorSessionLast: make(map[string]time.Time), actorFingerprints: make(map[string]int64), sshActorLastCommand: make(map[string]string), sshActorLastCommandAt: make(map[string]time.Time), actorSSHUsers: make(map[string]map[string]struct{}), httpActorBotClaims: make(map[string]map[string]struct{}),
+		sshSessions: make(map[string]*model.SSHSession), sshUserCounts: make(map[string]int64), sshCommandCounts: make(map[string]int64), sshFamilyCounts: make(map[string]int64), sshCountryCounts: make(map[string]int64), sshClientCounts: make(map[string]int64), sshDayConnections: make(map[string]int64), sshDayAuth: make(map[string]int64), sshDayShells: make(map[string]int64), sshDayCommands: make(map[string]int64), sshHourCounts: make(map[int64]int64), sshHighlightStates: make(map[string]*sshHighlightState), sshHighlightHistory: make(map[string]model.SSHHighlight),
 		integrationPeers: make(map[string]*model.IntegrationPeer), integrationPersist: make(map[string]time.Time),
-		trustedManual: make(map[string]model.TrustedDomain),
-		started:       time.Now(), dataDir: dataDir, retentionDays: retentionDays,
+		trustedManual:   make(map[string]model.TrustedDomain),
+		realityProfiles: make(map[string]model.TargetRealityProfile), realityStates: make(map[string]model.TargetRealityState),
+		started: time.Now(), dataDir: dataDir, retentionDays: retentionDays,
 		retentionStop: make(chan struct{}), retentionDone: make(chan struct{}),
 	}
 }
@@ -120,6 +124,9 @@ func NewWithRetention(dataDir string, retentionDays int) (*Store, error) {
 		return nil, err
 	}
 	if err := s.loadTrustedDomains(); err != nil {
+		return nil, err
+	}
+	if err := s.loadTargetRealities(); err != nil {
 		return nil, err
 	}
 	if err := pruneJSONLPaths(dataDir, retentionDays, time.Now()); err != nil {
@@ -171,6 +178,9 @@ func LoadReadOnlySnapshot(dataDir string) (*Store, error) {
 	if err := s.loadTrustedDomains(); err != nil {
 		return nil, err
 	}
+	if err := s.loadTargetRealities(); err != nil {
+		return nil, err
+	}
 	if err := s.load(filepath.Join(dataDir, "events.jsonl")); err != nil {
 		return nil, err
 	}
@@ -193,16 +203,8 @@ func (s *Store) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var first error
-	for _, f := range []*os.File{s.eventFile, s.sshEventFile, s.intelEventFile} {
-		if f == nil {
-			continue
-		}
-		if err := f.Sync(); err != nil && first == nil {
-			first = err
-		}
-	}
 	if s.eventFile != nil {
-		if err := s.eventFile.Close(); err != nil && first == nil {
+		if err := s.eventFile.Close(); err != nil {
 			first = err
 		}
 	}

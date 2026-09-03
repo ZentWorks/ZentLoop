@@ -95,8 +95,27 @@ func (s *Store) SSHHighlightsRange(limit int, before time.Time, beforeID, rating
 	rating = strings.ToLower(strings.TrimSpace(rating))
 
 	rows := make([]model.SSHHighlight, 0, 64)
-	seen := make(map[string]bool, len(s.sshSessions)+len(s.sshHighlightHistory))
+	seen := map[string]bool{}
+	for id, h := range s.sshHighlightHistory {
+		if !before.IsZero() && (h.At.After(before) || (h.At.Equal(before) && (beforeID == "" || h.SessionID >= beforeID))) {
+			continue
+		}
+		if !from.IsZero() && h.At.Before(from) {
+			continue
+		}
+		if !to.IsZero() && !h.At.Before(to) {
+			continue
+		}
+		if rating != "" && rating != "all" && h.Rating != rating {
+			continue
+		}
+		rows = append(rows, h)
+		seen[id] = true
+	}
 	for id, ss := range s.sshSessions {
+		if seen[id] {
+			continue
+		}
 		if !ss.AuthAccepted {
 			continue
 		}
@@ -117,25 +136,6 @@ func (s *Store) SSHHighlightsRange(limit int, before time.Time, beforeID, rating
 			if h.At.After(before) || (h.At.Equal(before) && (beforeID == "" || h.SessionID >= beforeID)) {
 				continue
 			}
-		}
-		if !from.IsZero() && h.At.Before(from) {
-			continue
-		}
-		if !to.IsZero() && !h.At.Before(to) {
-			continue
-		}
-		if rating != "" && rating != "all" && h.Rating != rating {
-			continue
-		}
-		rows = append(rows, h)
-		seen[id] = true
-	}
-	for id, h := range s.sshHighlightHistory {
-		if seen[id] {
-			continue
-		}
-		if !before.IsZero() && (h.At.After(before) || (h.At.Equal(before) && (beforeID == "" || h.SessionID >= beforeID))) {
-			continue
 		}
 		if !from.IsZero() && h.At.Before(from) {
 			continue

@@ -66,6 +66,7 @@ func (s *AdminServer) Handler() http.Handler {
 	protected.HandleFunc("/api/realtime", s.realtime)
 	protected.HandleFunc("/api/info", s.info)
 	protected.HandleFunc("/api/settings/trusted-domains", s.trustedDomains)
+	protected.HandleFunc("/api/settings/target-realities", s.targetRealities)
 	protected.HandleFunc("/api/untrusted-hosts", s.untrustedHosts)
 	protected.HandleFunc("/api/known-probes", s.knownProbes)
 	protected.HandleFunc("/api/known-probes.csv", s.knownProbesCSV)
@@ -103,7 +104,7 @@ func (s *AdminServer) Handler() http.Handler {
 	public.HandleFunc("/api/auth/session", s.adminSessionInfo)
 	public.HandleFunc("/api/auth/logout", s.adminLogout)
 	public.HandleFunc("/login", s.adminLoginPage(sub))
-	for _, path := range []string{"/login.js", "/login.css", "/favicon.png", "/zentloop-logo.png", "/pwa-icon-192.png", "/pwa-icon-512.png", "/pwa-maskable-512.png", "/manifest.webmanifest", "/service-worker.js"} {
+	for _, path := range []string{"/login.js", "/login.css", "/favicon.png", "/zentloop-logo.png", "/manifest.webmanifest", "/sw.js", "/icon-192.png", "/icon-512.png", "/icon-maskable-512.png"} {
 		public.Handle(path, static)
 	}
 	public.Handle("/", s.adminSessionAuth(protected))
@@ -331,6 +332,36 @@ func (s *AdminServer) trustedDomains(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, s.store.TrustedDomains())
+	default:
+		methodNotAllowed(w)
+	}
+}
+
+func (s *AdminServer) targetRealities(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, s.store.TargetRealitySettings())
+	case http.MethodPut:
+		var body struct {
+			Profiles []model.TargetRealityProfile `json:"profiles"`
+		}
+		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 128*1024))
+		if err := dec.Decode(&body); err != nil {
+			http.Error(w, "invalid target reality payload", http.StatusBadRequest)
+			return
+		}
+		if err := s.store.SetTargetRealityProfiles(body.Profiles, time.Now()); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, s.store.TargetRealitySettings())
+	case http.MethodDelete:
+		target := r.URL.Query().Get("target")
+		if err := s.store.ResetTargetRealityState(target); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, s.store.TargetRealitySettings())
 	default:
 		methodNotAllowed(w)
 	}
@@ -731,33 +762,13 @@ func writeSSHExportText(w http.ResponseWriter, ex model.SSHSessionExport) {
 	if ex.Actor != nil {
 		fmt.Fprintf(w, "Actor: %s\nFingerprints: %s\nEngagement: %ds\nCanary touches: %d\nPayload signals: %d\n", ex.Actor.ID, strings.Join(ex.Actor.Fingerprints, ", "), ex.Actor.EngagementSeconds, ex.Actor.CanaryTouches, ex.Actor.PayloadAttempts)
 	}
-	fmt.Fprintf(w, "Transcript source: %s\n", firstPresent(ex.TranscriptStatus, "unknown"))
-	if ex.Highlight != nil {
-		fmt.Fprintf(w, "Highlight: %s %d/100 · %s\nReason: %s\n", strings.ToUpper(ex.Highlight.Rating), ex.Highlight.Score, strings.Join(ex.Highlight.Tags, ", "), ex.Highlight.Reason)
-	}
 	if len(ex.Intel) > 0 {
 		fmt.Fprintln(w, "\nIntelligence:")
 		for _, x := range ex.Intel {
 			fmt.Fprintf(w, "%s  %s  %s\n", x.At.Format(time.RFC3339), x.Kind, x.Summary)
 		}
 	}
-	if len(ex.AttackTrace) > 0 {
-		fmt.Fprintln(w, "\nAttack trace:")
-		for _, tr := range ex.AttackTrace {
-			fmt.Fprintf(w, "%s · %s · %s\n", strings.ToUpper(tr.Confidence), tr.Relation, tr.Evidence)
-			for _, step := range tr.Steps {
-				fmt.Fprintf(w, "  %s · %s · %s · %s\n", step.At.Format(time.RFC3339), strings.ToUpper(step.Protocol), step.SessionID, firstPresent(step.Summary, step.Path))
-			}
-		}
-	}
 	fmt.Fprintln(w, "\nVirtual transcript:")
-	if len(ex.Events) == 0 {
-		if ex.TranscriptStatus == "expired" {
-			fmt.Fprintln(w, "Raw SSH transcript is no longer retained. Session summary, intelligence and verified attack trace remain available.")
-		} else {
-			fmt.Fprintln(w, "No raw SSH transcript events are available.")
-		}
-	}
 	for _, e := range ex.Events {
 		fmt.Fprintf(w, "\n%s · %s", e.At.Format(time.RFC3339), strings.ToUpper(e.Type))
 		if e.CommandFamily != "" {

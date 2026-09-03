@@ -8,6 +8,7 @@ import (
 	"html"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"zentloop/internal/config"
@@ -16,12 +17,18 @@ import (
 )
 
 type Deception struct {
-	cfg   config.Config
-	story *webStoryState
+	cfg     config.Config
+	story   *webStoryState
+	reality TargetRealityProvider
+	docker  *dockerExecState
 }
 
-func NewDeception(cfg config.Config) *Deception {
-	return &Deception{cfg: cfg, story: newWebStoryState()}
+func NewDeception(cfg config.Config, providers ...TargetRealityProvider) *Deception {
+	d := &Deception{cfg: cfg, story: newWebStoryState(), docker: newDockerExecState()}
+	if len(providers) > 0 {
+		d.reality = providers[0]
+	}
+	return d
 }
 
 type Response struct {
@@ -33,6 +40,23 @@ type Response struct {
 	Depth       int
 	LoopInc     int
 	Delay       time.Duration
+}
+
+type dockerExecObservation struct {
+	ID        string
+	Container string
+	Cmd       []string
+	EnvKeys   []string
+	TTY       bool
+	Created   time.Time
+}
+type dockerExecState struct {
+	mu        sync.Mutex
+	bySession map[string]map[string]dockerExecObservation
+}
+
+func newDockerExecState() *dockerExecState {
+	return &dockerExecState{bySession: map[string]map[string]dockerExecObservation{}}
 }
 
 func tokens(sessionID string) (string, string) {
@@ -64,7 +88,7 @@ func (d *Deception) BuildWithBody(r *http.Request, ss *model.Session, bodySample
 		return resp
 	}
 
-	if family, ok := buildFamilyDeception(r, ss, a, b); ok {
+	if family, ok := buildFamilyDeception(r, ss, a, b, bodySample, d.docker); ok {
 		return d.finalizeWebStoryResponse(r, ss, family, delay)
 	}
 
