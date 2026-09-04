@@ -31,8 +31,8 @@ func analyzeSSHCommand(command string, result virtualSSHResult) sshCommandAnalys
 	shape := inspectSSHShellShape(command)
 
 	switch {
-	case strings.Contains(low, "systemctl --user") && strings.Contains(low, ".service"):
-		a.Primary, a.Family, a.Intent, a.Message = "systemctl", "persistence", "user-systemd-persistence", "user systemd service discovery or modification"
+	case strings.Contains(low, "systemctl --user") && strings.Contains(low, ".service") && (strings.Contains(low, " enable") || strings.Contains(low, " start") || strings.Contains(low, " restart") || strings.Contains(low, " stop") || strings.Contains(low, " disable") || strings.Contains(low, "daemon-reload")):
+		a.Primary, a.Family, a.Intent, a.Message = "systemctl", "persistence", "user-systemd-persistence", "user systemd service modification"
 		a.Fingerprint, a.Depth, a.Risk, a.Persona = "ssh:user-systemd-persistence", 6, 98, "persistence"
 		if result.PayloadStage == "executed" && result.PayloadPath != "" {
 			// Keep the top-level command semantics as persistence. Payload execution
@@ -102,6 +102,12 @@ func analyzeSSHCommand(command string, result virtualSSHResult) sshCommandAnalys
 		if looksLikePrivilegeFallbackChain(low, shape) {
 			a.Intent, a.Message, a.Depth, a.Risk = "cpu-topology-discovery-with-privilege-fallback", "CPU topology discovery through sudo/direct fallback chain", 6, 96
 		}
+	case strings.Contains(low, "systemctl") && (strings.Contains(low, "list-units") || strings.Contains(low, " status") || strings.Contains(low, " show") || strings.Contains(low, "is-active") || strings.Contains(low, "is-enabled")):
+		a.Primary, a.Family, a.Intent, a.Message = "systemctl", "recon", "service-discovery", "running service discovery"
+		a.Fingerprint, a.Depth, a.Risk, a.Persona = "ssh:service-discovery", 4, 89, "system-recon"
+	case strings.Contains(low, "time dd ") || (strings.Contains(low, "dd ") && strings.Contains(low, "if=/dev/zero")):
+		a.Primary, a.Family, a.Intent, a.Message = "dd", "recon", "storage-performance-profiling", "storage/filesystem throughput profiling"
+		a.Fingerprint, a.Depth, a.Risk, a.Persona = "ssh:storage-performance-profiling", 5, 92, "resource-discovery"
 	case strings.Contains(low, "ps ") || strings.HasPrefix(low, "ps\t"):
 		a.Primary, a.Family = "ps", "recon"
 		a.Depth, a.Risk, a.Persona = 4, 88, "system-recon"

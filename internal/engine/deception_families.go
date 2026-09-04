@@ -227,13 +227,13 @@ func buildDockerAPIFamily(r *http.Request, p string, ss *model.Session, a, bodyS
 	containerID := "8d4b0c7e1a2f" + a[:4]
 	switch {
 	case p == "/containers/json":
-		return Response{Status: 200, ContentType: "application/json", Label: "fake-docker-api-containers", Depth: depth, Body: mustJSON([]map[string]any{{"Id": containerID, "Names": []string{"/platform-web"}, "Image": "registry.internal/platform/wordpress:2026.08", "State": "running", "Status": "Up 18 days", "Ports": []map[string]any{{"PrivatePort": 8081, "Type": "tcp"}}}, {"Id": "4aa2319c62b1" + a[:4], "Names": []string{"/mysql-db"}, "Image": "mysql:8.4", "State": "running", "Status": "Up 18 days"}})}
+		return Response{Status: 200, ContentType: "application/json", Label: "fake-docker-api-containers", Depth: depth, Body: mustJSON([]map[string]any{{"Id": containerID, "Names": []string{"/platform-web"}, "Image": "registry.internal/platform/web:2026.08", "State": "running", "Status": "Up 18 days", "Ports": []map[string]any{{"PrivatePort": 8081, "Type": "tcp"}}}, {"Id": "4aa2319c62b1" + a[:4], "Names": []string{"/postgres-db"}, "Image": "postgres:16", "State": "running", "Status": "Up 18 days"}, {"Id": "5bb3420d73c2" + a[:4], "Names": []string{"/redis-cache"}, "Image": "redis:7.4", "State": "running", "Status": "Up 18 days"}})}
 	case p == "/images/json":
-		return Response{Status: 200, ContentType: "application/json", Label: "fake-docker-api-images", Depth: max(depth, 4), Body: mustJSON([]map[string]any{{"RepoTags": []string{"registry.internal/platform/wordpress:2026.08"}, "Size": 318767104}, {"RepoTags": []string{"mysql:8.4"}, "Size": 73400320}})}
+		return Response{Status: 200, ContentType: "application/json", Label: "fake-docker-api-images", Depth: max(depth, 4), Body: mustJSON([]map[string]any{{"RepoTags": []string{"registry.internal/platform/web:2026.08"}, "Size": 318767104}, {"RepoTags": []string{"postgres:16"}, "Size": 154140672}, {"RepoTags": []string{"redis:7.4"}, "Size": 45219840}})}
 	case p == "/version":
 		return Response{Status: 200, ContentType: "application/json", Label: "fake-docker-api-version", Depth: depth, Body: mustJSON(map[string]any{"Version": "27.1.1", "ApiVersion": "1.46", "MinAPIVersion": "1.24", "GitCommit": "6312585", "GoVersion": "go1.22.5", "Os": "linux", "Arch": "amd64"})}
 	case p == "/info":
-		return Response{Status: 200, ContentType: "application/json", Label: "fake-docker-api-info", Depth: max(depth, 4), Body: mustJSON(map[string]any{"Containers": 2, "ContainersRunning": 2, "Images": 7, "Driver": "overlay2", "Name": "prod-app-02", "ServerVersion": "27.1.1", "OperatingSystem": "Ubuntu 24.04.3 LTS", "Architecture": "x86_64", "NCPU": 4})}
+		return Response{Status: 200, ContentType: "application/json", Label: "fake-docker-api-info", Depth: max(depth, 4), Body: mustJSON(map[string]any{"Containers": 3, "ContainersRunning": 3, "Images": 8, "Driver": "overlay2", "Name": "prod-app-02", "ServerVersion": "27.1.1", "OperatingSystem": "Ubuntu 24.04.3 LTS", "Architecture": "x86_64", "NCPU": 4})}
 	case strings.HasSuffix(p, "/exec"):
 		cmd, env, tty := parseDockerExecBody(bodySample)
 		h := sha256.Sum256([]byte(ss.ID + "|" + p + "|" + bodySample))
@@ -282,9 +282,9 @@ func buildDockerAPIFamily(r *http.Request, p string, ss *model.Session, a, bodyS
 		}
 		return Response{Status: 404, ContentType: "application/json", Label: "fake-docker-api-exec-miss", Depth: depth, Body: []byte(`{"message":"No such exec endpoint"}`)}
 	case strings.HasSuffix(p, "/logs"):
-		return Response{Status: 200, ContentType: "text/plain; charset=utf-8", Label: "fake-docker-api-logs", Depth: max(depth, 5), Body: []byte("2026-08-16T02:00:01Z wordpress cron started\n2026-08-16T02:00:04Z mysql backup status=ok\n")}
+		return Response{Status: 200, ContentType: "text/plain; charset=utf-8", Label: "fake-docker-api-logs", Depth: max(depth, 5), Body: []byte("2026-08-16T02:00:01Z web scheduler started\n2026-08-16T02:00:04Z postgres backup status=ok\n")}
 	default:
-		return Response{Status: 200, ContentType: "application/json", Label: "fake-docker-api-inspect", Depth: max(depth, 5), Body: mustJSON(map[string]any{"Id": containerID, "Name": "/platform-web", "State": map[string]any{"Status": "running", "Running": true, "Pid": 844}, "Config": map[string]any{"Image": "registry.internal/platform/wordpress:2026.08", "Env": []string{"WORDPRESS_ENV=production", "DB_HOST=mysql-db"}}, "NetworkSettings": map[string]any{"IPAddress": "10.10.30.21"}})}
+		return Response{Status: 200, ContentType: "application/json", Label: "fake-docker-api-inspect", Depth: max(depth, 5), Body: mustJSON(map[string]any{"Id": containerID, "Name": "/platform-web", "State": map[string]any{"Status": "running", "Running": true, "Pid": 844}, "Config": map[string]any{"Image": "registry.internal/platform/web:2026.08", "Env": []string{"APP_ENV=production", "DB_HOST=postgres-db", "REDIS_HOST=redis-cache"}}, "NetworkSettings": map[string]any{"IPAddress": "10.10.30.21"}})}
 	}
 }
 

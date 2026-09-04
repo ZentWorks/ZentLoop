@@ -1496,9 +1496,13 @@ func (w *virtualSSHWorld) executeOneDepth(raw, input string, aliasDepth int) vir
 			r.Output = "1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 state UNKNOWN\n    inet 127.0.0.1/8 scope host lo\n2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 state UP\n    inet " + h.IP + "/24 brd 10.10.30.255 scope global eth0"
 		}
 		return r
-	case "ss", "netstat":
+	case "ss":
 		r := base("network", 4, 91, "network-recon", "listening service discovery")
-		r.Output = "Netid State  Local Address:Port   Peer Address:Port Process\ntcp   LISTEN 0      128      0.0.0.0:22      0.0.0.0:*     users:((\"sshd\",pid=612,fd=3))\ntcp   LISTEN 0      4096     0.0.0.0:8081    0.0.0.0:*     users:((\"web\",pid=844,fd=7))\ntcp   LISTEN 0      128      127.0.0.1:5432  0.0.0.0:*     users:((\"docker-proxy\",pid=1102,fd=4))"
+		r.Output = "Netid State  Recv-Q Send-Q Local Address:Port Peer Address:Port Process\ntcp   LISTEN 0      128    0.0.0.0:22       0.0.0.0:*     users:((\"sshd\",pid=612,fd=3))\ntcp   LISTEN 0      4096   0.0.0.0:8081     0.0.0.0:*     users:((\"web\",pid=844,fd=7))\ntcp   LISTEN 0      128    127.0.0.1:5432   0.0.0.0:*     users:((\"docker-proxy\",pid=1102,fd=4))"
+		return r
+	case "netstat":
+		r := base("network", 4, 91, "network-recon", "listening service discovery")
+		r.Output = "Active Internet connections (only servers)\nProto Recv-Q Send-Q Local Address           Foreign Address         State       PID/Program name\ntcp        0      0 0.0.0.0:22              0.0.0.0:*               LISTEN      612/sshd\ntcp        0      0 0.0.0.0:8081            0.0.0.0:*               LISTEN      844/web\ntcp        0      0 127.0.0.1:5432          0.0.0.0:*               LISTEN      1102/docker-proxy"
 		return r
 	case "last", "w", "who":
 		r := base("recon", 4, 86, "system-recon", "logged-in user discovery")
@@ -1535,16 +1539,23 @@ func (w *virtualSSHWorld) executeOneDepth(raw, input string, aliasDepth int) vir
 		if cmd == "systemctl" && containsArg(args, "--user") {
 			return w.virtualUserSystemctl(args)
 		}
-		r := base("persistence", 6, 97, "persistence", "service discovery or modification")
-		if strings.Contains(raw, "status") {
-			snap := w.system.snapshot()
-			started := snap.BootTime.Add(11 * time.Minute)
-			age := strings.TrimPrefix(virtualUptimePretty(snap.Now.Sub(started)), "up ")
-			r.Output = "● backup-agent.service - Legacy Backup Agent\n     Loaded: loaded (/etc/systemd/system/backup-agent.service; enabled; preset: enabled)\n     Active: active (running) since " + started.Format("Mon 2006-01-02 15:04:05 UTC") + "; " + age + " ago\n   Main PID: 1842 (backup-agent)\n      Tasks: 3 (limit: 9354)\n     Memory: 18.7M (peak: 21.1M)\n        CPU: 12min 31.442s"
-		} else {
-			r.Output = ""
-			r.LoopInc = 1
+		lowRaw := strings.ToLower(raw)
+		discovery := strings.Contains(lowRaw, "list-units") || strings.Contains(lowRaw, " status") || strings.HasPrefix(strings.TrimSpace(lowRaw), "systemctl status") || strings.Contains(lowRaw, " show") || strings.HasPrefix(strings.TrimSpace(lowRaw), "systemctl show") || strings.Contains(lowRaw, " is-active") || strings.Contains(lowRaw, " is-enabled")
+		if discovery {
+			r := base("recon", 4, 89, "system-recon", "service discovery")
+			if strings.Contains(lowRaw, "list-units") {
+				r.Output = "UNIT                         LOAD   ACTIVE SUB     DESCRIPTION\nssh.service                  loaded active running OpenBSD Secure Shell server\ndocker.service               loaded active running Docker Application Container Engine\npostgresql.service           loaded active running PostgreSQL RDBMS\nredis-server.service         loaded active running Advanced key-value store\nbackup-agent.service         loaded active running Legacy Backup Agent"
+			} else {
+				snap := w.system.snapshot()
+				started := snap.BootTime.Add(11 * time.Minute)
+				age := strings.TrimPrefix(virtualUptimePretty(snap.Now.Sub(started)), "up ")
+				r.Output = "● backup-agent.service - Legacy Backup Agent\n     Loaded: loaded (/etc/systemd/system/backup-agent.service; enabled; preset: enabled)\n     Active: active (running) since " + started.Format("Mon 2006-01-02 15:04:05 UTC") + "; " + age + " ago\n   Main PID: 1842 (backup-agent)\n      Tasks: 3 (limit: 9354)\n     Memory: 18.7M (peak: 21.1M)\n        CPU: 12min 31.442s"
+			}
+			return r
 		}
+		r := base("persistence", 6, 97, "persistence", "service modification")
+		r.Output = ""
+		r.LoopInc = 1
 		return r
 	case "journalctl":
 		r := base("credentials", 5, 93, "credential-hunter", "log discovery")
@@ -1623,14 +1634,21 @@ func (w *virtualSSHWorld) executeOneDepth(raw, input string, aliasDepth int) vir
 		if host == "" {
 			host = "backup-01"
 		}
+		count := virtualPingCount(args)
+		r.Target = host
+		r.StreamCount = count
+		if count > 0 {
+			// Explicit -c probes are finite commands, not an interactive stream.
+			// This lets downstream grep/head/wc stages observe the actual batch output.
+			r.Output = virtualPingBatchOutput(host, count)
+			return r
+		}
 		ip := host
 		if h, ok := lures.Resolve(host); ok {
 			ip = h.IP
 		}
 		r.Output = "PING " + host + " (" + ip + ") 56(84) bytes of data."
 		r.Interactive = "ping"
-		r.Target = host
-		r.StreamCount = virtualPingCount(args)
 		return r
 	case "nc", "netcat", "ncat", "telnet":
 		r := base("network", 5, 95, "network-recon", "simulated service probing")
@@ -1754,6 +1772,53 @@ func (w *virtualSSHWorld) executeOneDepth(raw, input string, aliasDepth int) vir
 		r := base("shell", 2, 74, "interactive-shell", "shell expression evaluation")
 		r.Output, r.Status = virtualExpr(args)
 		return r
+	case "dd":
+		r := base("filesystem", 4, 88, "resource-discovery", "storage throughput probe")
+		count, bsBytes := 1, 512
+		for _, a := range args {
+			if strings.HasPrefix(a, "count=") {
+				if n, err := strconv.Atoi(strings.TrimPrefix(a, "count=")); err == nil && n > 0 && n <= 1024 {
+					count = n
+				}
+			}
+			if strings.HasPrefix(a, "bs=") {
+				v := strings.TrimPrefix(a, "bs=")
+				mult := 1
+				if strings.HasSuffix(strings.ToLower(v), "m") {
+					mult, v = 1024*1024, v[:len(v)-1]
+				} else if strings.HasSuffix(strings.ToLower(v), "k") {
+					mult, v = 1024, v[:len(v)-1]
+				}
+				if n, err := strconv.Atoi(v); err == nil && n > 0 {
+					bsBytes = n * mult
+				}
+			}
+		}
+		total := count * bsBytes
+		if total > 64*1024*1024 {
+			total = 64 * 1024 * 1024
+		}
+		r.Output = fmt.Sprintf("%d+0 records in\n%d+0 records out\n%d bytes (%0.1f MB, %0.1f MiB) copied, 0.041 s, 256 MB/s", count, count, total, float64(total)/1e6, float64(total)/(1024*1024))
+		return r
+	case "time":
+		if len(args) == 0 {
+			r := base("shell", 2, 72, "interactive-shell", "shell timing builtin")
+			r.Output = "real\t0m0.000s\nuser\t0m0.000s\nsys\t0m0.000s"
+			return r
+		}
+		inner := strings.Join(args, " ")
+		res := w.Execute(inner)
+		if res.Output != "" {
+			res.Output += "\n"
+		}
+		res.Output += "\nreal\t0m0.043s\nuser\t0m0.001s\nsys\t0m0.028s"
+		res.CommandName = "time"
+		res.Family = "recon"
+		res.Depth = maxInt(res.Depth, 5)
+		res.Risk = maxInt(res.Risk, 92)
+		res.Persona = "resource-discovery"
+		res.Message = "timed storage/resource performance probe"
+		return res
 	case "getconf":
 		return w.virtualGetconf(args)
 	case "shutdown", "reboot", "poweroff", "halt":
@@ -2147,7 +2212,7 @@ func (w *virtualSSHWorld) stopVirtualUserService(svc virtualUserService) virtual
 }
 
 func (w *virtualSSHWorld) virtualUserSystemctl(args []string) virtualSSHResult {
-	r := virtualSSHResult{CommandName: "systemctl", Family: "persistence", Depth: 6, Risk: 97, Persona: "persistence", Message: "user service discovery or modification"}
+	r := virtualSSHResult{CommandName: "systemctl", Family: "persistence", Depth: 6, Risk: 97, Persona: "persistence", Message: "user service modification"}
 	filtered := make([]string, 0, len(args))
 	for _, a := range args {
 		if a == "--user" || a == "--no-pager" || a == "--quiet" || a == "-q" {
@@ -2161,6 +2226,9 @@ func (w *virtualSSHWorld) virtualUserSystemctl(args []string) virtualSSHResult {
 		return r
 	}
 	action := filtered[0]
+	if action == "status" || action == "show" || action == "is-active" || action == "is-enabled" || action == "list-units" {
+		r.Family, r.Depth, r.Risk, r.Persona, r.Message = "recon", 4, 89, "system-recon", "user service discovery"
+	}
 	unit := ""
 	for _, a := range filtered[1:] {
 		if strings.HasPrefix(a, "-") || a == "now" {

@@ -221,11 +221,25 @@ func (d *Deception) BuildWithBody(r *http.Request, ss *model.Session, bodySample
 		resp.Depth = max(depth, 5)
 		resp.Headers = map[string]string{"Docker-Distribution-Api-Version": "registry/2.0", "Www-Authenticate": `Bearer realm="https://registry.internal/token",service="registry.internal"`}
 		resp.Body = mustJSON(map[string]any{"repositories": []string{"platform/web", "platform/worker", "ops/backup-agent"}, "token_hint": canaries["registry"]})
-	case strings.Contains(p, "/.git/config") || strings.HasPrefix(p, "/.git"):
+	case strings.Contains(p, "/.git"):
 		resp.ContentType = "text/plain; charset=utf-8"
 		resp.Label = "fake-git"
 		resp.Depth = max(depth, 1)
-		resp.Body = []byte(fmt.Sprintf("[core]\n\trepositoryformatversion = 0\n[remote \"origin\"]\n\turl = https://git.internal.local/platform/web-%s.git\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n", a))
+		gitPath := p[strings.Index(p, "/.git"):]
+		switch gitPath {
+		case "/.git/config", "/.git/config/":
+			resp.Body = []byte(fmt.Sprintf("[core]\n\trepositoryformatversion = 0\n\tbare = false\n[remote \"origin\"]\n\turl = https://git.internal.local/platform/web-%s.git\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n[branch \"main\"]\n\tremote = origin\n\tmerge = refs/heads/main\n", a))
+		case "/.git/head":
+			resp.Body = []byte("ref: refs/heads/main\n")
+		case "/.git/refs/heads/main":
+			resp.Body = []byte(fmt.Sprintf("%040x\n", storyHash(storyTarget(ss)+"|git-main")))
+		case "/.git/packed-refs":
+			resp.Body = []byte("# pack-refs with: peeled fully-peeled sorted\n")
+		default:
+			resp.Status = http.StatusNotFound
+			resp.Label = "fake-git-miss"
+			resp.Body = []byte("404 Not Found\n")
+		}
 	case strings.Contains(p, "/swagger") || strings.Contains(p, "/openapi"):
 		resp.ContentType = "application/json"
 		resp.Label = "fake-openapi"

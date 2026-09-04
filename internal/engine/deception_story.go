@@ -214,6 +214,75 @@ func storyArtifactFamily(p, label string) string {
 	return ""
 }
 
+func gitRepositoryRoot(p string) string {
+	p = canonicalObservedWebPath(p)
+	low := strings.ToLower(p)
+	i := strings.Index(low, "/.git")
+	if i < 0 {
+		return ""
+	}
+	root := strings.TrimSuffix(p[:i], "/")
+	if root == "" {
+		return "/"
+	}
+	return root
+}
+
+func phpUnitInstallationRoot(p string) string {
+	p = canonicalObservedWebPath(p)
+	low := strings.ToLower(p)
+	i := strings.Index(low, "/phpunit/")
+	if i < 0 {
+		return ""
+	}
+	prefix := strings.TrimSuffix(p[:i], "/")
+	if strings.HasSuffix(strings.ToLower(prefix), "/vendor") {
+		return prefix
+	}
+	if prefix == "" {
+		return "/"
+	}
+	return prefix
+}
+
+func sparseGitRootAllowed(profile *webStoryProfile, root string) bool {
+	if root == "" {
+		return true
+	}
+	// Keep one canonical repository plus one target-stable secondary checkout.
+	if root == "/" {
+		return true
+	}
+	candidates := []string{"/backend", "/app", "/www", "/src", "/project", "/deploy"}
+	chosen := candidates[int(profile.Seed%uint32(len(candidates)))]
+	return root == chosen
+}
+
+func sparsePHPUnitRootAllowed(profile *webStoryProfile, root string) bool {
+	if root == "" {
+		return true
+	}
+	// A believable PHP host may expose one normal Composer vendor tree and one
+	// forgotten secondary checkout, but not every framework path in a wordlist.
+	if root == "/vendor" {
+		return true
+	}
+	candidates := []string{"/laravel/vendor", "/tests/vendor", "/app/vendor", "/www/vendor", "/lib"}
+	chosen := candidates[int((profile.Seed>>3)%uint32(len(candidates)))]
+	return root == chosen
+}
+
+func storySurfaceAllowed(profile *webStoryProfile, p, label string) bool {
+	lowLabel := strings.ToLower(label)
+	if strings.Contains(lowLabel, "git") || strings.Contains(strings.ToLower(p), "/.git") {
+		return sparseGitRootAllowed(profile, gitRepositoryRoot(p))
+	}
+	if strings.Contains(lowLabel, "phpunit") || isPHPUnitEvalFamily(p) {
+		return sparsePHPUnitRootAllowed(profile, phpUnitInstallationRoot(p))
+	}
+	return true
+}
+
 func storyArtifactAllowed(profile *webStoryProfile, p, label string) bool {
 	p = canonicalObservedWebPath(p)
 	label = strings.ToLower(label)
@@ -436,6 +505,13 @@ func (d *Deception) finalizeWebStoryResponse(r *http.Request, ss *model.Session,
 			miss.Delay = delay
 			return miss
 		}
+	}
+
+	if resp.Status >= 200 && resp.Status < 300 && !storySurfaceAllowed(profile, p, resp.Label) {
+		miss := storyMiss(ss, "surface")
+		miss.Label = "story-surface-miss"
+		miss.Delay = delay
+		return miss
 	}
 
 	artifactFamily := storyArtifactFamily(p, resp.Label)
