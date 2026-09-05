@@ -26,7 +26,7 @@ func (s *Store) HTTPBehavior(ip, currentUA string, now time.Time) HTTPBehaviorSi
 	uas := map[string]struct{}{}
 	paths := map[string]struct{}{}
 	botClaims := map[string]struct{}{}
-	ssrfPaths, credentialPaths, fileReadPaths, phpPaths, wordpressPaths, structuredAPIPaths := 0, 0, 0, 0, 0, 0
+	ssrfPaths, credentialPaths, fileReadPaths, phpPaths, wordpressPaths, structuredAPIPaths, remoteAccessPaths := 0, 0, 0, 0, 0, 0, 0
 	for i := len(s.events) - 1; i >= 0; i-- {
 		e := s.events[i]
 		age := now.Sub(e.At)
@@ -62,6 +62,9 @@ func (s *Store) HTTPBehavior(ip, currentUA string, now time.Time) HTTPBehaviorSi
 			}
 			if strings.HasPrefix(lowPath, "/api/json/settings/") {
 				structuredAPIPaths++
+			}
+			if strings.Contains(lowPath, "fire_admin") || strings.Contains(lowPath, "vpn") || strings.Contains(lowPath, "officialsite") || strings.Contains(lowPath, "/+cscoe+/") || strings.Contains(lowPath, "/remote/login") || strings.Contains(lowPath, "smacfilter_conf") || strings.Contains(lowPath, "/cgi-bin/luci/") {
+				remoteAccessPaths++
 			}
 		}
 		if c := botClaimLabel(e.UserAgent); c != "" {
@@ -126,6 +129,11 @@ func (s *Store) HTTPBehavior(ip, currentUA string, now time.Time) HTTPBehaviorSi
 		out.RiskBoost += 14
 		out.Fingerprints = append(out.Fingerprints, "http:structured-api-enumeration")
 	}
+	if remoteAccessPaths >= 3 {
+		out.AutomationBoost += 18
+		out.RiskBoost += 8
+		out.Fingerprints = append(out.Fingerprints, "http:remote-access-panel-fingerprint-sweep")
+	}
 	sort.Strings(out.Fingerprints)
 	return out
 }
@@ -136,8 +144,9 @@ func botClaimLabel(ua string) string {
 		{"googlebot", "google"}, {"googleother", "google"}, {"google-cloudvertexbot", "google"},
 		{"applebot", "apple"}, {"duckduckbot", "duckduckgo"}, {"duckassistbot", "duckduckgo"},
 		{"oai-searchbot", "openai"}, {"gptbot", "openai"}, {"chatgpt-user", "openai"},
-		{"perplexitybot", "perplexity"}, {"bingbot", "bing"}, {"baiduspider", "baidu"},
-		{"yandexbot", "yandex"}, {"ccbot", "commoncrawl"},
+		{"perplexitybot", "perplexity"}, {"perplexity-user", "perplexity"}, {"bingbot", "bing"}, {"baiduspider", "baidu"},
+		{"yandexbot", "yandex"}, {"ccbot", "commoncrawl"}, {"bytespider", "bytedance"},
+		{"grokbot", "xai"}, {"telegrambot", "telegram"},
 	} {
 		if strings.Contains(l, row.needle) {
 			return row.label

@@ -133,6 +133,10 @@ func storyCandidate(p, label string) (string, int) {
 		return "wordpress", 3
 	case strings.HasPrefix(p, "/_next") || p == "/_rsc" || p == "/__rsc" || strings.HasPrefix(p, "/rsc/") || strings.HasPrefix(p, "/api/auth/") || strings.Contains(label, "nextjs"):
 		return "nextjs", 3
+	case strings.HasPrefix(p, "/_ignition/") || p == "/_ignition" || strings.HasPrefix(p, "/storage/logs/laravel") || p == "/telescope" || strings.HasPrefix(p, "/telescope/") || strings.Contains(label, "laravel") || strings.Contains(label, "ignition"):
+		return "laravel", 3
+	case strings.HasPrefix(p, "/actuator/") || p == "/actuator" || strings.Contains(label, "actuator"):
+		return "java", 3
 	case isRailsStoryPath(p) || strings.Contains(label, "rails"):
 		return "rails", 3
 	case strings.Contains(p, "/app_dev.php/_profiler") || strings.HasPrefix(p, "/_profiler") || strings.Contains(label, "phpinfo") || strings.Contains(label, "php-backdoor"):

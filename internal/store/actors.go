@@ -129,6 +129,70 @@ func (s *Store) appendActorActivityLocked(a *model.ActorProfile, item model.Acto
 	s.actorTimeline[a.ID] = rows
 }
 
+func normalizedHTTPSequencePath(raw string) string {
+	p := strings.ToLower(strings.TrimSpace(raw))
+	if p == "" {
+		return "/"
+	}
+	parts := strings.Split(p, "/")
+	for i, part := range parts {
+		if part == "" {
+			continue
+		}
+		if strings.HasPrefix(part, "exec-") && len(part) > 9 {
+			parts[i] = "exec-<token>"
+			continue
+		}
+		if isHTTPSequenceToken(part) {
+			parts[i] = "<token>"
+		}
+	}
+	out := strings.Join(parts, "/")
+	if !strings.HasPrefix(out, "/") {
+		out = "/" + out
+	}
+	return out
+}
+
+func isHTTPSequenceToken(v string) bool {
+	if len(v) < 10 {
+		return false
+	}
+	hexish := 0
+	for _, r := range v {
+		switch {
+		case r >= '0' && r <= '9', r >= 'a' && r <= 'f':
+			hexish++
+		case r == '-':
+		default:
+			return false
+		}
+	}
+	return hexish >= 10
+}
+
+func (s *Store) updateHTTPSequenceFingerprintLocked(a *model.ActorProfile, e model.Event) {
+	if a == nil || e.SessionID == "" || e.SelfOrigin {
+		return
+	}
+	if s.httpSessionSequences == nil {
+		s.httpSessionSequences = make(map[string][]string)
+	}
+	seq := s.httpSessionSequences[e.SessionID]
+	if len(seq) < 12 {
+		seq = append(seq, strings.ToUpper(strings.TrimSpace(e.Method))+" "+normalizedHTTPSequencePath(e.Path))
+		s.httpSessionSequences[e.SessionID] = seq
+	}
+	if len(seq) != 12 {
+		return
+	}
+	h := sha256.Sum256([]byte(strings.Join(seq, "\n")))
+	fp := "http:sequence:" + hex.EncodeToString(h[:8])
+	if addFingerprint(a, fp) {
+		s.actorFingerprints[fp]++
+	}
+}
+
 func fingerprintHTTP(e model.Event) string {
 	if e.HostSweep {
 		return "web:host-header-sweep"
@@ -184,8 +248,12 @@ func (s *Store) applyActorHTTPEventLocked(e model.Event) {
 	if addFingerprint(a, fp) {
 		s.actorFingerprints[fp]++
 	}
-	if e.BotClaimed {
+	s.updateHTTPSequenceFingerprintLocked(a, e)
+	if e.BotClaimed || botClaimLabel(e.UserAgent) != "" {
 		claim := strings.ToLower(strings.TrimSpace(e.BotProvider))
+		if claim == "" {
+			claim = botClaimLabel(e.UserAgent)
+		}
 		if claim == "" {
 			claim = strings.ToLower(strings.TrimSpace(e.BotName))
 		}

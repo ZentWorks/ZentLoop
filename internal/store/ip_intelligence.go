@@ -146,6 +146,13 @@ func (s *Store) campaignPeersLocked(ip string, target *model.ActorProfile, targe
 			strongSignals++
 			strongReasons = append(strongReasons, "multiple shared behavior fingerprints")
 		}
+		if sharedFingerprintPrefix(targetFP, peerFP, "http:sequence:") > 0 {
+			score += 45
+			// A 12-request normalized sequence is substantially stronger than a
+			// generic UA/country match, so treat it as two behavioral signals.
+			strongSignals += 2
+			strongReasons = append(strongReasons, "identical normalized HTTP request sequence")
+		}
 		if sharedFingerprintPrefix(targetFP, peerFP, "ssh:payload-sha256:") > 0 {
 			score += 30
 			strongSignals++

@@ -93,6 +93,9 @@ func (s *Store) loadTargetRealities() error {
 			if st.Evidence == nil {
 				st.Evidence = map[string]int{}
 			}
+			if st.Revision == 0 && (st.Technology != "" || st.Cloud != "" || st.Locked) {
+				st.Revision = 1
+			}
 			s.realityStates[t] = st
 		}
 	}
@@ -138,6 +141,28 @@ func profileContains(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func realityApplicationStates(p model.TargetRealityProfile, st model.TargetRealityState) map[string]string {
+	states := map[string]string{}
+	for app := range realityApps {
+		states[app] = "absent"
+	}
+	for _, app := range p.Applications {
+		states[normalizedStoredRealityApp(app)] = "active"
+	}
+	active := normalizedStoredRealityApp(st.Technology)
+	if active != "" {
+		states[active] = "active"
+	}
+	// Frameworks built on PHP may plausibly expose a few generic PHP remnants,
+	// but that does not make every other PHP framework active.
+	if active == "wordpress" || active == "laravel" {
+		if states["generic-php"] != "active" {
+			states["generic-php"] = "residual"
+		}
+	}
+	return states
 }
 
 func realityWarnings(p model.TargetRealityProfile) []string {
@@ -206,7 +231,7 @@ func (s *Store) resolveRealityLocked(target string) model.TargetRealityResolved 
 	if st.Locked && len(p.Applications) > 0 && !profileContains(p.Applications, normalizedStoredRealityApp(st.Technology)) {
 		warnings = append(warnings, "Configured application set conflicts with the persistent learned commitment "+st.Technology+". Reset learned state explicitly before migrating this target.")
 	}
-	return model.TargetRealityResolved{Target: target, Mode: normalizeRealityMode(p.Mode), Applications: append([]string(nil), p.Applications...), Infrastructure: append([]string(nil), p.Infrastructure...), Artifacts: append([]string(nil), p.Artifacts...), State: st, Source: source, Coherent: len(warnings) == 0, Warnings: warnings}
+	return model.TargetRealityResolved{Target: target, Mode: normalizeRealityMode(p.Mode), Applications: append([]string(nil), p.Applications...), Infrastructure: append([]string(nil), p.Infrastructure...), Artifacts: append([]string(nil), p.Artifacts...), ApplicationStates: realityApplicationStates(p, st), State: st, Source: source, Coherent: len(warnings) == 0, Warnings: warnings}
 }
 
 func (s *Store) realityTargetTrustedLocked(target string) bool {
@@ -231,6 +256,7 @@ func (s *Store) ObserveTargetReality(target, candidate, cloud string, weight int
 	if target == "" {
 		return model.TargetRealityResolved{Mode: "automatic", Source: "global", Coherent: true}
 	}
+	now := time.Now()
 	st := s.realityStates[target]
 	st.Target = target
 	if st.Evidence == nil {
@@ -248,13 +274,18 @@ func (s *Store) ObserveTargetReality(target, candidate, cloud string, weight int
 			}
 		}
 		if mode == "automatic" || len(p.Applications) == 0 {
-			if score >= 5 {
-				st.Technology = best
-				st.Confidence = "high"
-				st.Locked = true
-			} else if score >= 3 {
-				st.Technology = best
-				st.Confidence = "medium"
+			// A committed target reality is immutable until an explicit admin reset.
+			// Continue collecting evidence, but never let a later scanner/visit/IP
+			// silently flip WordPress into PHP, Next.js, an appliance, etc.
+			if !st.Locked {
+				if score >= 5 {
+					st.Technology = best
+					st.Confidence = "high"
+					st.Locked = true
+				} else if score >= 3 {
+					st.Technology = best
+					st.Confidence = "medium"
+				}
 			}
 		} else if profileContains(p.Applications, candidate) && st.Technology == "" {
 			st.Technology = candidate
@@ -270,9 +301,20 @@ func (s *Store) ObserveTargetReality(target, candidate, cloud string, weight int
 			st.Cloud = cloud
 		}
 	}
-	st.LastSeen = time.Now()
+	st.LastSeen = now
+	changed := st.Technology != beforeTech || st.Confidence != beforeConf || st.Locked != beforeLocked || st.Cloud != beforeCloud
+	if changed {
+		st.Revision++
+		if st.Revision == 0 {
+			st.Revision = 1
+		}
+		st.UpdatedAt = now
+		if st.Locked && !beforeLocked && st.CommittedAt.IsZero() {
+			st.CommittedAt = now
+		}
+	}
 	s.realityStates[target] = st
-	if st.Technology != beforeTech || st.Confidence != beforeConf || st.Locked != beforeLocked || st.Cloud != beforeCloud {
+	if changed {
 		_ = s.persistTargetRealitiesLocked()
 	}
 	return s.resolveRealityLocked(target)

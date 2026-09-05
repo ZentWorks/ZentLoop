@@ -79,7 +79,8 @@ func canonicalObservedWebPath(raw string) string {
 func isWordPressStoryPath(p string) bool {
 	base := path.Base(p)
 	return isObservedWordPressREST(p) || isWordPressSurfaceFamily(p) || p == "/wp/" || p == "/wordpress/" || p == "/blog/" || p == "/blog/robots.txt" ||
-		base == "wp-config.php" || strings.HasPrefix(base, "wp-config.php.") || strings.Contains(p, "/wp-admin") || strings.Contains(p, "/wp-login") || p == "/xmlrpc.php"
+		base == "wp-config.php" || strings.HasPrefix(base, "wp-config.php.") || base == "wp-links-opml.php" || base == "wp-cron.php" || base == "wp-load.php" ||
+		strings.Contains(p, "/wp-admin") || strings.Contains(p, "/wp-login") || p == "/xmlrpc.php"
 }
 
 func isRailsStoryPath(p string) bool {

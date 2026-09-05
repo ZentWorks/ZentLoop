@@ -171,6 +171,12 @@ func claimFromUA(ua string) (string, string) {
 		return "yandex", "YandexBot"
 	case strings.Contains(l, "ccbot"):
 		return "commoncrawl", "CCBot"
+	case strings.Contains(l, "bytespider"):
+		return "bytedance", "Bytespider"
+	case strings.Contains(l, "grokbot"):
+		return "xai", "GrokBot"
+	case strings.Contains(l, "telegrambot"):
+		return "telegram", "TelegramBot"
 	}
 	return "", ""
 }

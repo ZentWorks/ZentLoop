@@ -74,6 +74,7 @@ type Store struct {
 	sshActorLastCommandAt map[string]time.Time
 	actorSSHUsers         map[string]map[string]struct{}
 	httpActorBotClaims    map[string]map[string]struct{}
+	httpSessionSequences  map[string][]string
 	intelEvents           []model.IntelSignal
 	intelEventFile        *os.File
 	health                model.HealthOverview
@@ -99,7 +100,7 @@ func newStoreState(dataDir string, retentionDays int) *Store {
 	return &Store{
 		sessions: make(map[string]*model.Session), fingerprints: make(map[string]string),
 		realtimeSubs: make(map[*realtimeSubscriber]struct{}), pathCounts: make(map[string]int64), dayCounts: make(map[string]int64), httpHourCounts: make(map[int64]map[string]int64), ipDailyActivity: make(map[string]map[int64]*model.IPActivityBucket), targetCounts: make(map[string]int64), requestHostStats: make(map[string]*rawHostStat), unknownPaths: make(map[string]*model.UnknownPath), probeStats: make(map[string]*model.ProbeStat), catchAllHosts: make(map[string]*model.CatchAllHost), integrationCounts: make(map[string]int64),
-		actors: make(map[string]*model.ActorProfile), actorTimeline: make(map[string][]model.ActorActivity), actorSessionLast: make(map[string]time.Time), actorFingerprints: make(map[string]int64), sshActorLastCommand: make(map[string]string), sshActorLastCommandAt: make(map[string]time.Time), actorSSHUsers: make(map[string]map[string]struct{}), httpActorBotClaims: make(map[string]map[string]struct{}),
+		actors: make(map[string]*model.ActorProfile), actorTimeline: make(map[string][]model.ActorActivity), actorSessionLast: make(map[string]time.Time), actorFingerprints: make(map[string]int64), sshActorLastCommand: make(map[string]string), sshActorLastCommandAt: make(map[string]time.Time), actorSSHUsers: make(map[string]map[string]struct{}), httpActorBotClaims: make(map[string]map[string]struct{}), httpSessionSequences: make(map[string][]string),
 		sshSessions: make(map[string]*model.SSHSession), sshUserCounts: make(map[string]int64), sshCommandCounts: make(map[string]int64), sshFamilyCounts: make(map[string]int64), sshCountryCounts: make(map[string]int64), sshClientCounts: make(map[string]int64), sshDayConnections: make(map[string]int64), sshDayAuth: make(map[string]int64), sshDayShells: make(map[string]int64), sshDayCommands: make(map[string]int64), sshHourCounts: make(map[int64]int64), sshHighlightStates: make(map[string]*sshHighlightState), sshHighlightHistory: make(map[string]model.SSHHighlight),
 		integrationPeers: make(map[string]*model.IntegrationPeer), integrationPersist: make(map[string]time.Time),
 		trustedManual:   make(map[string]model.TrustedDomain),
@@ -562,12 +563,18 @@ func (s *Store) WebSessionExport(id, version string) (model.WebSessionExport, bo
 			}
 		}
 	}
+	var reality *model.TargetRealityResolved
+	if target := strings.TrimSpace(detail.Session.Target); target != "" {
+		r := s.ResolveTargetReality(target)
+		reality = &r
+	}
 	return model.WebSessionExport{
-		ExportedAt:  time.Now().UTC(),
-		Version:     version,
-		Session:     detail.Session,
-		Events:      detail.Events,
-		AttackTrace: filtered,
+		ExportedAt:    time.Now().UTC(),
+		Version:       version,
+		Session:       detail.Session,
+		Events:        detail.Events,
+		AttackTrace:   filtered,
+		TargetReality: reality,
 	}, true
 }
 
@@ -612,6 +619,7 @@ func (s *Store) pruneSessionsLocked(target int) {
 	for i := 0; i < remove; i++ {
 		dead[rows[i].id] = struct{}{}
 		delete(s.sessions, rows[i].id)
+		delete(s.httpSessionSequences, rows[i].id)
 	}
 	for fp, id := range s.fingerprints {
 		if _, ok := dead[id]; ok {

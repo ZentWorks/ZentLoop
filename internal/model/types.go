@@ -90,11 +90,12 @@ type SessionDetail struct {
 }
 
 type WebSessionExport struct {
-	ExportedAt  time.Time     `json:"exported_at"`
-	Version     string        `json:"version"`
-	Session     Session       `json:"session"`
-	Events      []Event       `json:"events"`
-	AttackTrace []AttackTrace `json:"attack_trace"`
+	ExportedAt    time.Time              `json:"exported_at"`
+	Version       string                 `json:"version"`
+	Session       Session                `json:"session"`
+	Events        []Event                `json:"events"`
+	AttackTrace   []AttackTrace          `json:"attack_trace"`
+	TargetReality *TargetRealityResolved `json:"target_reality,omitempty"`
 }
 
 type Event struct {
@@ -707,25 +708,29 @@ type TargetRealityProfile struct {
 }
 
 type TargetRealityState struct {
-	Target     string         `json:"target"`
-	Technology string         `json:"technology,omitempty"`
-	Confidence string         `json:"confidence,omitempty"`
-	Locked     bool           `json:"locked"`
-	Cloud      string         `json:"cloud,omitempty"`
-	Evidence   map[string]int `json:"evidence,omitempty"`
-	LastSeen   time.Time      `json:"last_seen,omitempty"`
+	Target      string         `json:"target"`
+	Technology  string         `json:"technology,omitempty"`
+	Confidence  string         `json:"confidence,omitempty"`
+	Locked      bool           `json:"locked"`
+	Cloud       string         `json:"cloud,omitempty"`
+	Evidence    map[string]int `json:"evidence,omitempty"`
+	Revision    uint64         `json:"revision,omitempty"`
+	CommittedAt time.Time      `json:"committed_at,omitempty"`
+	UpdatedAt   time.Time      `json:"updated_at,omitempty"`
+	LastSeen    time.Time      `json:"last_seen,omitempty"`
 }
 
 type TargetRealityResolved struct {
-	Target         string             `json:"target"`
-	Mode           string             `json:"mode"`
-	Applications   []string           `json:"applications,omitempty"`
-	Infrastructure []string           `json:"infrastructure,omitempty"`
-	Artifacts      []string           `json:"artifacts,omitempty"`
-	State          TargetRealityState `json:"state"`
-	Source         string             `json:"source"`
-	Coherent       bool               `json:"coherent"`
-	Warnings       []string           `json:"warnings,omitempty"`
+	Target            string             `json:"target"`
+	Mode              string             `json:"mode"`
+	Applications      []string           `json:"applications,omitempty"`
+	Infrastructure    []string           `json:"infrastructure,omitempty"`
+	Artifacts         []string           `json:"artifacts,omitempty"`
+	ApplicationStates map[string]string  `json:"application_states,omitempty"`
+	State             TargetRealityState `json:"state"`
+	Source            string             `json:"source"`
+	Coherent          bool               `json:"coherent"`
+	Warnings          []string           `json:"warnings,omitempty"`
 }
 
 type TargetRealitySettings struct {
