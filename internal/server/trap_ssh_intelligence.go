@@ -264,10 +264,10 @@ func (w *virtualSSHWorld) sshInstallerSequenceFingerprint(result virtualSSHResul
 
 func recordSSHIntelligence(st *store.Store, base model.SSHEvent, command string, canaries []string) {
 	tool, technique := commandTechnique(command)
-	urls := intelURLPattern.FindAllString(command, 12)
+	urls := extractIntelURLs(command, 12)
 	seenURLs := make(map[string]struct{})
 	for _, raw := range urls {
-		raw = strings.TrimRight(raw, ").,;]")
+		raw = trimIntelURLPunctuation(raw)
 		safeURL, host, filename, ok := sanitizeIntelURL(raw)
 		if !ok {
 			continue

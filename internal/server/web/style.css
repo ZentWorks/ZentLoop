@@ -176,3 +176,17 @@ footer .footer-version{display:flex;align-items:center;gap:8px}.update-badge{dis
 
 /* 0.3.12 settings language/select polish */
 .zent-select{position:relative;display:block;min-width:0}.zent-select select{appearance:none;-webkit-appearance:none;width:100%;min-height:38px;padding:8px 34px 8px 11px;border:1px solid #334650;border-radius:7px;background:linear-gradient(180deg,#111a1f,#0c1317);color:#dce5e9;font:10px ui-monospace,SFMono-Regular,Consolas,monospace;letter-spacing:.01em;box-shadow:inset 0 1px 0 rgba(255,255,255,.025);cursor:pointer;color-scheme:dark;transition:border-color .14s ease,background .14s ease,box-shadow .14s ease}.zent-select option{background:#10171c;color:#dce5e9}.zent-select::after{content:"";position:absolute;right:12px;top:50%;width:7px;height:7px;border-right:2px solid #67d8f5;border-bottom:2px solid #67d8f5;transform:translateY(-67%) rotate(45deg);pointer-events:none;opacity:.9}.zent-select:hover select{border-color:#45616d;background:linear-gradient(180deg,#142027,#0e171c)}.zent-select select:focus{outline:none;border-color:var(--cyan);box-shadow:0 0 0 2px rgba(72,199,235,.12),inset 0 1px 0 rgba(255,255,255,.03)}.zent-select select:disabled{opacity:.55;cursor:not-allowed}.zent-select:has(select:disabled)::after{opacity:.35}.reality-editor-head .zent-select{min-width:170px}.reality-add-grid .zent-select{width:100%}@media(max-width:520px){.zent-select select{font-size:16px;min-height:42px}}
+
+/* 0.3.15 SSH Live Feed card normalization: one layout for LIVE and LEFT. */
+.live-page-ssh-feed .ssh-live-card.compact{display:flex;flex-direction:column;min-height:112px;overflow:hidden}
+.live-page-ssh-feed .ssh-live-card-head.compact{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"main actions" "sub actions";width:100%;box-sizing:border-box;align-items:center}
+.live-page-ssh-feed .ssh-live-meta-main{grid-template-columns:minmax(92px,140px) 30px minmax(48px,1fr);width:100%}
+.live-page-ssh-feed .ssh-live-card-actions{align-self:center;justify-self:end}
+.live-page-ssh-feed .ssh-live-meta-sub{min-height:14px}
+.live-page-ssh-feed .ssh-live-card-events.compact{display:block;width:100%;max-height:none;overflow:hidden;box-sizing:border-box}
+.live-page-ssh-feed .ssh-live-card-events.compact>div{display:grid;grid-template-columns:58px 64px minmax(0,1fr);width:100%;box-sizing:border-box;min-height:19px}
+.live-page-ssh-feed .ssh-live-card-events.compact>div:last-child{border-bottom:0}
+.live-page-ssh-feed .ssh-live-card-events.compact small{display:block;padding:6px 0;color:var(--muted);font:8px ui-monospace,SFMono-Regular,Consolas,monospace}
+.live-page-ssh-feed .ssh-live-card.left{opacity:.82}
+@media(max-width:720px){.live-page-ssh-feed .ssh-live-meta-main{grid-template-columns:minmax(86px,130px) 28px minmax(42px,1fr)}.live-page-ssh-feed .ssh-live-card-events.compact>div{grid-template-columns:54px 58px minmax(0,1fr)}}
+@media(max-width:430px){.live-page-ssh-feed .ssh-live-card-head.compact{grid-template-columns:minmax(0,1fr) auto}.live-page-ssh-feed .ssh-live-meta-main{grid-template-columns:minmax(82px,1fr) 28px}.live-page-ssh-feed .ssh-feed-user{display:none}.live-page-ssh-feed .ssh-live-card-events.compact>div{grid-template-columns:52px 54px minmax(0,1fr)}}

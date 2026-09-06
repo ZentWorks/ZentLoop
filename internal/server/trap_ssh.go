@@ -600,7 +600,7 @@ func (s *TrapSSH) recordSSHCommand(base model.SSHEvent, eventType, command strin
 		ClientVersion: base.ClientVersion, Username: base.Username, Type: eventType, Command: sanitizeLogText(command, maxSSHLoggedCommandBytes), CommandName: result.CommandName,
 		CommandFamily: result.Family, CommandStages: analysis.Stages, CommandIntent: analysis.Intent, CommandTarget: analysis.Target, CWD: world.cwd, Output: sanitizeLogText(result.Output, 2048), Depth: result.Depth, Loop: world.loop,
 		Frustration: world.frustration, Persona: result.Persona, RiskScore: result.Risk, Classification: model.ClassHostile, Actor: actor, Message: result.Message,
-		CanaryTouches: canaries, Fingerprint: fingerprint,
+		CanaryTouches: canaries, Fingerprint: fingerprint, SecondaryFingerprints: secondarySSHFingerprints(command),
 		StdinBytes: result.StdinBytes, StdinSHA256: result.StdinSHA256, StdinKind: result.StdinKind,
 		PayloadStage: result.PayloadStage, PayloadPath: result.PayloadPath, PayloadRelation: result.PayloadRelation,
 	}
@@ -609,6 +609,9 @@ func (s *TrapSSH) recordSSHCommand(base model.SSHEvent, eventType, command strin
 	}
 	recordSSHIntelligence(s.store, base, command, canaries)
 	lowCommand := strings.ToLower(command)
+	if looksLikeSSHAntiForensics(lowCommand) {
+		_ = s.store.AddIntelSignal(model.IntelSignal{ID: newID(6), At: time.Now(), IP: base.IP, Protocol: "ssh", SessionID: base.SessionID, Kind: "evasion", Technique: "anti-forensics", Summary: "SSH history/log cleanup and anti-forensics behavior observed"})
+	}
 	if (strings.Contains(lowCommand, "sh clean.sh") || strings.Contains(lowCommand, "sh setup.sh")) && strings.Contains(lowCommand, "rm -") {
 		_ = s.store.AddIntelSignal(model.IntelSignal{ID: newID(6), At: time.Now(), IP: base.IP, Protocol: "ssh", SessionID: base.SessionID, Kind: "payload", Technique: "script-bootstrap-lifecycle", Summary: "Helper scripts executed and removed before follow-on persistence"})
 	}

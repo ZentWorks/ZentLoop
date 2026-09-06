@@ -289,8 +289,11 @@ func buildDockerAPIFamily(r *http.Request, p string, ss *model.Session, a, bodyS
 }
 
 func isPHPUnitEvalFamily(p string) bool {
-	p = strings.ToLower(p)
-	return strings.HasSuffix(p, "/phpunit/util/php/eval-stdin.php") || strings.HasSuffix(p, "/phpunit/src/util/php/eval-stdin.php")
+	p = strings.ToLower(canonicalObservedWebPath(p))
+	// ZentLoop's current PHP reality exposes PHPUnit 5.6.2. Keep the endpoint
+	// layout version-coherent instead of making every historical wordlist
+	// variant resolve on the same installation.
+	return strings.HasSuffix(p, "/phpunit/phpunit/src/util/php/eval-stdin.php")
 }
 
 func buildPHPUnitEvalFamily(r *http.Request, ss *model.Session, a string) Response {

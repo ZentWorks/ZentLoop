@@ -428,6 +428,15 @@ func (s *Store) applyActorSSHEventLocked(e model.SSHEvent) {
 	if addFingerprint(a, fp) {
 		s.actorFingerprints[fp]++
 	}
+	for _, sideFP := range e.SecondaryFingerprints {
+		sideFP = strings.TrimSpace(sideFP)
+		if sideFP == "" || sideFP == fp {
+			continue
+		}
+		if addFingerprint(a, sideFP) {
+			s.actorFingerprints[sideFP]++
+		}
+	}
 	if payloadFP := sshPayloadHashFingerprint(e); payloadFP != "" {
 		if addFingerprint(a, payloadFP) {
 			s.actorFingerprints[payloadFP]++

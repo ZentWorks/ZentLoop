@@ -227,6 +227,10 @@ func (d *Deception) BuildWithBody(r *http.Request, ss *model.Session, bodySample
 		resp.Depth = max(depth, 1)
 		gitPath := p[strings.Index(p, "/.git"):]
 		switch gitPath {
+		case "/.git", "/.git/":
+			resp.Status = http.StatusForbidden
+			resp.Label = "fake-git-directory-forbidden"
+			resp.Body = []byte("403 Forbidden\n")
 		case "/.git/config", "/.git/config/":
 			resp.Body = []byte(fmt.Sprintf("[core]\n\trepositoryformatversion = 0\n\tbare = false\n[remote \"origin\"]\n\turl = https://git.internal.local/platform/web-%s.git\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n[branch \"main\"]\n\tremote = origin\n\tmerge = refs/heads/main\n", a))
 		case "/.git/head":

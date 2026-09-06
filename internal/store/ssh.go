@@ -430,40 +430,21 @@ func (s *Store) SSHSessionDetail(id string, limit int) (model.SSHSessionDetail, 
 }
 
 func (s *Store) SSHSessionExport(id, version string) (model.SSHSessionExport, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	ss, ok := s.sshSessions[id]
+	detail, actor, ok := s.sshSessionEvidence(id, 0)
 	if !ok {
 		return model.SSHSessionExport{}, false
 	}
-	events := make([]model.SSHEvent, 0, 128)
-	for _, e := range s.sshEvents {
-		if e.SessionID == id {
-			events = append(events, e)
-		}
-	}
-	var actor *model.ActorProfile
-	if a := s.actors[actorID(ss.IP)]; a != nil {
-		c := cloneActor(a)
-		actor = &c
-	}
-	intel := make([]model.IntelSignal, 0, 16)
-	for _, e := range s.intelEvents {
-		if e.SessionID == id {
-			intel = append(intel, e)
-		}
-	}
-	traces := s.attackTracesLocked(ss.IP)
-	filtered := make([]model.AttackTrace, 0, len(traces))
-	for _, trace := range traces {
-		for _, step := range trace.Steps {
-			if step.SessionID == id {
-				filtered = append(filtered, trace)
-				break
-			}
-		}
-	}
-	return model.SSHSessionExport{ExportedAt: time.Now().UTC(), Version: version, Session: cloneSSHSession(ss), Events: events, Actor: actor, Intel: intel, AttackTrace: filtered}, true
+	return model.SSHSessionExport{
+		ExportedAt:       time.Now().UTC(),
+		Version:          version,
+		Session:          detail.Session,
+		Events:           detail.Events,
+		Actor:            actor,
+		Intel:            detail.Intel,
+		AttackTrace:      detail.AttackTrace,
+		Highlight:        detail.Highlight,
+		TranscriptStatus: detail.TranscriptStatus,
+	}, true
 }
 
 func (s *Store) SSHOverviewRange(enabled bool, from, to time.Time) model.SSHOverview {

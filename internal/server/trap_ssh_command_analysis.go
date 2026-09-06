@@ -494,3 +494,25 @@ func isShellSyntaxWord(v string) bool {
 	}
 	return false
 }
+func looksLikeSSHAntiForensics(low string) bool {
+	low = strings.ToLower(strings.TrimSpace(low))
+	if low == "" {
+		return false
+	}
+	markers := 0
+	for _, needle := range []string{"history -c", ".bash_history", "unset histfile", "histfile=/dev/null", "shred ", "truncate ", ">/dev/null 2>&1"} {
+		if strings.Contains(low, needle) {
+			markers++
+		}
+	}
+	// A direct history clear is already strong evidence; otherwise require two
+	// cleanup/evasion markers to avoid labeling ordinary redirects.
+	return strings.Contains(low, "history -c") || markers >= 2
+}
+
+func secondarySSHFingerprints(command string) []string {
+	if looksLikeSSHAntiForensics(command) {
+		return []string{"ssh:anti-forensics"}
+	}
+	return nil
+}

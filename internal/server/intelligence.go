@@ -14,6 +14,44 @@ import (
 var intelURLPattern = regexp.MustCompile(`(?i)https?://[^\s'"<>]+`)
 var intelSensitiveJSONPattern = regexp.MustCompile(`(?i)("(?:password|passwd|pwd|secret|token|access_token|refresh_token|otp|code|authorization)"\s*:\s*)"(?:\\.|[^"\\])*"`)
 
+var intelShellURLTemplates = []struct {
+	raw   string
+	token string
+}{
+	{raw: "$(uname -m)", token: "__ZL_UNAME_M__"},
+	{raw: "$(/bin/uname -m)", token: "__ZL_BIN_UNAME_M__"},
+	{raw: "$(/usr/bin/uname -m)", token: "__ZL_USR_UNAME_M__"},
+}
+
+func maskIntelURLTemplates(v string) string {
+	for _, tpl := range intelShellURLTemplates {
+		v = strings.ReplaceAll(v, tpl.raw, tpl.token)
+	}
+	return v
+}
+
+func unmaskIntelURLTemplates(v string) string {
+	for _, tpl := range intelShellURLTemplates {
+		v = strings.ReplaceAll(v, tpl.token, tpl.raw)
+	}
+	return v
+}
+
+func extractIntelURLs(v string, limit int) []string {
+	masked := maskIntelURLTemplates(v)
+	rows := intelURLPattern.FindAllString(masked, limit)
+	for i := range rows {
+		rows[i] = unmaskIntelURLTemplates(rows[i])
+	}
+	return rows
+}
+
+func trimIntelURLPunctuation(v string) string {
+	masked := maskIntelURLTemplates(v)
+	masked = strings.TrimRight(masked, ").,;]")
+	return unmaskIntelURLTemplates(masked)
+}
+
 func sensitiveIntelKey(key string) bool {
 	key = strings.ToLower(strings.TrimSpace(key))
 	for _, needle := range []string{"password", "passwd", "pwd", "secret", "token", "authorization", "credential", "otp", "mfa", "code"} {
@@ -55,17 +93,19 @@ func safeHTTPIntelText(rawQuery, body string) string {
 }
 
 func sanitizeIntelURL(raw string) (safe, host, filename string, ok bool) {
-	u, err := url.Parse(strings.TrimSpace(raw))
+	raw = strings.TrimSpace(raw)
+	masked := maskIntelURLTemplates(raw)
+	u, err := url.Parse(masked)
 	if err != nil || u.Hostname() == "" || (u.Scheme != "http" && u.Scheme != "https") {
 		return "", "", "", false
 	}
 	host = u.Hostname()
-	filename = path.Base(u.Path)
+	filename = unmaskIntelURLTemplates(path.Base(u.Path))
 	u.User = nil
 	u.RawQuery = ""
 	u.ForceQuery = false
 	u.Fragment = ""
-	return u.String(), host, filename, true
+	return unmaskIntelURLTemplates(u.String()), host, filename, true
 }
 
 func commandTechnique(command string) (tool, technique string) {
@@ -95,8 +135,8 @@ func (s *TrapServer) recordHTTPIntelligence(ip, sessionID, rawQuery, body string
 	rawForCanaries := rawQuery + "\n" + body
 	joined := safeHTTPIntelText(rawQuery, body)
 	seen := map[string]bool{}
-	for _, raw := range intelURLPattern.FindAllString(joined, 6) {
-		raw = strings.TrimRight(raw, ").,;]")
+	for _, raw := range extractIntelURLs(joined, 6) {
+		raw = trimIntelURLPunctuation(raw)
 		if seen[raw] {
 			continue
 		}

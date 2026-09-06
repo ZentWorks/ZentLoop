@@ -430,6 +430,7 @@ type IPIntelligenceSummary struct {
 	SSHAuthAccepted           int64     `json:"ssh_auth_accepted"`
 	SSHAuthRejected           int64     `json:"ssh_auth_rejected"`
 	SSHUniqueUsers            int       `json:"ssh_unique_users"`
+	SSHRetainedUniqueUsers    int       `json:"ssh_retained_unique_users,omitempty"`
 	SSHUniqueClients          int       `json:"ssh_unique_clients"`
 	SSHCommands               int64     `json:"ssh_commands"`
 	SSHPeakConcurrent         int       `json:"ssh_peak_concurrent"`
@@ -572,46 +573,47 @@ type SSHSession struct {
 }
 
 type SSHEvent struct {
-	ID               string         `json:"id"`
-	At               time.Time      `json:"at"`
-	SessionID        string         `json:"session_id"`
-	IP               string         `json:"ip"`
-	Country          string         `json:"country,omitempty"`
-	CountrySource    string         `json:"country_source,omitempty"`
-	ClientVersion    string         `json:"client_version,omitempty"`
-	Username         string         `json:"username,omitempty"`
-	Type             string         `json:"type"`
-	AuthMethod       string         `json:"auth_method,omitempty"`
-	AuthAccepted     bool           `json:"auth_accepted,omitempty"`
-	PasswordSupplied bool           `json:"password_supplied,omitempty"`
-	PasswordLength   int            `json:"password_length,omitempty"`
-	KeyFingerprint   string         `json:"key_fingerprint,omitempty"`
-	Command          string         `json:"command,omitempty"`
-	CommandName      string         `json:"command_name,omitempty"`
-	CommandFamily    string         `json:"command_family,omitempty"`
-	CommandStages    []string       `json:"command_stages,omitempty"`
-	CommandIntent    string         `json:"command_intent,omitempty"`
-	CommandTarget    string         `json:"command_target,omitempty"`
-	CWD              string         `json:"cwd,omitempty"`
-	Output           string         `json:"output,omitempty"`
-	Depth            int            `json:"depth,omitempty"`
-	Loop             int            `json:"loop,omitempty"`
-	Frustration      int            `json:"frustration,omitempty"`
-	Persona          string         `json:"persona,omitempty"`
-	RiskScore        int            `json:"risk_score,omitempty"`
-	Classification   Classification `json:"classification,omitempty"`
-	Actor            ActorType      `json:"actor,omitempty"`
-	Message          string         `json:"message,omitempty"`
-	CanaryTouches    []string       `json:"canary_touches,omitempty"`
-	Fingerprint      string         `json:"fingerprint,omitempty"`
-	StdinBytes       int            `json:"stdin_bytes,omitempty"`
-	StdinSHA256      string         `json:"stdin_sha256,omitempty"`
-	StdinKind        string         `json:"stdin_kind,omitempty"`
-	PayloadStage     string         `json:"payload_stage,omitempty"`
-	PayloadPath      string         `json:"payload_path,omitempty"`
-	PayloadRelation  string         `json:"payload_relation,omitempty"`
-	NetworkTarget    string         `json:"network_target,omitempty"`
-	NetworkPort      int            `json:"network_port,omitempty"`
+	ID                    string         `json:"id"`
+	At                    time.Time      `json:"at"`
+	SessionID             string         `json:"session_id"`
+	IP                    string         `json:"ip"`
+	Country               string         `json:"country,omitempty"`
+	CountrySource         string         `json:"country_source,omitempty"`
+	ClientVersion         string         `json:"client_version,omitempty"`
+	Username              string         `json:"username,omitempty"`
+	Type                  string         `json:"type"`
+	AuthMethod            string         `json:"auth_method,omitempty"`
+	AuthAccepted          bool           `json:"auth_accepted,omitempty"`
+	PasswordSupplied      bool           `json:"password_supplied,omitempty"`
+	PasswordLength        int            `json:"password_length,omitempty"`
+	KeyFingerprint        string         `json:"key_fingerprint,omitempty"`
+	Command               string         `json:"command,omitempty"`
+	CommandName           string         `json:"command_name,omitempty"`
+	CommandFamily         string         `json:"command_family,omitempty"`
+	CommandStages         []string       `json:"command_stages,omitempty"`
+	CommandIntent         string         `json:"command_intent,omitempty"`
+	CommandTarget         string         `json:"command_target,omitempty"`
+	CWD                   string         `json:"cwd,omitempty"`
+	Output                string         `json:"output,omitempty"`
+	Depth                 int            `json:"depth,omitempty"`
+	Loop                  int            `json:"loop,omitempty"`
+	Frustration           int            `json:"frustration,omitempty"`
+	Persona               string         `json:"persona,omitempty"`
+	RiskScore             int            `json:"risk_score,omitempty"`
+	Classification        Classification `json:"classification,omitempty"`
+	Actor                 ActorType      `json:"actor,omitempty"`
+	Message               string         `json:"message,omitempty"`
+	CanaryTouches         []string       `json:"canary_touches,omitempty"`
+	Fingerprint           string         `json:"fingerprint,omitempty"`
+	SecondaryFingerprints []string       `json:"secondary_fingerprints,omitempty"`
+	StdinBytes            int            `json:"stdin_bytes,omitempty"`
+	StdinSHA256           string         `json:"stdin_sha256,omitempty"`
+	StdinKind             string         `json:"stdin_kind,omitempty"`
+	PayloadStage          string         `json:"payload_stage,omitempty"`
+	PayloadPath           string         `json:"payload_path,omitempty"`
+	PayloadRelation       string         `json:"payload_relation,omitempty"`
+	NetworkTarget         string         `json:"network_target,omitempty"`
+	NetworkPort           int            `json:"network_port,omitempty"`
 }
 
 type SSHOverview struct {

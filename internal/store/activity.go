@@ -44,7 +44,12 @@ func (s *Store) countSSHActivityLocked(e model.SSHEvent) {
 		s.sshHourCounts = make(map[int64]int64)
 	}
 	s.sshHourCounts[hourKey(e.At)]++
-	s.countIPDailyActivityLocked(e.IP, e.At, false)
+	// IP Intelligence daily SSH buckets represent connections, not every SSH
+	// auth/request/command event. Keeping this semantic distinct prevents one
+	// busy session from appearing as hundreds of daily "SSH" connections.
+	if strings.EqualFold(strings.TrimSpace(e.Type), "connect") {
+		s.countIPDailyActivityLocked(e.IP, e.At, false)
+	}
 }
 
 func (s *Store) countIPDailyActivityLocked(ip string, at time.Time, http bool) {

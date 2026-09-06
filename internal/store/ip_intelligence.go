@@ -372,7 +372,11 @@ func (s *Store) IPIntelligence(ip, version string) (model.IPIntelligence, bool) 
 
 	out.Summary.HTTPUniquePaths = len(pathCounts)
 	out.Summary.HTTPUniqueTargets = len(targetCounts)
-	out.Summary.SSHUniqueUsers = len(targetUsers)
+	// Actor counters are durable/all-observed. The retained detail window can be
+	// smaller after pruning, so do not overwrite the durable semantic with a
+	// window-local count under the same field name.
+	out.Summary.SSHUniqueUsers = actor.SSHUniqueUsers
+	out.Summary.SSHRetainedUniqueUsers = len(targetUsers)
 	out.Summary.SSHUniqueClients = len(targetClients)
 	for _, n := range httpMinute {
 		if n > out.Summary.HTTPPeakRequestsPerMinute {
