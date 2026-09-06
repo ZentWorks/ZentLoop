@@ -170,6 +170,24 @@ func (s *TrapSSH) releaseIP(ip string) {
 	s.perIP[ip]--
 }
 
+func (s *TrapSSH) sshPhaseIdle(capSeconds int) time.Duration {
+	seconds := s.cfg.SSHIdleSeconds
+	if seconds <= 0 {
+		seconds = capSeconds
+	}
+	if capSeconds > 0 && seconds > capSeconds {
+		seconds = capSeconds
+	}
+	if seconds < 15 {
+		seconds = 15
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+func (s *TrapSSH) armSSHReadIdle(conn net.Conn, capSeconds int) {
+	_ = conn.SetReadDeadline(time.Now().Add(s.sshPhaseIdle(capSeconds)))
+}
+
 func (s *TrapSSH) handleConn(conn net.Conn, auth sshAuthState) {
 	defer conn.Close()
 	// Keep half-open/slow handshakes bounded without cutting off realistic human
@@ -188,10 +206,7 @@ func (s *TrapSSH) handleConn(conn net.Conn, auth sshAuthState) {
 		attempt := auth.nextCredentialAttempt("password")
 		user := cleanSSHField(meta.User(), 64)
 		client := cleanSSHField(string(meta.ClientVersion()), 128)
-		accept := shouldAcceptTrapPassword(auth.ip, user, password, attempt, s.cfg.SSHMaxAuthTries)
-		if !accept && shouldAcceptRecurringProbe(s.store.SSHRecurrence(auth.ip, time.Now()), auth.ip, user, password, attempt) {
-			accept = true
-		}
+		accept := s.shouldAcceptTrapCredential(auth.ip, user, password, attempt)
 		s.recordSSHAuth(auth, client, user, "password", accept, len(password), "")
 		if accept {
 			return nil, nil
@@ -216,10 +231,7 @@ func (s *TrapSSH) handleConn(conn net.Conn, auth sshAuthState) {
 			return nil, errors.New("permission denied")
 		}
 		password := []byte(answers[0])
-		accept := shouldAcceptTrapPassword(auth.ip, user, password, attempt, s.cfg.SSHMaxAuthTries)
-		if !accept && shouldAcceptRecurringProbe(s.store.SSHRecurrence(auth.ip, time.Now()), auth.ip, user, password, attempt) {
-			accept = true
-		}
+		accept := s.shouldAcceptTrapCredential(auth.ip, user, password, attempt)
 		s.recordSSHAuth(auth, client, user, "keyboard-interactive", accept, len(password), "")
 		for i := range answers {
 			answers[i] = ""
@@ -238,6 +250,10 @@ func (s *TrapSSH) handleConn(conn net.Conn, auth sshAuthState) {
 	}
 	defer serverConn.Close()
 	_ = conn.SetDeadline(time.Time{})
+	// An authenticated connection that never opens a useful channel should not
+	// linger for the full session budget. Real SSH infrastructure commonly has
+	// shorter idle controls at this phase.
+	s.armSSHReadIdle(conn, 35)
 	maxSessionTimer := time.AfterFunc(time.Duration(s.cfg.SSHMaxSessionMinutes)*time.Minute, func() { _ = conn.Close() })
 	defer maxSessionTimer.Stop()
 	client := cleanSSHField(string(serverConn.ClientVersion()), 128)
@@ -275,6 +291,7 @@ func (s *TrapSSH) handleConn(conn net.Conn, auth sshAuthState) {
 		if err != nil {
 			continue
 		}
+		s.armSSHReadIdle(conn, 90)
 		go s.handleTrapSSHSession(conn, channel, reqs, base, shared)
 	}
 	s.recordSSHEvent(base, "disconnect", "", "", "", "SSH connection closed", 70, 0, 0, 0, actor)
@@ -364,6 +381,7 @@ func (s *TrapSSH) handleTrapSSHSession(conn net.Conn, channel ssh.Channel, reque
 			if !ok {
 				return
 			}
+			s.armSSHReadIdle(conn, 90)
 			switch req.Type {
 			case "pty-req":
 				var pty struct {
@@ -424,6 +442,7 @@ func (s *TrapSSH) handleTrapSSHSession(conn net.Conn, channel ssh.Channel, reque
 				command := cleanSSHCommand(payload.Command, maxSSHExecCommandBytes)
 				world.addHistory(command)
 				if isVirtualSCPSink(command) {
+					s.armSSHReadIdle(conn, 180)
 					result := withVirtualSSHSharedLock(shared, func() virtualSSHResult {
 						return world.runVirtualSCPSink(channel, command)
 					})
@@ -464,6 +483,7 @@ func (s *TrapSSH) handleTrapSSHSession(conn net.Conn, channel ssh.Channel, reque
 			case "subsystem":
 				var payload struct{ Name string }
 				if err := ssh.Unmarshal(req.Payload, &payload); err == nil && strings.EqualFold(strings.TrimSpace(payload.Name), "sftp") {
+					s.armSSHReadIdle(conn, 180)
 					replySSHRequest(req, true)
 					s.recordSSHEvent(base, "request", "subsystem", "file-transfer", world.cwd, "virtual SFTP subsystem opened", 88, 5, 0, 0, classifySSHActor(base.ClientVersion, false))
 					s.runVirtualSFTP(channel, base, world)
@@ -487,10 +507,10 @@ func (s *TrapSSH) runVirtualSSHShell(conn net.Conn, channel ssh.Channel, base mo
 	_, _ = fmt.Fprint(channel, world.Banner())
 	reader := newVirtualSSHLineReader(channel, world)
 	reader.SetReadActivity(func() {
-		_ = conn.SetReadDeadline(time.Now().Add(time.Duration(s.cfg.SSHIdleSeconds) * time.Second))
+		s.armSSHReadIdle(conn, 90)
 	})
 	for {
-		_ = conn.SetReadDeadline(time.Now().Add(time.Duration(s.cfg.SSHIdleSeconds) * time.Second))
+		s.armSSHReadIdle(conn, 90)
 		prompt := world.Prompt()
 		_, _ = fmt.Fprint(channel, prompt)
 		line, err := reader.ReadLine(channel, prompt, 2048)
@@ -583,6 +603,12 @@ func (s *TrapSSH) recordSSHAuth(auth sshAuthState, client, user, method string, 
 	e := model.SSHEvent{ID: newID(6), At: time.Now(), SessionID: base.SessionID, IP: base.IP, Country: base.Country, CountrySource: base.CountrySource, ClientVersion: client, Username: user, Type: "auth", AuthMethod: method, AuthAccepted: accepted, PasswordSupplied: passwordLen > 0, PasswordLength: passwordLen, KeyFingerprint: fingerprint, RiskScore: risk, Classification: model.ClassHostile, Actor: classifySSHActor(client, false), Message: message}
 	if err := s.store.AddSSHEvent(e); err != nil {
 		log.Printf("SSH event store: %v", err)
+	}
+	if accepted {
+		profile := s.store.SSHAuthProfile(base.IP)
+		if len(profile.ActiveAcceptedUsers) >= 2 {
+			_ = s.store.AddIntelSignal(model.IntelSignal{ID: newID(6), At: time.Now(), IP: base.IP, Protocol: "ssh", SessionID: base.SessionID, Kind: "credential", Technique: "parallel-account-validation", Summary: "Parallel SSH account validation with multiple simultaneously accepted usernames observed"})
+		}
 	}
 }
 

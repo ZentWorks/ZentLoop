@@ -534,11 +534,26 @@ func isManagementSurfaceFamily(p string) bool {
 	return false
 }
 
-func buildManagementSurfaceFamily(p string, ss *model.Session, a, b string) Response {
-	if strings.Contains(p, "login") || p == "/signin" || p == "/admin" || p == "/console" {
-		return Response{Status: 200, ContentType: "text/html; charset=utf-8", Label: "fake-management-surface", Depth: max(ss.Depth, 2), Body: []byte(loginHTML("Operations Console", "/auth/session/"+a, "administrator", "Sign in"))}
+func managementSurfaceSelection(ss *model.Session) (loginAlias, workspace string) {
+	target := strings.TrimSpace(ss.Target)
+	if target == "" {
+		target = strings.TrimSpace(ss.RequestHost)
 	}
-	return Response{Status: 200, ContentType: "text/html; charset=utf-8", Label: "fake-management-surface", Depth: max(ss.Depth, 2), Body: []byte(managementHTML("Operations Workspace", []linkItem{{"System status", "/manage/status/" + a}, {"Configuration", "/config/export/" + b + ".cfg"}, {"Sign in", "/login"}}))}
+	if target == "" {
+		target = strings.TrimSpace(ss.IP)
+	}
+	sum := sha256.Sum256([]byte("management|" + strings.ToLower(target)))
+	loginAliases := []string{"/auth/login", "/signin", "/user/login"}
+	workspaces := []string{"/admin", "/dashboard", "/portal", "/app", "/console", "/workspace", "/manage", "/settings"}
+	return loginAliases[int(sum[0])%len(loginAliases)], workspaces[int(sum[1])%len(workspaces)]
+}
+
+func buildManagementSurfaceFamily(p string, ss *model.Session, a, b string) Response {
+	loginAlias, workspace := managementSurfaceSelection(ss)
+	if p == loginAlias || p == workspace {
+		return Response{Status: http.StatusFound, ContentType: "text/html; charset=utf-8", Headers: map[string]string{"Location": "/login"}, Label: "fake-management-redirect", Depth: max(ss.Depth, 2), Body: []byte("<html><body>Redirecting to sign in...</body></html>")}
+	}
+	return Response{Status: http.StatusNotFound, ContentType: "text/plain; charset=utf-8", Label: "management-surface-miss", Depth: max(ss.Depth, 1), Body: []byte("Not Found\n")}
 }
 
 func isWordPressSurfaceFamily(p string) bool {

@@ -22,7 +22,7 @@ import (
 	"zentloop/internal/tui"
 )
 
-const version = "0.3.15"
+const version = "0.3.16"
 
 func main() {
 	if filepath.Base(os.Args[0]) == "support" {

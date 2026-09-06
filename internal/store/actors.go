@@ -402,6 +402,23 @@ func (s *Store) applyActorSSHEventLocked(e model.SSHEvent) {
 				s.actorFingerprints["ssh:credential-spray"]++
 			}
 		}
+		if e.AuthAccepted {
+			activeUsers := map[string]struct{}{}
+			for _, ss := range s.sshSessions {
+				if ss == nil || ss.IP != e.IP || !ss.Active || !ss.AuthAccepted {
+					continue
+				}
+				if u := strings.ToLower(strings.TrimSpace(ss.Username)); u != "" {
+					activeUsers[u] = struct{}{}
+				}
+			}
+			if len(activeUsers) >= 2 {
+				a.Actor = model.ActorAutomated
+				if addFingerprint(a, "ssh:parallel-account-validation") {
+					s.actorFingerprints["ssh:parallel-account-validation"]++
+				}
+			}
+		}
 	}
 
 	if e.Type == "command" || e.Type == "exec" {

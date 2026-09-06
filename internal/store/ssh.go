@@ -565,3 +565,62 @@ func (s *Store) pruneSSHSessionsLocked(target int) {
 		delete(s.sshHighlightStates, id)
 	}
 }
+
+// SSHAuthProfile returns bounded actor/session context for the SSH deception
+// acceptance policy. It intentionally exposes usernames and counters only;
+// ZentLoop never retains plaintext passwords for this purpose.
+type SSHAuthProfile struct {
+	UniqueUsers         int
+	AuthAccepted        int64
+	AuthRejected        int64
+	RecentAcceptedUsers []string
+	ActiveAcceptedUsers []string
+}
+
+func (s *Store) SSHAuthProfile(ip string) SSHAuthProfile {
+	ip = strings.TrimSpace(ip)
+	out := SSHAuthProfile{}
+	if ip == "" {
+		return out
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if actor := s.actors[actorID(ip)]; actor != nil {
+		out.UniqueUsers = actor.SSHUniqueUsers
+		out.AuthAccepted = actor.SSHAuthAccepted
+		out.AuthRejected = actor.SSHAuthRejected
+	}
+	type row struct {
+		user string
+		at   time.Time
+	}
+	var recent []row
+	active := map[string]struct{}{}
+	for _, ss := range s.sshSessions {
+		if ss == nil || ss.IP != ip || !ss.AuthAccepted || strings.TrimSpace(ss.Username) == "" {
+			continue
+		}
+		user := strings.ToLower(strings.TrimSpace(ss.Username))
+		recent = append(recent, row{user: user, at: ss.LastSeen})
+		if ss.Active {
+			active[user] = struct{}{}
+		}
+	}
+	sort.Slice(recent, func(i, j int) bool { return recent[i].at.After(recent[j].at) })
+	seen := map[string]struct{}{}
+	for _, r := range recent {
+		if _, ok := seen[r.user]; ok {
+			continue
+		}
+		seen[r.user] = struct{}{}
+		out.RecentAcceptedUsers = append(out.RecentAcceptedUsers, r.user)
+		if len(out.RecentAcceptedUsers) >= 8 {
+			break
+		}
+	}
+	for user := range active {
+		out.ActiveAcceptedUsers = append(out.ActiveAcceptedUsers, user)
+	}
+	sort.Strings(out.ActiveAcceptedUsers)
+	return out
+}
