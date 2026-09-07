@@ -34,6 +34,10 @@ func (s *TrapSSH) shouldAcceptTrapCredential(remote, user string, password []byt
 		return false
 	}
 	profile := s.store.SSHAuthProfile(remote)
+	credentialEstablished, credentialMatches := s.store.SSHCredentialStatus(user, password)
+	if credentialEstablished && !credentialMatches {
+		return false
+	}
 	compromised := s.system.compromisedAccountForSource(remote)
 	established := false
 	// Preserve continuity across a rollout: if this source previously reached a
@@ -56,13 +60,16 @@ func (s *TrapSSH) shouldAcceptTrapCredential(remote, user string, password []byt
 			return false
 		}
 	}
-	pass := string(password)
-	common := map[string]string{"root": "root", "admin": "admin", "svc-web": "web", "svc-backup": "backup"}
-	if expected := common[user]; expected != "" && pass == expected {
-		return true
+	// Upgrade continuity: 0.3.16 knew that this source had already compromised
+	// the account but intentionally did not retain a credential fingerprint. The
+	// first post-upgrade reuse establishes the host-wide synthetic credential;
+	// all later sources must present that same value.
+	if established && !credentialEstablished {
+		return s.store.EstablishSSHCredential(user, password)
 	}
+	pass := string(password)
 	if !established && attempt == 1 && profile.UniqueUsers < 15 && stableSSHHash(remote+"|"+user+"|"+pass)%8 == 0 {
-		return true
+		return s.store.EstablishSSHCredential(user, password)
 	}
 	// Username spraying progressively removes new lucky successes. Once a
 	// source has tested thirty identities, only an already-established account
@@ -71,9 +78,12 @@ func (s *TrapSSH) shouldAcceptTrapCredential(remote, user string, password []byt
 		return false
 	}
 	if shouldAcceptTrapPassword(remote, user, password, attempt, s.cfg.SSHMaxAuthTries) {
-		return true
+		return s.store.EstablishSSHCredential(user, password)
 	}
-	return shouldAcceptRecurringProbe(s.store.SSHRecurrence(remote, time.Now()), remote, user, password, attempt)
+	if shouldAcceptRecurringProbe(s.store.SSHRecurrence(remote, time.Now()), remote, user, password, attempt) {
+		return s.store.EstablishSSHCredential(user, password)
+	}
+	return false
 }
 
 func stableSSHHash(v string) uint32 {

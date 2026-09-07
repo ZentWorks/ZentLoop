@@ -28,15 +28,16 @@ import (
 )
 
 type TrapServer struct {
-	cfg       config.Config
-	store     *store.Store
-	scorer    *engine.Scorer
-	deception *engine.Deception
-	geo       *geoResolver
-	benign    http.Handler
-	bots      *botverify.Registry
-	stripes   [256]sync.Mutex
-	sem       chan struct{}
+	cfg            config.Config
+	store          *store.Store
+	scorer         *engine.Scorer
+	deception      *engine.Deception
+	geo            *geoResolver
+	benign         http.Handler
+	bots           *botverify.Registry
+	stripes        [256]sync.Mutex
+	sessionStripes [256]sync.Mutex
+	sem            chan struct{}
 }
 
 func NewTrap(cfg config.Config, st *store.Store) *TrapServer {
@@ -87,7 +88,21 @@ func (s *TrapServer) handle(w http.ResponseWriter, r *http.Request) {
 	lock := s.stripeFor(fp)
 	lock.Lock()
 	defer lock.Unlock()
-	ss, _ := s.sessionFor(r, fp, client, target, arrival)
+	ss, created := s.sessionFor(r, fp, client, target, arrival)
+	// A resumed session can be reached through a cookie even when the scanner
+	// rotates its User-Agent. Serialize by session id as well as fingerprint,
+	// then refresh from the store so parallel workers cannot overwrite each
+	// other's request/visit counters with stale clones.
+	sessionLock := s.sessionStripeFor(ss.ID)
+	sessionLock.Lock()
+	defer sessionLock.Unlock()
+	if !created {
+		if latest, ok := s.store.GetSession(ss.ID); ok {
+			ss = latest
+			applyClientMeta(ss, client)
+			prepareReturnVisit(ss, arrival, time.Duration(effectiveLiveMinutes(s.cfg))*time.Minute, r.URL.Path)
+		}
+	}
 	requestMeta := extractRequestMeta(r, requestHost, target, integration)
 	applyRequestMeta(ss, requestMeta)
 	probe, knownProbe := identifyProbe(r.URL.Path)
@@ -943,6 +958,12 @@ func (s *TrapServer) stripeFor(key string) *sync.Mutex {
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(key))
 	return &s.stripes[h.Sum32()%uint32(len(s.stripes))]
+}
+
+func (s *TrapServer) sessionStripeFor(key string) *sync.Mutex {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(key))
+	return &s.sessionStripes[h.Sum32()%uint32(len(s.sessionStripes))]
 }
 func fingerprint(ip, ua string) string { return ip + "|" + ua }
 func newID(n int) string {

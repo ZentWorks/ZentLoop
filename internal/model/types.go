@@ -440,6 +440,8 @@ type IPIntelligenceSummary struct {
 	PayloadSignals            int64     `json:"payload_signals"`
 	CanaryTouches             int64     `json:"canary_touches"`
 	EngagementSeconds         int64     `json:"engagement_seconds"`
+	ObservationSpanSeconds    int64     `json:"observation_span_seconds"`
+	ActiveRequestSeconds      int64     `json:"active_request_seconds"`
 	Depth                     int       `json:"depth"`
 	Reasons                   []string  `json:"reasons"`
 }
@@ -710,16 +712,17 @@ type TargetRealityProfile struct {
 }
 
 type TargetRealityState struct {
-	Target      string         `json:"target"`
-	Technology  string         `json:"technology,omitempty"`
-	Confidence  string         `json:"confidence,omitempty"`
-	Locked      bool           `json:"locked"`
-	Cloud       string         `json:"cloud,omitempty"`
-	Evidence    map[string]int `json:"evidence,omitempty"`
-	Revision    uint64         `json:"revision,omitempty"`
-	CommittedAt time.Time      `json:"committed_at,omitempty"`
-	UpdatedAt   time.Time      `json:"updated_at,omitempty"`
-	LastSeen    time.Time      `json:"last_seen,omitempty"`
+	Target      string            `json:"target"`
+	Technology  string            `json:"technology,omitempty"`
+	Confidence  string            `json:"confidence,omitempty"`
+	Locked      bool              `json:"locked"`
+	Cloud       string            `json:"cloud,omitempty"`
+	Evidence    map[string]int    `json:"evidence,omitempty"`
+	PublicFacts map[string]string `json:"public_facts,omitempty"`
+	Revision    uint64            `json:"revision,omitempty"`
+	CommittedAt time.Time         `json:"committed_at,omitempty"`
+	UpdatedAt   time.Time         `json:"updated_at,omitempty"`
+	LastSeen    time.Time         `json:"last_seen,omitempty"`
 }
 
 type TargetRealityResolved struct {

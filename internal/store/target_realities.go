@@ -93,6 +93,9 @@ func (s *Store) loadTargetRealities() error {
 			if st.Evidence == nil {
 				st.Evidence = map[string]int{}
 			}
+			if st.PublicFacts == nil {
+				st.PublicFacts = map[string]string{}
+			}
 			if st.Revision == 0 && (st.Technology != "" || st.Cloud != "" || st.Locked) {
 				st.Revision = 1
 			}
@@ -227,6 +230,9 @@ func (s *Store) resolveRealityLocked(target string) model.TargetRealityResolved 
 	if st.Evidence == nil {
 		st.Evidence = map[string]int{}
 	}
+	if st.PublicFacts == nil {
+		st.PublicFacts = map[string]string{}
+	}
 	warnings := realityWarnings(p)
 	if st.Locked && len(p.Applications) > 0 && !profileContains(p.Applications, normalizedStoredRealityApp(st.Technology)) {
 		warnings = append(warnings, "Configured application set conflicts with the persistent learned commitment "+st.Technology+". Reset learned state explicitly before migrating this target.")
@@ -262,7 +268,11 @@ func (s *Store) ObserveTargetReality(target, candidate, cloud string, weight int
 	if st.Evidence == nil {
 		st.Evidence = map[string]int{}
 	}
+	if st.PublicFacts == nil {
+		st.PublicFacts = map[string]string{}
+	}
 	beforeTech, beforeConf, beforeLocked, beforeCloud := st.Technology, st.Confidence, st.Locked, st.Cloud
+	beforeFacts := len(st.PublicFacts)
 	p, _ := s.realityProfileForLocked(target)
 	mode := normalizeRealityMode(p.Mode)
 	if candidate != "" && weight > 0 {
@@ -274,11 +284,16 @@ func (s *Store) ObserveTargetReality(target, candidate, cloud string, weight int
 			}
 		}
 		if mode == "automatic" || len(p.Applications) == 0 {
-			// A committed target reality is immutable until an explicit admin reset.
-			// Continue collecting evidence, but never let a later scanner/visit/IP
-			// silently flip WordPress into PHP, Next.js, an appliance, etc.
+			// A successful high-specificity response is itself a public claim. Commit
+			// it atomically so a later scanner cannot turn an already-served Laravel,
+			// WordPress, Next.js or Spring surface into another primary technology.
 			if !st.Locked {
-				if score >= 5 {
+				if success && weight >= 3 {
+					st.Technology = candidate
+					st.Confidence = "high"
+					st.Locked = true
+					st.PublicFacts["technology:"+candidate] = "active"
+				} else if score >= 5 {
 					st.Technology = best
 					st.Confidence = "high"
 					st.Locked = true
@@ -299,10 +314,11 @@ func (s *Store) ObserveTargetReality(target, candidate, cloud string, weight int
 		allowed := len(p.Infrastructure) == 0 || profileContains(p.Infrastructure, cloud)
 		if allowed && st.Cloud == "" {
 			st.Cloud = cloud
+			st.PublicFacts["cloud:"+cloud] = "active"
 		}
 	}
 	st.LastSeen = now
-	changed := st.Technology != beforeTech || st.Confidence != beforeConf || st.Locked != beforeLocked || st.Cloud != beforeCloud
+	changed := st.Technology != beforeTech || st.Confidence != beforeConf || st.Locked != beforeLocked || st.Cloud != beforeCloud || len(st.PublicFacts) != beforeFacts
 	if changed {
 		st.Revision++
 		if st.Revision == 0 {

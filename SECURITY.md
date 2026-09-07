@@ -27,7 +27,7 @@ The optional `ZENTLOOP_SSH_ENABLED` listener is a deception service, not an oper
 - TCP/remote forwarding, agent forwarding and X11 are rejected. The public deception listener supports only a bounded synthetic SFTP v3 subset backed by source-bound in-memory state; it never exposes the host filesystem.
 - Global concurrent sessions, per-IP sessions, authentication attempts, idle time, total session time, input length and stored output are bounded.
 - Clearly aggressive repeat SSH sources may receive a small adaptive banner delay. The delay is capped at three seconds, uses a separate maximum-eight-slot semaphore and is skipped when that budget is occupied; it does not change authentication acceptance or the 60-second human-pacing auth timeout.
-- SSH passwords are not persisted. Authentication logs retain password-presence/length metadata only.
+- SSH plaintext passwords are not persisted. Authentication logs retain password-presence/length metadata only; since 0.3.17 the virtual SSH Account Reality may additionally persist an installation-local HMAC-SHA256 credential fingerprint in `/data/ssh-auth-reality.json`, keyed by `/data/.ssh-auth-reality-key`, so the same virtual host account does not accept unrelated passwords across sources.
 - Attacker-controlled strings are sanitized before terminal/TUI rendering to remove terminal control/escape sequences.
 
 On a normal bridge-network Docker host, do not steal the host's real TCP/22 accidentally; the example Compose file maps the trap to host TCP/2222 by default. With a dedicated ZentLoop IP, the trap can instead use TCP/22 on that dedicated address.
@@ -48,7 +48,7 @@ ZentLoop may delay or alter responses served by ZentLoop itself. It must not sca
 
 ## Data
 
-HTTP events record source IP addresses, request paths, methods, user agents and derived behavior scores. HTTP request bodies and cookies are not persisted by the MVP. SSH events record source IP/country, client banner, username, authentication metadata, virtual commands/results and derived behavior. Raw SSH passwords are not persisted. `/data/intel-events.jsonl` contains only passive remote-resource indicators and decoy-token reuse metadata; common password/token/secret/OTP form fields are excluded before HTTP indicator extraction. `/data/ssh-system.json` contains synthetic decoy boot/seed state only and no attacker credentials or host telemetry.
+HTTP events record source IP addresses, request paths, methods, user agents and derived behavior scores. HTTP request bodies and cookies are not persisted by the MVP. SSH events record source IP/country, client banner, username, authentication metadata, virtual commands/results and derived behavior. Raw SSH passwords are not persisted; the optional SSH Account Reality stores only an installation-local HMAC fingerprint used for deception consistency. `/data/intel-events.jsonl` contains only passive remote-resource indicators and decoy-token reuse metadata; common password/token/secret/OTP form fields are excluded before HTTP indicator extraction. `/data/ssh-system.json` contains synthetic decoy boot/seed state only and no attacker credentials or host telemetry.
 
 Cross-protocol actor correlation uses the observed source IP as a correlation key. Treat it as operational attribution, not proof of a person: NAT, reverse proxies and address rotation can affect the mapping. Deterministic decoy tokens are synthetic values derived only for deception/correlation and must never be accepted by a real service.
 
@@ -67,7 +67,7 @@ Official-bot refresh traffic is intentionally constrained to a compiled-in list 
 
 The authenticated Admin UI also has a fixed-destination update check for the public `ZentWorks/ZentLoop` GitHub latest stable release. It is started asynchronously after admin login/first Admin info load, cached for 12 hours, and uses a short timeout. The request contains only the normal GitHub API request metadata and a ZentLoop version User-Agent; it does not include installation IDs, source IP intelligence, sessions, events, credentials or other collected traffic. Failure is fail-closed for the badge and cannot affect trap operation. No automatic update mechanism exists.
 
-The low-and-slow SSH deception policy may occasionally accept a recurring synthetic login attempt into the virtual Rabbit Hole. It does not retain passwords, does not compare them with any real system credential, and does not change the fundamental no-real-shell/no-outbound-network boundary.
+The low-and-slow SSH deception policy may occasionally accept a recurring synthetic login attempt into the virtual Rabbit Hole. It does not retain plaintext passwords or compare them with any real system credential. Since 0.3.17, an accepted virtual credential can be represented by an installation-local HMAC fingerprint solely to keep the decoy account stable across source IPs; this does not change the fundamental no-real-shell/no-outbound-network boundary.
 
 
 ## SSH anti-fingerprint surface (0.2.5)

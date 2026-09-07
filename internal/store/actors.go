@@ -113,7 +113,8 @@ func (s *Store) addActorEngagementLocked(a *model.ActorProfile, protocol, sessio
 		// Do not count long idle gaps as attacker engagement. Five minutes is
 		// intentionally generous for somebody reading output or editing a command.
 		if d <= 5*time.Minute {
-			a.EngagementSeconds += int64(d / time.Second)
+			s.actorEngagementMS[a.ID] += d.Milliseconds()
+			a.EngagementSeconds = s.actorEngagementMS[a.ID] / 1000
 		}
 	}
 	if last, ok := s.actorSessionLast[key]; !ok || at.After(last) {
@@ -171,6 +172,13 @@ func isHTTPSequenceToken(v string) bool {
 	return hexish >= 10
 }
 
+type httpSequenceSighting struct {
+	IP     string
+	Target string
+	UA     string
+	At     time.Time
+}
+
 func (s *Store) updateHTTPSequenceFingerprintLocked(a *model.ActorProfile, e model.Event) {
 	if a == nil || e.SessionID == "" || e.SelfOrigin {
 		return
@@ -190,6 +198,33 @@ func (s *Store) updateHTTPSequenceFingerprintLocked(a *model.ActorProfile, e mod
 	fp := "http:sequence:" + hex.EncodeToString(h[:8])
 	if addFingerprint(a, fp) {
 		s.actorFingerprints[fp]++
+	}
+
+	// Correlate parallel workers that run the same normalized probe program
+	// against multiple targets while rotating browser identities. Keep only a
+	// short bounded window; this is campaign affinity, never identity proof.
+	rows := s.httpSequenceSightings[fp]
+	cut := e.At.Add(-5 * time.Second)
+	kept := rows[:0]
+	worker := false
+	for _, row := range rows {
+		if row.At.Before(cut) {
+			continue
+		}
+		kept = append(kept, row)
+		if row.IP == e.IP && row.Target != "" && e.Target != "" && row.Target != e.Target && row.UA != "" && e.UserAgent != "" && row.UA != e.UserAgent {
+			worker = true
+		}
+	}
+	kept = append(kept, httpSequenceSighting{IP: e.IP, Target: e.Target, UA: e.UserAgent, At: e.At})
+	if len(kept) > 64 {
+		kept = kept[len(kept)-64:]
+	}
+	s.httpSequenceSightings[fp] = kept
+	if worker {
+		if addFingerprint(a, "http:parallel-target-worker-pool") {
+			s.actorFingerprints["http:parallel-target-worker-pool"]++
+		}
 	}
 }
 
@@ -249,6 +284,25 @@ func (s *Store) applyActorHTTPEventLocked(e model.Event) {
 		s.actorFingerprints[fp]++
 	}
 	s.updateHTTPSequenceFingerprintLocked(a, e)
+	if e.AutomationScore >= 80 && strings.TrimSpace(e.UserAgent) != "" {
+		uas := s.httpActorUAs[e.IP]
+		if uas == nil {
+			uas = map[string]time.Time{}
+			s.httpActorUAs[e.IP] = uas
+		}
+		cut := e.At.Add(-15 * time.Minute)
+		for ua, at := range uas {
+			if at.Before(cut) {
+				delete(uas, ua)
+			}
+		}
+		uas[e.UserAgent] = e.At
+		if len(uas) >= 3 {
+			if addFingerprint(a, "http:user-agent-rotation") {
+				s.actorFingerprints["http:user-agent-rotation"]++
+			}
+		}
+	}
 	if e.BotClaimed || botClaimLabel(e.UserAgent) != "" {
 		claim := strings.ToLower(strings.TrimSpace(e.BotProvider))
 		if claim == "" {

@@ -240,7 +240,7 @@ func (s *Store) IPIntelligence(ip, version string) (model.IPIntelligence, bool) 
 		SSHUniqueUsers: actor.SSHUniqueUsers, SSHPeakConcurrent: actor.SSHPeakConcurrent,
 		SSHPeakAttemptsPerMinute: actor.SSHPeakAttemptsPerMin, SSHMedianRevisitSeconds: actor.SSHMedianRevisitSeconds,
 		SSHRevisitJitterSeconds: actor.SSHRevisitJitterSeconds, PayloadSignals: actor.PayloadAttempts,
-		CanaryTouches: actor.CanaryTouches, EngagementSeconds: actor.EngagementSeconds, Depth: actor.Depth,
+		CanaryTouches: actor.CanaryTouches, EngagementSeconds: actor.EngagementSeconds, ActiveRequestSeconds: actor.EngagementSeconds, ObservationSpanSeconds: maxInt64(0, int64(actor.LastSeen.Sub(actor.FirstSeen)/time.Second)), Depth: actor.Depth,
 	}
 
 	pathCounts := map[string]int64{}
@@ -489,4 +489,11 @@ func (s *Store) SSHTarpitDelay(ip string, now time.Time) time.Duration {
 		delay = 3 * time.Second
 	}
 	return delay
+}
+
+func maxInt64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
 }

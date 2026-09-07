@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"hash/fnv"
 	"net/http"
 	"net/url"
@@ -190,6 +192,46 @@ func storyMiss(ss *model.Session, what string) Response {
 	}
 }
 
+func storyArtifactTechnologyOwner(p, label string) string {
+	p = canonicalObservedWebPath(p)
+	low := strings.ToLower(p)
+	base := strings.ToLower(path.Base(p))
+	label = strings.ToLower(label)
+	switch {
+	case strings.HasPrefix(low, "/actuator/") || low == "/actuator" || base == "application.properties" || base == "application.yml" || base == "application.yaml" || base == "bootstrap.yml" || base == "bootstrap.properties" || base == "gradle.properties" || strings.Contains(low, "/web-inf/"):
+		return "java"
+	case strings.HasPrefix(low, "/_ignition/") || strings.HasPrefix(low, "/storage/logs/laravel") || strings.HasPrefix(low, "/telescope"):
+		return "laravel"
+	case isWordPressStoryPath(low) || strings.HasPrefix(base, "wp-config.php"):
+		return "wordpress"
+	case base == "settings.py" || base == "config.py" || strings.HasSuffix(low, "/settings.py"):
+		return "python"
+	case base == "appsettings.json" || strings.HasPrefix(base, "appsettings.") || base == "local.settings.json" || base == "web.config":
+		return "asp"
+	case base == "database.yml" || strings.HasSuffix(low, "/config/database.yml"):
+		return "rails"
+	case strings.Contains(label, "phpinfo") || strings.Contains(label, "php-backdoor"):
+		return "php"
+	}
+	return ""
+}
+
+func storyCloudCredentialBody(resp Response, p string, profile *webStoryProfile, target string) Response {
+	if resp.Status != http.StatusOK || strings.ToLower(resp.Label) != "fake-cloud-service-account" {
+		return resp
+	}
+	seed := sha256.Sum256([]byte("target-service-account|" + strings.ToLower(strings.TrimSpace(target))))
+	keyID := fmt.Sprintf("%x", seed[:8])
+	project := "prod-platform-ops"
+	syntheticKeyRef := "ZENTLOOP_SYNTHETIC_NON_CREDENTIAL_" + keyID
+	resp.Body = mustJSON(map[string]any{
+		"type": "service_account", "project_id": project, "private_key_id": keyID,
+		"private_key": syntheticKeyRef, "client_email": "backup-agent@" + project + ".iam.gserviceaccount.com",
+		"token_uri": "https://oauth2.googleapis.com/token",
+	})
+	return resp
+}
+
 func storyArtifactFamily(p, label string) string {
 	p = canonicalObservedWebPath(p)
 	label = strings.ToLower(label)
@@ -287,10 +329,14 @@ func storySurfaceAllowed(profile *webStoryProfile, p, label string) bool {
 	return true
 }
 
-func storyArtifactAllowed(profile *webStoryProfile, p, label string) bool {
+func storyArtifactAllowed(profile *webStoryProfile, p, label string, strict bool) bool {
 	p = canonicalObservedWebPath(p)
 	label = strings.ToLower(label)
 	base := path.Base(p)
+
+	if strict && strings.Contains(label, "cloud-service-account") {
+		return sparseCloudCredentialAllowed(profile, p)
+	}
 
 	if strings.HasPrefix(label, "fake-env") || strings.HasPrefix(base, ".env") || strings.HasSuffix(base, ".env") {
 		if p == "/.env" || p == "/.env.example" || p == "/laravel/.env" {
@@ -319,6 +365,33 @@ func storyArtifactAllowed(profile *webStoryProfile, p, label string) bool {
 		return (storyHash(p+"|artifact")^profile.Seed)%3 != 0
 	}
 	return true
+}
+
+func sparseCloudCredentialAllowed(profile *webStoryProfile, p string) bool {
+	p = strings.ToLower(canonicalObservedWebPath(p))
+	// One primary GCP service-account artifact and at most one plausible copied
+	// alias per target. Wordlist scanners should not discover every filename.
+	candidates := []string{
+		"/keys/service-account.json", "/service-account.json", "/service_account.json",
+		"/gcp-credentials.json", "/google-credentials.json", "/firebase-admin.json",
+		"/sa.json", "/config/gcp-credentials.json", "/google-service-account.json",
+		"/application_default_credentials.json",
+	}
+	idx := int(profile.Seed % uint32(len(candidates)))
+	idx2 := int((profile.Seed >> 7) % uint32(len(candidates)))
+	if idx2 == idx {
+		idx2 = (idx2 + 3) % len(candidates)
+	}
+	if p == candidates[idx] || p == candidates[idx2] {
+		return true
+	}
+	// Non-GCP credential families (AWS/rclone/npm/AI tooling) are gated by the
+	// cloud/provider compatibility layer rather than this GCP alias budget.
+	low := p
+	if strings.Contains(low, "/.aws/") || strings.Contains(low, "rclone.conf") || strings.HasSuffix(low, ".npmrc") || strings.HasSuffix(low, ".netrc") || strings.Contains(low, "openai") || strings.Contains(low, "anthropic") || strings.Contains(low, "claude") {
+		return true
+	}
+	return false
 }
 
 func semanticArtifactPath(p string) string {
@@ -460,37 +533,8 @@ func (d *Deception) finalizeWebStoryResponse(r *http.Request, ss *model.Session,
 	}
 
 	providerCloud := storyCloudProvider(p, resp.Label)
-	if provider != nil {
-		if follow {
-			weight += 3
-		}
-		resolved = provider.ObserveTargetReality(target, candidate, providerCloud, weight, resp.Status >= 200 && resp.Status < 300)
-		profile.Technology, profile.Locked, profile.Confidence, profile.Cloud = resolved.State.Technology, resolved.State.Locked, resolved.State.Confidence, resolved.State.Cloud
-	} else if candidate != "" && weight > 0 {
-		if follow {
-			weight += 3
-		}
-		profile.Evidence[candidate] += weight
-		if !profile.Locked {
-			best, score := "", 0
-			for tech, v := range profile.Evidence {
-				if v > score {
-					best, score = tech, v
-				}
-			}
-			if score >= 5 {
-				profile.Technology = best
-				profile.Locked = true
-				profile.Confidence = "high"
-			} else if score >= 3 {
-				profile.Technology = best
-				profile.Confidence = "medium"
-			}
-		}
-	}
-
-	if provider == nil && providerCloud != "" && profile.Cloud == "" && resp.Status >= 200 && resp.Status < 300 {
-		profile.Cloud = providerCloud
+	if follow {
+		weight += 3
 	}
 	if providerCloud != "" {
 		configuredClouds := []string{}
@@ -511,6 +555,25 @@ func (d *Deception) finalizeWebStoryResponse(r *http.Request, ss *model.Session,
 		}
 	}
 
+	if resp.Status >= 200 && resp.Status < 300 && provider != nil {
+		if owner := storyArtifactTechnologyOwner(p, resp.Label); owner != "" {
+			locked := resolved.State.Technology
+			if locked == "" {
+				locked = profile.Technology
+			}
+			if locked != "" && !storyCompatible(locked, owner) {
+				miss := storyMiss(ss, owner)
+				miss.Delay = delay
+				return miss
+			}
+			if configuredApps && !realityHas(resolved.Applications, owner) {
+				miss := storyMiss(ss, owner)
+				miss.Delay = delay
+				return miss
+			}
+		}
+	}
+
 	if resp.Status >= 200 && resp.Status < 300 && !storySurfaceAllowed(profile, p, resp.Label) {
 		miss := storyMiss(ss, "surface")
 		miss.Label = "story-surface-miss"
@@ -526,13 +589,47 @@ func (d *Deception) finalizeWebStoryResponse(r *http.Request, ss *model.Session,
 		miss.Delay = delay
 		return miss
 	}
-	if resp.Status >= 200 && resp.Status < 300 && !configuredArtifacts && !storyArtifactAllowed(profile, p, resp.Label) {
+	if resp.Status >= 200 && resp.Status < 300 && !configuredArtifacts && !storyArtifactAllowed(profile, p, resp.Label, provider != nil) {
 		miss := storyMiss(ss, "artifact")
 		miss.Label = "story-artifact-miss"
 		miss.Delay = delay
 		return miss
 	}
 
+	// Only commit learned reality after all compatibility/sparsity gates have
+	// accepted the response. A response that is ultimately converted to a miss
+	// must not mutate the persistent target world.
+	if provider != nil {
+		resolved = provider.ObserveTargetReality(target, candidate, providerCloud, weight, resp.Status >= 200 && resp.Status < 300)
+		profile.Technology, profile.Locked, profile.Confidence, profile.Cloud = resolved.State.Technology, resolved.State.Locked, resolved.State.Confidence, resolved.State.Cloud
+	} else if candidate != "" && weight > 0 {
+		profile.Evidence[candidate] += weight
+		if !profile.Locked {
+			best, score := "", 0
+			for tech, v := range profile.Evidence {
+				if v > score {
+					best, score = tech, v
+				}
+			}
+			if resp.Status >= 200 && resp.Status < 300 && weight >= 3 {
+				profile.Technology = candidate
+				profile.Locked = true
+				profile.Confidence = "high"
+			} else if score >= 5 {
+				profile.Technology = best
+				profile.Locked = true
+				profile.Confidence = "high"
+			} else if score >= 3 {
+				profile.Technology = best
+				profile.Confidence = "medium"
+			}
+		}
+	}
+	if provider == nil && providerCloud != "" && profile.Cloud == "" && resp.Status >= 200 && resp.Status < 300 {
+		profile.Cloud = providerCloud
+	}
+
+	resp = storyCloudCredentialBody(resp, p, profile, target)
 	resp = storyEnvBody(resp, p, profile)
 	resp.Depth = realisticWebDepth(ss, resp, p, follow)
 	if resp.LoopInc > 0 && !follow && !strings.Contains(strings.ToLower(resp.Label), "loop-bait") {

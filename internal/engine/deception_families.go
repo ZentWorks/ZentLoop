@@ -528,7 +528,7 @@ func buildSSHMaterialFamily(p string, ss *model.Session, a string, canaries map[
 
 func isManagementSurfaceFamily(p string) bool {
 	switch p {
-	case "/dashboard", "/workspace", "/my", "/account", "/user/login", "/settings", "/portal", "/app", "/profile", "/admin", "/auth/login", "/signin", "/manage", "/console", "/api/account":
+	case "/dashboard", "/workspace", "/my", "/account", "/user/login", "/settings", "/portal", "/app", "/profile", "/admin", "/admin/login", "/admin/_payload.json", "/auth/login", "/signin", "/manage", "/console", "/api/account":
 		return true
 	}
 	return false

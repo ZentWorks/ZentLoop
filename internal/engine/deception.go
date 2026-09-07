@@ -93,6 +93,12 @@ func (d *Deception) BuildWithBody(r *http.Request, ss *model.Session, bodySample
 	}
 
 	switch {
+	case p == "/":
+		resp.Status = http.StatusOK
+		resp.ContentType = "text/html; charset=utf-8"
+		resp.Label = "target-root"
+		resp.Depth = max(depth, 1)
+		resp.Body = []byte("<!doctype html><html><head><title>Service</title></head><body><h1>Service available</h1><p>For authorized users only.</p></body></html>")
 	case strings.Contains(p, "/sdk/weblanguage"):
 		resp.ContentType = "application/xml; charset=utf-8"
 		resp.Label = "fake-hikvision-sdk"
