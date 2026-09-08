@@ -631,6 +631,7 @@ type sshHistoryPage struct {
 	AuthenticatedTotal int                `json:"authenticated_total"`
 	HasMore            bool               `json:"has_more"`
 	Filter             string             `json:"filter"`
+	AuthTelemetry      map[string]any     `json:"auth_telemetry,omitempty"`
 }
 
 func buildSSHHistoryPage(rows []model.SSHSession, filter string, limit int) sshHistoryPage {
@@ -656,6 +657,33 @@ func buildSSHHistoryPage(rows []model.SSHSession, filter string, limit int) sshH
 		HasMore:            hasMore,
 		Filter:             filter,
 	}
+}
+
+func sshAuthTelemetryView(counts map[string]int64) map[string]any {
+	attempts := counts["attempts"]
+	accepted := counts["accepted"]
+	rate := 0.0
+	if attempts > 0 {
+		rate = float64(accepted) * 100 / float64(attempts)
+	}
+	health := "quiet"
+	if attempts >= 100 {
+		switch {
+		case rate < 0.2:
+			health = "starving"
+		case rate > 20:
+			health = "permissive"
+		default:
+			health = "healthy"
+		}
+	}
+	reasons := map[string]int64{}
+	for k, v := range counts {
+		if strings.HasPrefix(k, "reject-") {
+			reasons[k] = v
+		}
+	}
+	return map[string]any{"attempts": attempts, "accepted": accepted, "rejected": counts["rejected"], "acceptance_rate": rate, "health": health, "reject_reasons": reasons}
 }
 
 func (s *AdminServer) sshHistory(w http.ResponseWriter, r *http.Request) {
@@ -688,7 +716,9 @@ func (s *AdminServer) sshHistory(w http.ResponseWriter, r *http.Request) {
 	if filter != "authenticated" {
 		filter = "all"
 	}
-	writeJSON(w, buildSSHHistoryPage(base, filter, limit))
+	page := buildSSHHistoryPage(base, filter, limit)
+	page.AuthTelemetry = sshAuthTelemetryView(s.store.SSHAuthPolicyTelemetry())
+	writeJSON(w, page)
 }
 
 func (s *AdminServer) sshSession(w http.ResponseWriter, r *http.Request) {

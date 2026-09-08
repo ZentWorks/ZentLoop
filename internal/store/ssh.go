@@ -175,6 +175,16 @@ func (s *Store) applySSHEventLocked(e model.SSHEvent) {
 			ss.AuthAccepted = true
 		}
 		s.sshAuthAttempts++
+		reason := strings.TrimSpace(e.AuthPolicyReason)
+		if reason == "" {
+			reason = "legacy-unspecified"
+		}
+		s.sshAuthPolicyCounts[reason]++
+		if e.AuthAccepted {
+			s.sshAuthPolicyCounts["accepted"]++
+		} else {
+			s.sshAuthPolicyCounts["rejected"]++
+		}
 		s.sshDayAuth[day]++
 		user := strings.TrimSpace(e.Username)
 		if user == "" {
@@ -622,5 +632,25 @@ func (s *Store) SSHAuthProfile(ip string) SSHAuthProfile {
 		out.ActiveAcceptedUsers = append(out.ActiveAcceptedUsers, user)
 	}
 	sort.Strings(out.ActiveAcceptedUsers)
+	return out
+}
+
+// SSHAuthPolicyTelemetry returns retained-history policy counters. Counters are
+// rebuilt from ssh-events.jsonl at startup, so the Admin UI can distinguish a
+// quiet SSH period from a trap that is rejecting every candidate.
+func (s *Store) SSHAuthPolicyTelemetry() map[string]int64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make(map[string]int64, len(s.sshAuthPolicyCounts)+3)
+	for k, v := range s.sshAuthPolicyCounts {
+		out[k] = v
+	}
+	out["attempts"] = s.sshAuthAttempts
+	if _, ok := out["accepted"]; !ok {
+		out["accepted"] = 0
+	}
+	if _, ok := out["rejected"]; !ok {
+		out["rejected"] = 0
+	}
 	return out
 }

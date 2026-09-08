@@ -27,70 +27,71 @@ const (
 )
 
 type Store struct {
-	mu                        sync.RWMutex
-	sessions                  map[string]*model.Session
-	fingerprints              map[string]string
-	events                    []model.Event
-	realtimeSubs              map[*realtimeSubscriber]struct{}
-	pathCounts                map[string]int64
-	dayCounts                 map[string]int64
-	httpHourCounts            map[int64]map[string]int64
-	ipDailyActivity           map[string]map[int64]*model.IPActivityBucket
-	targetCounts              map[string]int64
-	requestHostStats          map[string]*rawHostStat
-	unknownPaths              map[string]*model.UnknownPath
-	probeStats                map[string]*model.ProbeStat
-	catchAllHosts             map[string]*model.CatchAllHost
-	integrationCounts         map[string]int64
-	catchAllRequests          int64
-	requestsTotal             int64
-	started                   time.Time
-	dataDir                   string
-	eventFile                 *os.File
-	sshSessions               map[string]*model.SSHSession
-	sshEvents                 []model.SSHEvent
-	sshUserCounts             map[string]int64
-	sshCommandCounts          map[string]int64
-	sshFamilyCounts           map[string]int64
-	sshCountryCounts          map[string]int64
-	sshClientCounts           map[string]int64
-	sshDayConnections         map[string]int64
-	sshDayAuth                map[string]int64
-	sshDayShells              map[string]int64
-	sshDayCommands            map[string]int64
-	sshHourCounts             map[int64]int64
-	sshHighlightStates        map[string]*sshHighlightState
-	sshHighlightHistory       map[string]model.SSHHighlight
-	sshConnections            int64
-	sshAuthAttempts           int64
-	sshShells                 int64
-	sshCommands               int64
-	sshEventFile              *os.File
-	actors                    map[string]*model.ActorProfile
-	actorTimeline             map[string][]model.ActorActivity
-	actorSessionLast          map[string]time.Time
-	actorEngagementMS         map[string]int64
-	actorFingerprints         map[string]int64
-	sshActorLastCommand       map[string]string
-	sshActorLastCommandAt     map[string]time.Time
-	actorSSHUsers             map[string]map[string]struct{}
-	httpActorBotClaims        map[string]map[string]struct{}
-	httpActorUAs              map[string]map[string]time.Time
-	httpSessionSequences      map[string][]string
-	httpSequenceSightings     map[string][]httpSequenceSighting
-	intelEvents               []model.IntelSignal
-	intelEventFile            *os.File
-	health                    model.HealthOverview
-	integrationPeers          map[string]*model.IntegrationPeer
-	integrationPersist        map[string]time.Time
-	trustedManual             map[string]model.TrustedDomain
-	realityProfiles           map[string]model.TargetRealityProfile
-	realityStates             map[string]model.TargetRealityState
-	sshCredentialKey          []byte
-	sshCredentialFingerprints map[string]string
-	retentionDays             int
-	retentionStop             chan struct{}
-	retentionDone             chan struct{}
+	mu                    sync.RWMutex
+	sessions              map[string]*model.Session
+	fingerprints          map[string]string
+	events                []model.Event
+	realtimeSubs          map[*realtimeSubscriber]struct{}
+	pathCounts            map[string]int64
+	dayCounts             map[string]int64
+	httpHourCounts        map[int64]map[string]int64
+	ipDailyActivity       map[string]map[int64]*model.IPActivityBucket
+	targetCounts          map[string]int64
+	requestHostStats      map[string]*rawHostStat
+	unknownPaths          map[string]*model.UnknownPath
+	probeStats            map[string]*model.ProbeStat
+	catchAllHosts         map[string]*model.CatchAllHost
+	integrationCounts     map[string]int64
+	catchAllRequests      int64
+	requestsTotal         int64
+	started               time.Time
+	dataDir               string
+	eventFile             *os.File
+	sshSessions           map[string]*model.SSHSession
+	sshEvents             []model.SSHEvent
+	sshUserCounts         map[string]int64
+	sshCommandCounts      map[string]int64
+	sshFamilyCounts       map[string]int64
+	sshCountryCounts      map[string]int64
+	sshClientCounts       map[string]int64
+	sshDayConnections     map[string]int64
+	sshDayAuth            map[string]int64
+	sshDayShells          map[string]int64
+	sshDayCommands        map[string]int64
+	sshHourCounts         map[int64]int64
+	sshHighlightStates    map[string]*sshHighlightState
+	sshHighlightHistory   map[string]model.SSHHighlight
+	sshConnections        int64
+	sshAuthAttempts       int64
+	sshShells             int64
+	sshCommands           int64
+	sshEventFile          *os.File
+	actors                map[string]*model.ActorProfile
+	actorTimeline         map[string][]model.ActorActivity
+	actorSessionLast      map[string]time.Time
+	actorEngagementMS     map[string]int64
+	actorFingerprints     map[string]int64
+	sshActorLastCommand   map[string]string
+	sshActorLastCommandAt map[string]time.Time
+	actorSSHUsers         map[string]map[string]struct{}
+	httpActorBotClaims    map[string]map[string]struct{}
+	httpActorUAs          map[string]map[string]time.Time
+	httpSessionSequences  map[string][]string
+	httpSequenceSightings map[string][]httpSequenceSighting
+	intelEvents           []model.IntelSignal
+	intelEventFile        *os.File
+	health                model.HealthOverview
+	integrationPeers      map[string]*model.IntegrationPeer
+	integrationPersist    map[string]time.Time
+	trustedManual         map[string]model.TrustedDomain
+	realityProfiles       map[string]model.TargetRealityProfile
+	realityStates         map[string]model.TargetRealityState
+	sshCredentialKey      []byte
+	sshCredentialPools    map[string][]sshCredentialSlot
+	sshAuthPolicyCounts   map[string]int64
+	retentionDays         int
+	retentionStop         chan struct{}
+	retentionDone         chan struct{}
 }
 
 func eventStorageBytes(dataDir string) int64 {
@@ -109,7 +110,7 @@ func newStoreState(dataDir string, retentionDays int) *Store {
 		sshSessions: make(map[string]*model.SSHSession), sshUserCounts: make(map[string]int64), sshCommandCounts: make(map[string]int64), sshFamilyCounts: make(map[string]int64), sshCountryCounts: make(map[string]int64), sshClientCounts: make(map[string]int64), sshDayConnections: make(map[string]int64), sshDayAuth: make(map[string]int64), sshDayShells: make(map[string]int64), sshDayCommands: make(map[string]int64), sshHourCounts: make(map[int64]int64), sshHighlightStates: make(map[string]*sshHighlightState), sshHighlightHistory: make(map[string]model.SSHHighlight),
 		integrationPeers: make(map[string]*model.IntegrationPeer), integrationPersist: make(map[string]time.Time),
 		trustedManual:   make(map[string]model.TrustedDomain),
-		realityProfiles: make(map[string]model.TargetRealityProfile), realityStates: make(map[string]model.TargetRealityState), sshCredentialFingerprints: make(map[string]string),
+		realityProfiles: make(map[string]model.TargetRealityProfile), realityStates: make(map[string]model.TargetRealityState), sshCredentialPools: make(map[string][]sshCredentialSlot), sshAuthPolicyCounts: make(map[string]int64),
 		started: time.Now(), dataDir: dataDir, retentionDays: retentionDays,
 		retentionStop: make(chan struct{}), retentionDone: make(chan struct{}),
 	}

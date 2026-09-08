@@ -206,8 +206,8 @@ func (s *TrapSSH) handleConn(conn net.Conn, auth sshAuthState) {
 		attempt := auth.nextCredentialAttempt("password")
 		user := cleanSSHField(meta.User(), 64)
 		client := cleanSSHField(string(meta.ClientVersion()), 128)
-		accept := s.shouldAcceptTrapCredential(auth.ip, user, password, attempt)
-		s.recordSSHAuth(auth, client, user, "password", accept, len(password), "")
+		accept, reason := s.trapCredentialDecision(auth.ip, user, password, attempt)
+		s.recordSSHAuth(auth, client, user, "password", accept, len(password), "", reason)
 		if accept {
 			return nil, nil
 		}
@@ -218,7 +218,7 @@ func (s *TrapSSH) handleConn(conn net.Conn, auth sshAuthState) {
 		user := cleanSSHField(meta.User(), 64)
 		client := cleanSSHField(string(meta.ClientVersion()), 128)
 		fingerprint := ssh.FingerprintSHA256(key)
-		s.recordSSHAuth(auth, client, user, "publickey", false, 0, fingerprint)
+		s.recordSSHAuth(auth, client, user, "publickey", false, 0, fingerprint, "reject-publickey")
 		return nil, errors.New("permission denied")
 	}
 	sshCfg.KeyboardInteractiveCallback = func(meta ssh.ConnMetadata, challenge ssh.KeyboardInteractiveChallenge) (*ssh.Permissions, error) {
@@ -227,12 +227,12 @@ func (s *TrapSSH) handleConn(conn net.Conn, auth sshAuthState) {
 		client := cleanSSHField(string(meta.ClientVersion()), 128)
 		answers, err := challenge("", "Password authentication", []string{"Password: "}, []bool{false})
 		if err != nil || len(answers) != 1 {
-			s.recordSSHAuth(auth, client, user, "keyboard-interactive", false, 0, "")
+			s.recordSSHAuth(auth, client, user, "keyboard-interactive", false, 0, "", sshAuthRejectInvalid)
 			return nil, errors.New("permission denied")
 		}
 		password := []byte(answers[0])
-		accept := s.shouldAcceptTrapCredential(auth.ip, user, password, attempt)
-		s.recordSSHAuth(auth, client, user, "keyboard-interactive", accept, len(password), "")
+		accept, reason := s.trapCredentialDecision(auth.ip, user, password, attempt)
+		s.recordSSHAuth(auth, client, user, "keyboard-interactive", accept, len(password), "", reason)
 		for i := range answers {
 			answers[i] = ""
 		}
@@ -592,7 +592,7 @@ func (w *virtualSSHWorld) runVirtualPasswd(reader *virtualSSHLineReader, channel
 	_, _ = fmt.Fprint(channel, "passwd: password updated successfully\r\n")
 }
 
-func (s *TrapSSH) recordSSHAuth(auth sshAuthState, client, user, method string, accepted bool, passwordLen int, fingerprint string) {
+func (s *TrapSSH) recordSSHAuth(auth sshAuthState, client, user, method string, accepted bool, passwordLen int, fingerprint, policyReason string) {
 	base := model.SSHEvent{SessionID: auth.sessionID, IP: auth.ip, Country: auth.country, CountrySource: auth.countrySource, ClientVersion: client, Username: user}
 	message := "authentication rejected"
 	risk := 65
@@ -600,7 +600,7 @@ func (s *TrapSSH) recordSSHAuth(auth sshAuthState, client, user, method string, 
 		message = "authentication accepted by deception policy"
 		risk = 78
 	}
-	e := model.SSHEvent{ID: newID(6), At: time.Now(), SessionID: base.SessionID, IP: base.IP, Country: base.Country, CountrySource: base.CountrySource, ClientVersion: client, Username: user, Type: "auth", AuthMethod: method, AuthAccepted: accepted, PasswordSupplied: passwordLen > 0, PasswordLength: passwordLen, KeyFingerprint: fingerprint, RiskScore: risk, Classification: model.ClassHostile, Actor: classifySSHActor(client, false), Message: message}
+	e := model.SSHEvent{ID: newID(6), At: time.Now(), SessionID: base.SessionID, IP: base.IP, Country: base.Country, CountrySource: base.CountrySource, ClientVersion: client, Username: user, Type: "auth", AuthMethod: method, AuthAccepted: accepted, PasswordSupplied: passwordLen > 0, PasswordLength: passwordLen, KeyFingerprint: fingerprint, AuthPolicyReason: policyReason, RiskScore: risk, Classification: model.ClassHostile, Actor: classifySSHActor(client, false), Message: message}
 	if err := s.store.AddSSHEvent(e); err != nil {
 		log.Printf("SSH event store: %v", err)
 	}

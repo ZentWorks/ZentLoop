@@ -8,6 +8,20 @@ import (
 	"zentloop/internal/store"
 )
 
+const (
+	sshAuthAcceptedExisting     = "accepted-existing-credential"
+	sshAuthAcceptedNewSlot      = "accepted-new-credential-slot"
+	sshAuthAcceptedLegacySticky = "accepted-legacy-sticky"
+	sshAuthRejectInvalid        = "reject-invalid-credential"
+	sshAuthRejectUnknownAccount = "reject-unknown-account"
+	sshAuthRejectSourceConflict = "reject-source-account-conflict"
+	sshAuthRejectConcurrent     = "reject-concurrent-identity"
+	sshAuthRejectSpray          = "reject-spray-hardening"
+	sshAuthRejectCredential     = "reject-credential-mismatch"
+	sshAuthRejectPolicy         = "reject-policy"
+	sshAuthRejectPoolBusy       = "reject-credential-pool-busy"
+)
+
 func shouldAcceptTrapPassword(remote, user string, password []byte, attempt, maxTries int) bool {
 	if user == "" || len(password) == 0 || len(password) > 256 {
 		return false
@@ -23,67 +37,83 @@ func shouldAcceptRecurringProbe(recur store.SSHRecurrence, remote, user string, 
 	if attempt != 1 || !recur.LowAndSlow || recur.Connections < 6 || user == "" || len(password) == 0 || len(password) > 256 {
 		return false
 	}
-	// Deterministic occasional success for a persistent low-and-slow prober.
-	// No password value is retained or compared against real credentials.
 	return (uint32(recur.Connections)+stableSSHHash(remote+"|"+user))%3 == 0
 }
 
+// shouldAcceptFirstKnownAccount gives single-shot scanners a bounded way into
+// the trap. It only applies to accounts that actually exist in Host Reality;
+// arbitrary dictionary usernames remain hard failures.
+func shouldAcceptFirstKnownAccount(remote, user string, password []byte, attempt int) bool {
+	if attempt != 1 || user == "" || len(password) == 0 || len(password) > 256 {
+		return false
+	}
+	return stableSSHHash(remote+"|"+user+"|"+string(password))%5 == 0
+}
+
 func (s *TrapSSH) shouldAcceptTrapCredential(remote, user string, password []byte, attempt int) bool {
+	ok, _ := s.trapCredentialDecision(remote, user, password, attempt)
+	return ok
+}
+
+func (s *TrapSSH) trapCredentialDecision(remote, user string, password []byte, attempt int) (bool, string) {
 	user = strings.ToLower(strings.TrimSpace(user))
-	if !virtualSSHAccountExists(user) || len(password) == 0 || len(password) > 256 {
-		return false
+	if user == "" || len(password) == 0 || len(password) > 256 {
+		return false, sshAuthRejectInvalid
 	}
+	if !virtualSSHAccountExists(user) {
+		return false, sshAuthRejectUnknownAccount
+	}
+
 	profile := s.store.SSHAuthProfile(remote)
-	credentialEstablished, credentialMatches := s.store.SSHCredentialStatus(user, password)
-	if credentialEstablished && !credentialMatches {
-		return false
-	}
-	compromised := s.system.compromisedAccountForSource(remote)
-	established := false
-	// Preserve continuity across a rollout: if this source previously reached a
-	// believable host account, keep that account sticky instead of silently
-	// moving the compromise to another username.
+	stickyUser := ""
 	for _, accepted := range profile.RecentAcceptedUsers {
 		if virtualSSHAccountExists(accepted) {
-			compromised = accepted
-			established = true
+			stickyUser = accepted
 			break
 		}
 	}
-	if user != compromised {
-		return false
+	if stickyUser != "" && user != stickyUser {
+		return false, sshAuthRejectSourceConflict
 	}
-	// Multiple sessions using the same compromised account are believable; a
-	// second simultaneously successful username is not.
 	for _, active := range profile.ActiveAcceptedUsers {
 		if active != user {
-			return false
+			return false, sshAuthRejectConcurrent
 		}
 	}
-	// Upgrade continuity: 0.3.16 knew that this source had already compromised
-	// the account but intentionally did not retain a credential fingerprint. The
-	// first post-upgrade reuse establishes the host-wide synthetic credential;
-	// all later sources must present that same value.
-	if established && !credentialEstablished {
-		return s.store.EstablishSSHCredential(user, password)
+
+	credentialEstablished, credentialMatches := s.store.SSHCredentialStatus(user, password)
+	if credentialMatches {
+		return true, sshAuthAcceptedExisting
 	}
-	pass := string(password)
-	if !established && attempt == 1 && profile.UniqueUsers < 15 && stableSSHHash(remote+"|"+user+"|"+pass)%8 == 0 {
-		return s.store.EstablishSSHCredential(user, password)
+
+	// 0.3.16/0.3.17 continuity: a source that had already reached this believable
+	// account may establish the first pool slot after upgrade.
+	if stickyUser == user && !credentialEstablished {
+		if s.store.EstablishSSHCredential(user, password) {
+			return true, sshAuthAcceptedLegacySticky
+		}
+		return false, sshAuthRejectPoolBusy
 	}
-	// Username spraying progressively removes new lucky successes. Once a
-	// source has tested thirty identities, only an already-established account
-	// can continue to authenticate.
-	if profile.UniqueUsers >= 30 && !established {
-		return false
+
+	// Heavy username spraying may keep using an already known credential, but it
+	// must not create fresh successful identities or password slots.
+	if profile.UniqueUsers >= 30 {
+		return false, sshAuthRejectSpray
 	}
-	if shouldAcceptTrapPassword(remote, user, password, attempt, s.cfg.SSHMaxAuthTries) {
-		return s.store.EstablishSSHCredential(user, password)
+
+	candidate := shouldAcceptFirstKnownAccount(remote, user, password, attempt) ||
+		shouldAcceptTrapPassword(remote, user, password, attempt, s.cfg.SSHMaxAuthTries) ||
+		shouldAcceptRecurringProbe(s.store.SSHRecurrence(remote, time.Now()), remote, user, password, attempt)
+	if !candidate {
+		if credentialEstablished {
+			return false, sshAuthRejectCredential
+		}
+		return false, sshAuthRejectPolicy
 	}
-	if shouldAcceptRecurringProbe(s.store.SSHRecurrence(remote, time.Now()), remote, user, password, attempt) {
-		return s.store.EstablishSSHCredential(user, password)
+	if s.store.EstablishSSHCredential(user, password) {
+		return true, sshAuthAcceptedNewSlot
 	}
-	return false
+	return false, sshAuthRejectPoolBusy
 }
 
 func stableSSHHash(v string) uint32 {

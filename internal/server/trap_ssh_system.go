@@ -57,18 +57,6 @@ func (s *virtualSSHSystem) accountReality() []string {
 	return out
 }
 
-func (s *virtualSSHSystem) compromisedAccountForSource(ip string) string {
-	accounts := []string{"root", "admin", "svc-web"}
-	if s == nil {
-		return accounts[int(stableSSHHash(ip))%len(accounts)]
-	}
-	s.mu.Lock()
-	seed := s.seed
-	s.mu.Unlock()
-	key := fmt.Sprintf("%d|%s", seed, strings.TrimSpace(ip))
-	return accounts[int(stableSSHHash(key))%len(accounts)]
-}
-
 func virtualSSHAccountExists(user string) bool {
 	user = strings.ToLower(strings.TrimSpace(user))
 	for _, account := range virtualSSHHostAccounts {

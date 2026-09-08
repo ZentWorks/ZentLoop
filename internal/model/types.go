@@ -589,6 +589,7 @@ type SSHEvent struct {
 	PasswordSupplied      bool           `json:"password_supplied,omitempty"`
 	PasswordLength        int            `json:"password_length,omitempty"`
 	KeyFingerprint        string         `json:"key_fingerprint,omitempty"`
+	AuthPolicyReason      string         `json:"auth_policy_reason,omitempty"`
 	Command               string         `json:"command,omitempty"`
 	CommandName           string         `json:"command_name,omitempty"`
 	CommandFamily         string         `json:"command_family,omitempty"`
