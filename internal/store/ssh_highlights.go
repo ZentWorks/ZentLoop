@@ -12,10 +12,12 @@ import (
 const sshHighlightMinScore = 50
 
 type sshHighlightState struct {
-	acceptedAt    time.Time
-	commandEvents int
-	families      map[string]bool
-	signals       map[string]bool
+	acceptedAt     time.Time
+	firstCommandAt time.Time
+	lastCommandAt  time.Time
+	commandEvents  int
+	families       map[string]bool
+	signals        map[string]bool
 }
 
 func newSSHHighlightState() *sshHighlightState {
@@ -43,6 +45,12 @@ func (state *sshHighlightState) apply(e model.SSHEvent) {
 	}
 	if e.Type == "command" || e.Type == "exec" {
 		state.commandEvents++
+		if state.firstCommandAt.IsZero() || e.At.Before(state.firstCommandAt) {
+			state.firstCommandAt = e.At
+		}
+		if state.lastCommandAt.IsZero() || e.At.After(state.lastCommandAt) {
+			state.lastCommandAt = e.At
+		}
 		if e.CommandFamily != "" {
 			state.families[e.CommandFamily] = true
 		}
@@ -184,6 +192,12 @@ func scoreSSHHighlightState(ss model.SSHSession, state *sshHighlightState) (mode
 	if commandEvents < 2 {
 		return model.SSHHighlight{}, false
 	}
+	if commandEvents >= 10 && len(families) >= 3 && !state.firstCommandAt.IsZero() && !state.lastCommandAt.IsZero() {
+		span := state.lastCommandAt.Sub(state.firstCommandAt)
+		if span >= 0 && span <= 30*time.Second {
+			signals["scripted-recon"] = true
+		}
+	}
 	highSignal := signals["privilege"] || signals["persistence"] || signals["payload-staging"] || signals["canary"] || signals["miner"] || signals["resource-hijack"]
 	if !highSignal && !(commandEvents >= 4 && len(families) >= 2) {
 		return model.SSHHighlight{}, false
@@ -215,6 +229,9 @@ func scoreSSHHighlightState(ss model.SSHSession, state *sshHighlightState) (mode
 	if signals["control-flow"] {
 		score += 7
 	}
+	if signals["scripted-recon"] {
+		score += 12
+	}
 	if signals["credentials"] {
 		score += 10
 	}
@@ -237,8 +254,8 @@ func scoreSSHHighlightState(ss model.SSHSession, state *sshHighlightState) (mode
 		return model.SSHHighlight{}, false
 	}
 
-	order := []string{"canary", "payload-staging", "resource-hijack", "persistence", "privilege", "miner", "process-control", "credentials", "control-flow"}
-	labels := map[string]string{"canary": "Canary touch", "payload-staging": "Payload staging", "resource-hijack": "Resource hijack prep", "persistence": "Persistence", "privilege": "Privilege discovery", "miner": "Miner behavior", "process-control": "Process control", "credentials": "Credential hunting", "control-flow": "Shell control flow"}
+	order := []string{"canary", "payload-staging", "resource-hijack", "persistence", "privilege", "miner", "scripted-recon", "process-control", "credentials", "control-flow"}
+	labels := map[string]string{"canary": "Canary touch", "payload-staging": "Payload staging", "resource-hijack": "Resource hijack prep", "persistence": "Persistence", "privilege": "Privilege discovery", "miner": "Miner behavior", "scripted-recon": "Scripted host reconnaissance", "process-control": "Process control", "credentials": "Credential hunting", "control-flow": "Shell control flow"}
 	outSignals := make([]string, 0, len(signals))
 	for _, k := range order {
 		if signals[k] {
@@ -254,7 +271,7 @@ func scoreSSHHighlightState(ss model.SSHSession, state *sshHighlightState) (mode
 	}
 	tagLabels := map[string]string{
 		"Canary touch": "CANARY", "Payload staging": "PAYLOAD", "Persistence": "PERSISTENCE",
-		"Privilege discovery": "PRIVILEGE", "Miner behavior": "MINER", "Resource hijack prep": "RESOURCE", "Process control": "PROCESS",
+		"Privilege discovery": "PRIVILEGE", "Miner behavior": "MINER", "Resource hijack prep": "RESOURCE", "Scripted host reconnaissance": "SCRIPTED-RECON", "Process control": "PROCESS",
 		"Credential hunting": "CREDENTIALS", "Shell control flow": "CONTROL-FLOW", "Multi-stage command activity": "MULTI-STAGE",
 	}
 	tags := make([]string, 0, len(outSignals))

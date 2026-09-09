@@ -673,9 +673,13 @@ func isSQLDumpFamily(p string) bool {
 	return base == "db.sql" || base == "database.sql" || base == "dump.sql" || base == "backup.sql"
 }
 
-func buildSQLDumpFamily(ss *model.Session, canaries map[string]string) Response {
+func syntheticSQLDumpBody(canaries map[string]string) []byte {
 	body := "-- PostgreSQL database dump\n-- Dumped from database version 16.3\nCREATE TABLE app_settings (key text PRIMARY KEY, value text);\nINSERT INTO app_settings VALUES ('backup_host','backup-01'),('registry','registry.internal'),('internal_api_token','" + canaries["internal-api"] + "');\nCREATE TABLE service_accounts (name text, role text, token_hint text);\nINSERT INTO service_accounts VALUES ('svc-backup','archive_writer','" + canaries["backup"] + "');\n-- customer row data omitted from support export\n"
-	return Response{Status: 200, ContentType: "application/sql; charset=utf-8", Label: "fake-database-dump", Depth: max(ss.Depth, 5), Body: []byte(body)}
+	return []byte(body)
+}
+
+func buildSQLDumpFamily(ss *model.Session, canaries map[string]string) Response {
+	return Response{Status: 200, ContentType: "application/sql; charset=utf-8", Label: "fake-database-dump", Depth: max(ss.Depth, 5), Body: syntheticSQLDumpBody(canaries)}
 }
 
 func isLaravelLivewireFamily(p string) bool {

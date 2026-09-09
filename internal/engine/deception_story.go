@@ -334,6 +334,10 @@ func storyArtifactAllowed(profile *webStoryProfile, p, label string, strict bool
 	label = strings.ToLower(label)
 	base := path.Base(p)
 
+	if allowed, managed := sparseArtifactFamilyAllowed(profile, p, label); managed {
+		return allowed
+	}
+
 	if strict && strings.Contains(label, "cloud-service-account") {
 		return sparseCloudCredentialAllowed(profile, p)
 	}
@@ -390,6 +394,79 @@ func sparseCloudCredentialAllowed(profile *webStoryProfile, p string) bool {
 	low := p
 	if strings.Contains(low, "/.aws/") || strings.Contains(low, "rclone.conf") || strings.HasSuffix(low, ".npmrc") || strings.HasSuffix(low, ".netrc") || strings.Contains(low, "openai") || strings.Contains(low, "anthropic") || strings.Contains(low, "claude") {
 		return true
+	}
+	return false
+}
+
+func sparseArtifactFamilyAllowed(profile *webStoryProfile, p, label string) (bool, bool) {
+	p = strings.ToLower(canonicalObservedWebPath(p))
+	base := strings.ToLower(path.Base(p))
+	label = strings.ToLower(label)
+
+	// SQL dump aliases represent one logical backup. A target exposes one
+	// deterministic stem; its compressed counterpart may exist as the same
+	// artifact rather than making every dictionary filename successful.
+	if strings.Contains(label, "database-dump") || strings.Contains(label, "compressed-sql-backup") || strings.HasSuffix(base, ".sql") || strings.HasSuffix(base, ".sql.gz") {
+		stems := []string{"backup", "database", "db", "dump"}
+		chosen := stems[int((profile.Seed^storyHash("database-backup"))%uint32(len(stems)))]
+		return base == chosen+".sql" || base == chosen+".sql.gz", true
+	}
+
+	// Old config copies are a separate family from the active application
+	// configuration. One forgotten copy is believable; four simultaneous
+	// editor/backup suffixes are not.
+	configBackups := []string{"/config.php.bak", "/config.php.save", "/config.php.old", "/config.php.orig", "/configuration.php.bak"}
+	if stringInStoryBudget(p, configBackups) {
+		return storyBudgetAllows(profile, p, configBackups, 1, "config-backup"), true
+	}
+
+	// Keep the generic config surface compact as well. Technology-owned files
+	// are handled by the compatibility graph before reaching this budget.
+	genericConfigs := []string{"/config.json", "/config.yaml", "/docker-compose.yml", "/.htpasswd"}
+	if stringInStoryBudget(p, genericConfigs) {
+		return storyBudgetAllows(profile, p, genericConfigs, 2, "generic-config"), true
+	}
+
+	// phpinfo/debug aliases often occur in wordlists as one large family. A
+	// target gets two stable aliases at most, avoiding a diagnostic jackpot.
+	phpDiagnostics := []string{"/phpinfo.php", "/info.php", "/phpinfo", "/_profiler/phpinfo", "/php_info.php", "/test.php"}
+	if stringInStoryBudget(p, phpDiagnostics) || strings.Contains(label, "phpinfo") && (base == "phpinfo.php" || base == "info.php") {
+		return storyBudgetAllows(profile, p, phpDiagnostics, 2, "php-diagnostic"), true
+	}
+	return true, false
+}
+
+func stringInStoryBudget(value string, values []string) bool {
+	for _, candidate := range values {
+		if value == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func storyBudgetAllows(profile *webStoryProfile, p string, candidates []string, maxActive int, salt string) bool {
+	if profile == nil || len(candidates) == 0 || maxActive <= 0 {
+		return false
+	}
+	if maxActive >= len(candidates) {
+		return stringInStoryBudget(p, candidates)
+	}
+	seed := profile.Seed ^ storyHash(salt)
+	first := int(seed % uint32(len(candidates)))
+	if p == candidates[first] {
+		return true
+	}
+	if maxActive == 1 {
+		return false
+	}
+	step := 1 + int((seed>>7)%uint32(len(candidates)-1))
+	idx := first
+	for i := 1; i < maxActive; i++ {
+		idx = (idx + step) % len(candidates)
+		if p == candidates[idx] {
+			return true
+		}
 	}
 	return false
 }

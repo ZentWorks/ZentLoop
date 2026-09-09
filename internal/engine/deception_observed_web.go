@@ -192,7 +192,7 @@ func buildObservedBackupArtifact(p string, ss *model.Session, a, b string, canar
 	if strings.HasSuffix(base, ".sql.gz") {
 		var buf bytes.Buffer
 		zw := gzip.NewWriter(&buf)
-		_, _ = zw.Write([]byte("-- PostgreSQL database dump\nCREATE TABLE app_settings (key text, value text);\nINSERT INTO app_settings VALUES ('backup_host','backup-01'),('internal_api_token','" + canaries["internal-api"] + "');\n"))
+		_, _ = zw.Write(syntheticSQLDumpBody(canaries))
 		_ = zw.Close()
 		return Response{Status: 200, ContentType: "application/gzip", Label: "fake-compressed-sql-backup", Depth: depth, Body: buf.Bytes()}
 	}
