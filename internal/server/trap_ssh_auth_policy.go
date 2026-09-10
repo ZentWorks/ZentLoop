@@ -81,8 +81,15 @@ func (s *TrapSSH) trapCredentialDecision(remote, user string, password []byte, a
 		}
 	}
 
+	sourceBound, sourceMatches := s.store.SSHSourceCredentialStatus(remote, user, password)
+	if sourceBound && !sourceMatches {
+		return false, sshAuthRejectCredential
+	}
 	credentialEstablished, credentialMatches := s.store.SSHCredentialStatus(user, password)
 	if credentialMatches {
+		if !sourceBound {
+			_ = s.store.BindSSHSourceCredential(remote, user, password)
+		}
 		return true, sshAuthAcceptedExisting
 	}
 
@@ -90,6 +97,7 @@ func (s *TrapSSH) trapCredentialDecision(remote, user string, password []byte, a
 	// account may establish the first pool slot after upgrade.
 	if stickyUser == user && !credentialEstablished {
 		if s.store.EstablishSSHCredential(user, password) {
+			_ = s.store.BindSSHSourceCredential(remote, user, password)
 			return true, sshAuthAcceptedLegacySticky
 		}
 		return false, sshAuthRejectPoolBusy
@@ -111,6 +119,7 @@ func (s *TrapSSH) trapCredentialDecision(remote, user string, password []byte, a
 		return false, sshAuthRejectPolicy
 	}
 	if s.store.EstablishSSHCredential(user, password) {
+		_ = s.store.BindSSHSourceCredential(remote, user, password)
 		return true, sshAuthAcceptedNewSlot
 	}
 	return false, sshAuthRejectPoolBusy

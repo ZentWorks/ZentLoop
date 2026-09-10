@@ -163,6 +163,11 @@ func (s *Store) campaignPeersLocked(ip string, target *model.ActorProfile, targe
 			strongSignals++
 			strongReasons = append(strongReasons, "identical persistence service payload")
 		}
+		if sharedFingerprintPrefix(targetFP, peerFP, "ssh:persistence-kit:") > 0 {
+			score += 45
+			strongSignals += 2
+			strongReasons = append(strongReasons, "identical SSH persistence kit")
+		}
 		if target.SSHMedianRevisitSeconds > 0 && peer.SSHMedianRevisitSeconds > 0 {
 			diff := target.SSHMedianRevisitSeconds - peer.SSHMedianRevisitSeconds
 			if diff < 0 {
@@ -245,6 +250,7 @@ func (s *Store) IPIntelligence(ip, version string) (model.IPIntelligence, bool) 
 
 	pathCounts := map[string]int64{}
 	targetCounts := map[string]int64{}
+	retainedTargetCounts := map[string]int64{}
 	userCounts := map[string]int64{}
 	clientCounts := map[string]int64{}
 	commandCounts := map[string]int64{}
@@ -260,6 +266,13 @@ func (s *Store) IPIntelligence(ip, version string) (model.IPIntelligence, bool) 
 		cp := *cloneSession(ss)
 		cp.RecentTimes = nil
 		out.HTTPSessions = append(out.HTTPSessions, cp)
+		targetName := strings.TrimSpace(ss.Target)
+		if targetName == "" {
+			targetName = strings.TrimSpace(ss.RequestHost)
+		}
+		if targetName != "" {
+			targetCounts[targetName] += int64(ss.RequestCount)
+		}
 		last := strings.TrimSpace(ss.CurrentPath)
 		if last == "" {
 			last = strings.TrimSpace(ss.FirstPath)
@@ -293,7 +306,7 @@ func (s *Store) IPIntelligence(ip, version string) (model.IPIntelligence, bool) 
 			target = strings.TrimSpace(e.RequestHost)
 		}
 		if target != "" {
-			targetCounts[target]++
+			retainedTargetCounts[target]++
 		}
 	}
 
@@ -372,6 +385,7 @@ func (s *Store) IPIntelligence(ip, version string) (model.IPIntelligence, bool) 
 
 	out.Summary.HTTPUniquePaths = len(pathCounts)
 	out.Summary.HTTPUniqueTargets = len(targetCounts)
+	out.Summary.HTTPRetainedUniqueTargets = len(retainedTargetCounts)
 	// Actor counters are durable/all-observed. The retained detail window can be
 	// smaller after pruning, so do not overwrite the durable semantic with a
 	// window-local count under the same field name.

@@ -425,6 +425,7 @@ type IPIntelligenceSummary struct {
 	SelfOriginOnly            bool      `json:"self_origin_only,omitempty"`
 	HTTPUniquePaths           int       `json:"http_unique_paths"`
 	HTTPUniqueTargets         int       `json:"http_unique_targets"`
+	HTTPRetainedUniqueTargets int       `json:"http_retained_unique_targets,omitempty"`
 	HTTPPeakRequestsPerMinute int       `json:"http_peak_requests_per_minute"`
 	SSHConnections            int64     `json:"ssh_connections"`
 	SSHAuthAccepted           int64     `json:"ssh_auth_accepted"`

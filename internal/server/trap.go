@@ -181,6 +181,15 @@ func (s *TrapServer) handle(w http.ResponseWriter, r *http.Request) {
 			ass.Classification = model.ClassSuspicious
 		}
 	}
+	if r.Method == http.MethodPost && isWebManagementLoginPath(r.URL.Path) && ass.Automation >= 80 && (ss.LoginAttempts >= 1 || ss.VisitCount >= 2) {
+		if ass.Risk < 82 {
+			ass.Risk = 82
+		}
+		ass.Classification = model.ClassHostile
+		ass.Actor = model.ActorAutomated
+		ass.Confidence = "high"
+		ass.Category = "credential-validation"
+	}
 	if ass.Automation >= 65 {
 		ass.Actor = model.ActorAutomated
 		if ass.Automation >= 85 {
@@ -410,6 +419,11 @@ func applyRequestMeta(ss *model.Session, meta requestMeta) {
 	if meta.CatchAll {
 		ss.CatchAll = true
 	}
+}
+
+func isWebManagementLoginPath(p string) bool {
+	p = strings.ToLower(strings.TrimSpace(p))
+	return p == "/login" || p == "/login.html" || p == "/login.htm" || p == "/login.jsp" || p == "/manage/account/login"
 }
 
 func canonicalTarget(r *http.Request) string {

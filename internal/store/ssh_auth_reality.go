@@ -27,11 +27,17 @@ type sshCredentialSlot struct {
 	LastSeen    time.Time `json:"last_seen,omitempty"`
 }
 
+type sshCredentialBinding struct {
+	Fingerprint string    `json:"fingerprint"`
+	LastSeen    time.Time `json:"last_seen,omitempty"`
+}
+
 type sshCredentialRealityDisk struct {
 	// Fingerprints is the 0.3.17 single-slot format. It remains read-only here so
 	// existing installations migrate without losing their established decoy.
-	Fingerprints map[string]string              `json:"fingerprints,omitempty"`
-	Pools        map[string][]sshCredentialSlot `json:"pools,omitempty"`
+	Fingerprints map[string]string               `json:"fingerprints,omitempty"`
+	Pools        map[string][]sshCredentialSlot  `json:"pools,omitempty"`
+	Bindings     map[string]sshCredentialBinding `json:"bindings,omitempty"`
 }
 
 func (s *Store) initSSHCredentialReality(create bool) error {
@@ -79,6 +85,14 @@ func (s *Store) initSSHCredentialReality(create bool) error {
 				break
 			}
 		}
+	}
+	for key, binding := range disk.Bindings {
+		key = strings.ToLower(strings.TrimSpace(key))
+		fp := strings.ToLower(strings.TrimSpace(binding.Fingerprint))
+		if key == "" || len(fp) != 64 {
+			continue
+		}
+		s.sshCredentialBindings[key] = sshCredentialBinding{Fingerprint: fp, LastSeen: binding.LastSeen}
 	}
 	for user, fp := range disk.Fingerprints {
 		user = strings.ToLower(strings.TrimSpace(user))
@@ -167,6 +181,72 @@ func (s *Store) EstablishSSHCredential(user string, password []byte) bool {
 	return false
 }
 
+func sshCredentialBindingKey(source, user string) string {
+	return strings.ToLower(strings.TrimSpace(source)) + "|" + strings.ToLower(strings.TrimSpace(user))
+}
+
+// SSHSourceCredentialStatus keeps one successful credential sticky per source/account.
+// It stores only the HMAC fingerprint already used by the host credential pool.
+func (s *Store) SSHSourceCredentialStatus(source, user string, password []byte) (bound, matches bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := sshCredentialBindingKey(source, user)
+	binding, ok := s.sshCredentialBindings[key]
+	if !ok {
+		return false, false
+	}
+	got := s.sshCredentialFingerprintLocked(user, password)
+	if got == "" {
+		return true, false
+	}
+	if hmac.Equal([]byte(binding.Fingerprint), []byte(got)) {
+		binding.LastSeen = time.Now()
+		s.sshCredentialBindings[key] = binding
+		_ = s.persistSSHCredentialRealityLocked()
+		return true, true
+	}
+	return true, false
+}
+
+func (s *Store) BindSSHSourceCredential(source, user string, password []byte) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := sshCredentialBindingKey(source, user)
+	if key == "|" {
+		return false
+	}
+	fp := s.sshCredentialFingerprintLocked(user, password)
+	if fp == "" {
+		return false
+	}
+	if existing, ok := s.sshCredentialBindings[key]; ok && existing.Fingerprint != fp {
+		return false
+	}
+	now := time.Now()
+	s.sshCredentialBindings[key] = sshCredentialBinding{Fingerprint: fp, LastSeen: now}
+	cut := now.Add(-30 * 24 * time.Hour)
+	for k, b := range s.sshCredentialBindings {
+		if !b.LastSeen.IsZero() && b.LastSeen.Before(cut) {
+			delete(s.sshCredentialBindings, k)
+		}
+	}
+	if len(s.sshCredentialBindings) > 4096 {
+		type pair struct {
+			key string
+			at  time.Time
+		}
+		rows := make([]pair, 0, len(s.sshCredentialBindings))
+		for k, b := range s.sshCredentialBindings {
+			rows = append(rows, pair{k, b.LastSeen})
+		}
+		sort.Slice(rows, func(i, j int) bool { return rows[i].at.Before(rows[j].at) })
+		for i := 0; i < len(rows)-4096; i++ {
+			delete(s.sshCredentialBindings, rows[i].key)
+		}
+	}
+	return s.persistSSHCredentialRealityLocked()
+}
+
 func (s *Store) SSHCredentialPoolSize(user string) int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -174,9 +254,12 @@ func (s *Store) SSHCredentialPoolSize(user string) int {
 }
 
 func (s *Store) persistSSHCredentialRealityLocked() bool {
-	disk := sshCredentialRealityDisk{Pools: map[string][]sshCredentialSlot{}}
+	disk := sshCredentialRealityDisk{Pools: map[string][]sshCredentialSlot{}, Bindings: map[string]sshCredentialBinding{}}
 	for user, slots := range s.sshCredentialPools {
 		disk.Pools[user] = append([]sshCredentialSlot(nil), slots...)
+	}
+	for key, binding := range s.sshCredentialBindings {
+		disk.Bindings[key] = binding
 	}
 	b, err := json.MarshalIndent(disk, "", "  ")
 	if err != nil {

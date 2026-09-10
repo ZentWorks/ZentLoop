@@ -93,7 +93,7 @@ func (s *Store) HTTPBehavior(ip, currentUA string, now time.Time) HTTPBehaviorSi
 	}
 	if out.DistinctUAs >= 3 {
 		out.AutomationBoost += 35
-		out.Fingerprints = append(out.Fingerprints, "http:ua-rotation")
+		out.Fingerprints = append(out.Fingerprints, "http:user-agent-rotation")
 	}
 	if len(botClaims) >= 3 {
 		out.AutomationBoost += 30

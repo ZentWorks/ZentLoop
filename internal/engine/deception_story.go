@@ -329,6 +329,45 @@ func storySurfaceAllowed(profile *webStoryProfile, p, label string) bool {
 	return true
 }
 
+func genericAdminChildSurface(p string) bool {
+	p = strings.ToLower(canonicalObservedWebPath(p))
+	switch p {
+	case "/admin/dashboard", "/admin/users", "/admin/settings", "/admin/profile", "/admin/index", "/admin/index.php":
+		return true
+	}
+	return false
+}
+
+func storySensitiveClass(p, label string) string {
+	p = strings.ToLower(canonicalObservedWebPath(p))
+	label = strings.ToLower(label)
+	switch {
+	case strings.Contains(label, "terraform-state") || strings.Contains(p, "terraform.tfstate"):
+		return "infrastructure-state"
+	case strings.Contains(label, "ci-build") || strings.Contains(p, ".travis") || strings.Contains(p, "jenkins"):
+		return "cicd"
+	case strings.Contains(label, "metadata-credentials") || strings.Contains(label, "cloud-service-account"):
+		return "cloud-credential"
+	case strings.Contains(label, "ssh-private-key") || strings.Contains(label, "netrc") || strings.Contains(label, "npm-credentials"):
+		return "credential"
+	case strings.Contains(label, "symfony-parameters") || strings.Contains(label, "master-key"):
+		return "app-secret"
+	}
+	return ""
+}
+
+func storySensitiveExposureAllowed(profile *webStoryProfile, p, label string) bool {
+	class := storySensitiveClass(p, label)
+	if class == "" || profile == nil {
+		return true
+	}
+	classes := []string{"credential", "infrastructure-state", "cicd", "cloud-credential", "app-secret"}
+	seed := profile.Seed ^ storyHash("sensitive-exposure")
+	first := int(seed % uint32(len(classes)))
+	second := (first + 1 + int((seed>>8)%uint32(len(classes)-1))) % len(classes)
+	return class == classes[first] || class == classes[second]
+}
+
 func storyArtifactAllowed(profile *webStoryProfile, p, label string, strict bool) bool {
 	p = canonicalObservedWebPath(p)
 	label = strings.ToLower(label)
@@ -654,6 +693,26 @@ func (d *Deception) finalizeWebStoryResponse(r *http.Request, ss *model.Session,
 	if resp.Status >= 200 && resp.Status < 300 && !storySurfaceAllowed(profile, p, resp.Label) {
 		miss := storyMiss(ss, "surface")
 		miss.Label = "story-surface-miss"
+		miss.Delay = delay
+		return miss
+	}
+
+	if resp.Status >= 200 && resp.Status < 300 && resp.Label == "fake-admin" && genericAdminChildSurface(p) {
+		_, workspace := managementSurfaceSelection(ss)
+		if workspace != "/admin" {
+			miss := storyMiss(ss, "management")
+			miss.Label = "management-surface-miss"
+			miss.Delay = delay
+			return miss
+		}
+		resp.Status = http.StatusFound
+		resp.Headers = map[string]string{"Location": "/login"}
+		resp.Label = "fake-management-redirect"
+		resp.Body = []byte("<html><body>Redirecting to sign in...</body></html>")
+	}
+	if resp.Status >= 200 && resp.Status < 300 && !storySensitiveExposureAllowed(profile, p, resp.Label) {
+		miss := storyMiss(ss, "sensitive")
+		miss.Label = "story-sensitive-exposure-miss"
 		miss.Delay = delay
 		return miss
 	}

@@ -88,6 +88,7 @@ type Store struct {
 	realityStates         map[string]model.TargetRealityState
 	sshCredentialKey      []byte
 	sshCredentialPools    map[string][]sshCredentialSlot
+	sshCredentialBindings map[string]sshCredentialBinding
 	sshAuthPolicyCounts   map[string]int64
 	retentionDays         int
 	retentionStop         chan struct{}
@@ -110,7 +111,7 @@ func newStoreState(dataDir string, retentionDays int) *Store {
 		sshSessions: make(map[string]*model.SSHSession), sshUserCounts: make(map[string]int64), sshCommandCounts: make(map[string]int64), sshFamilyCounts: make(map[string]int64), sshCountryCounts: make(map[string]int64), sshClientCounts: make(map[string]int64), sshDayConnections: make(map[string]int64), sshDayAuth: make(map[string]int64), sshDayShells: make(map[string]int64), sshDayCommands: make(map[string]int64), sshHourCounts: make(map[int64]int64), sshHighlightStates: make(map[string]*sshHighlightState), sshHighlightHistory: make(map[string]model.SSHHighlight),
 		integrationPeers: make(map[string]*model.IntegrationPeer), integrationPersist: make(map[string]time.Time),
 		trustedManual:   make(map[string]model.TrustedDomain),
-		realityProfiles: make(map[string]model.TargetRealityProfile), realityStates: make(map[string]model.TargetRealityState), sshCredentialPools: make(map[string][]sshCredentialSlot), sshAuthPolicyCounts: make(map[string]int64),
+		realityProfiles: make(map[string]model.TargetRealityProfile), realityStates: make(map[string]model.TargetRealityState), sshCredentialPools: make(map[string][]sshCredentialSlot), sshCredentialBindings: make(map[string]sshCredentialBinding), sshAuthPolicyCounts: make(map[string]int64),
 		started: time.Now(), dataDir: dataDir, retentionDays: retentionDays,
 		retentionStop: make(chan struct{}), retentionDone: make(chan struct{}),
 	}

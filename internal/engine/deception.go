@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"html"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -15,6 +16,51 @@ import (
 	"zentloop/internal/lures"
 	"zentloop/internal/model"
 )
+
+type webLoginRealityProvider interface {
+	ResolveWebLoginOutcome(target, username string, credential []byte) string
+}
+
+func webLoginCredential(body string) (string, []byte) {
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return "", nil
+	}
+	var obj map[string]any
+	if strings.HasPrefix(body, "{") && json.Unmarshal([]byte(body), &obj) == nil {
+		pick := func(keys ...string) string {
+			for _, key := range keys {
+				if v, ok := obj[key]; ok {
+					if text, ok := v.(string); ok && strings.TrimSpace(text) != "" {
+						return strings.TrimSpace(text)
+					}
+				}
+			}
+			return ""
+		}
+		user := pick("username", "user", "email", "login")
+		secret := pick("password", "pass", "pwd", "passwd")
+		if secret != "" {
+			return user, []byte(secret)
+		}
+	}
+	if vals, err := url.ParseQuery(body); err == nil {
+		pick := func(keys ...string) string {
+			for _, key := range keys {
+				if v := strings.TrimSpace(vals.Get(key)); v != "" {
+					return v
+				}
+			}
+			return ""
+		}
+		user := pick("username", "user", "email", "login")
+		secret := pick("password", "pass", "pwd", "passwd")
+		if secret != "" {
+			return user, []byte(secret)
+		}
+	}
+	return "", nil
+}
 
 type Deception struct {
 	cfg     config.Config
@@ -157,7 +203,13 @@ func (d *Deception) BuildWithBody(r *http.Request, ss *model.Session, bodySample
 		resp.Depth = max(depth, 1)
 		if r.Method == http.MethodPost {
 			ss.LoginAttempts++
-			if ss.LoginAttempts == 1 {
+			outcome := ""
+			if provider, ok := any(d.reality).(webLoginRealityProvider); ok {
+				user, credential := webLoginCredential(bodySample)
+				outcome = provider.ResolveWebLoginOutcome(storyTarget(ss), user, credential)
+			}
+			reject := strings.HasPrefix(outcome, "reject:") || (outcome == "" && ss.LoginAttempts == 1)
+			if reject {
 				resp.Status = http.StatusUnauthorized
 				resp.Label = "fake-login-rejected"
 				resp.Body = []byte(loginHTMLMessage(title, p, "administrator", "Sign in", "Invalid username or password. 2 attempts remaining."))

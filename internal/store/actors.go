@@ -290,6 +290,16 @@ func (s *Store) applyActorHTTPEventLocked(e model.Event) {
 			s.actorFingerprints["http:phpunit-docker-exec-chain"]++
 		}
 	}
+	if s.httpPeriodicAuthValidatorLocked(e) {
+		a.Actor = model.ActorAutomated
+		a.Classification = strongerClassification(a.Classification, model.ClassHostile)
+		if a.RiskScore < 82 {
+			a.RiskScore = 82
+		}
+		if addFingerprint(a, "http:periodic-auth-validator") {
+			s.actorFingerprints["http:periodic-auth-validator"]++
+		}
+	}
 	if e.AutomationScore >= 80 && strings.TrimSpace(e.UserAgent) != "" {
 		uas := s.httpActorUAs[e.IP]
 		if uas == nil {
@@ -336,6 +346,46 @@ func (s *Store) applyActorHTTPEventLocked(e model.Event) {
 		summary += " · " + e.ProbeName
 	}
 	s.appendActorActivityLocked(a, model.ActorActivity{At: e.At, Protocol: "http", Kind: e.Category, SessionID: e.SessionID, Summary: summary, Path: e.Path, RiskScore: e.RiskScore, Depth: e.Depth, Fingerprint: fp})
+}
+
+func (s *Store) httpPeriodicAuthValidatorLocked(e model.Event) bool {
+	if e.SessionID == "" || strings.ToUpper(strings.TrimSpace(e.Method)) != "POST" || !isHTTPLoginPath(e.Path) || e.AutomationScore < 80 {
+		return false
+	}
+	cut := e.At.Add(-2 * time.Hour)
+	times := make([]time.Time, 0, 12)
+	for i := len(s.events) - 1; i >= 0; i-- {
+		row := s.events[i]
+		if row.At.Before(cut) {
+			break
+		}
+		if row.IP != e.IP || strings.ToUpper(strings.TrimSpace(row.Method)) != "POST" || !isHTTPLoginPath(row.Path) {
+			continue
+		}
+		times = append(times, row.At)
+	}
+	if len(times) < 3 {
+		return false
+	}
+	sort.Slice(times, func(i, j int) bool { return times[i].Before(times[j]) })
+	gaps := make([]time.Duration, 0, len(times)-1)
+	for i := 1; i < len(times); i++ {
+		gap := times[i].Sub(times[i-1])
+		if gap >= 5*time.Minute && gap <= 30*time.Minute {
+			gaps = append(gaps, gap)
+		}
+	}
+	if len(gaps) < 2 {
+		return false
+	}
+	sort.Slice(gaps, func(i, j int) bool { return gaps[i] < gaps[j] })
+	median := gaps[len(gaps)/2]
+	return gaps[len(gaps)-1]-gaps[0] <= 4*time.Minute && median >= 5*time.Minute && median <= 30*time.Minute
+}
+
+func isHTTPLoginPath(p string) bool {
+	p = strings.ToLower(strings.TrimSpace(p))
+	return p == "/login" || p == "/login.html" || p == "/login.htm" || p == "/login.jsp" || p == "/manage/account/login"
 }
 
 func (s *Store) httpPHPUnitDockerExecChainLocked(e model.Event) bool {
@@ -441,6 +491,44 @@ func sshPayloadHashFingerprint(e model.SSHEvent) string {
 		return "ssh:service-unit-sha256:" + h[:16]
 	}
 	return ""
+}
+
+func (s *Store) sshPersistenceKitFingerprintLocked(e model.SSHEvent) string {
+	if e.SessionID == "" {
+		return ""
+	}
+	current := sshPayloadHashFingerprint(e)
+	var payload, unit string
+	if strings.HasPrefix(current, "ssh:payload-sha256:") {
+		payload = strings.TrimPrefix(current, "ssh:payload-sha256:")
+	}
+	if strings.HasPrefix(current, "ssh:service-unit-sha256:") {
+		unit = strings.TrimPrefix(current, "ssh:service-unit-sha256:")
+	}
+	cut := e.At.Add(-3 * time.Minute)
+	for i := len(s.sshEvents) - 1; i >= 0; i-- {
+		row := s.sshEvents[i]
+		if row.At.Before(cut) {
+			break
+		}
+		if row.SessionID != e.SessionID {
+			continue
+		}
+		fp := sshPayloadHashFingerprint(row)
+		if payload == "" && strings.HasPrefix(fp, "ssh:payload-sha256:") {
+			payload = strings.TrimPrefix(fp, "ssh:payload-sha256:")
+		}
+		if unit == "" && strings.HasPrefix(fp, "ssh:service-unit-sha256:") {
+			unit = strings.TrimPrefix(fp, "ssh:service-unit-sha256:")
+		}
+		if payload != "" && unit != "" {
+			break
+		}
+	}
+	if payload == "" || unit == "" {
+		return ""
+	}
+	return "ssh:persistence-kit:" + payload + ":" + unit
 }
 
 func (s *Store) applyActorSSHEventLocked(e model.SSHEvent) {
@@ -592,6 +680,12 @@ func (s *Store) applyActorSSHEventLocked(e model.SSHEvent) {
 	if payloadFP := sshPayloadHashFingerprint(e); payloadFP != "" {
 		if addFingerprint(a, payloadFP) {
 			s.actorFingerprints[payloadFP]++
+		}
+	}
+	if kitFP := s.sshPersistenceKitFingerprintLocked(e); kitFP != "" {
+		a.Actor = model.ActorAutomated
+		if addFingerprint(a, kitFP) {
+			s.actorFingerprints[kitFP]++
 		}
 	}
 	if (e.Type == "exec" || e.Type == "command") && fp == "ssh:environment-fingerprint-probe" && strings.TrimSpace(e.Command) != "" {
