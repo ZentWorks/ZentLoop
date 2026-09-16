@@ -872,7 +872,7 @@ func (w *virtualSSHWorld) executeExtraCommand(cmd string, args []string, raw, in
 		r := base("recon", 4, 86, "tool-discovery", "package inventory discovery")
 		if containsArg(args, "-l") {
 			rows := []string{"Desired=Unknown/Install/Remove/Purge/Hold", "||/ Name           Version              Architecture Description", "ii  curl           8.5.0-2ubuntu10.6   amd64        command line tool for transferring data", "ii  openssh-server 1:9.6p1-3ubuntu13.13 amd64        secure shell server", "ii  docker-ce      5:27.5.1-1~ubuntu.24 amd64        Docker container engine", "ii  vim            2:9.1.0016-1ubuntu7  amd64        Vi IMproved"}
-			if w.installedPackages["htop"] {
+			if w.packageInstalled("htop") {
 				rows = append(rows, "ii  htop           3.3.0-4build1         amd64        interactive processes viewer")
 			}
 			r.Output = strings.Join(rows, "\n")
@@ -1340,24 +1340,29 @@ func (w *virtualSSHWorld) fakeApt(cmd string, args []string) virtualSSHResult {
 		if pkg == "install" || pkg == "" {
 			pkg = "package"
 		}
-		w.installedPackages[strings.ToLower(pkg)] = true
-		w.ensureVirtualCommandBinary(pkg)
 		version := "1.0-1ubuntu1"
 		if strings.EqualFold(pkg, "htop") {
 			version = "3.3.0-4build1"
 		}
+		if w.packageInstalled(pkg) {
+			r.Output = "Reading package lists... Done\nBuilding dependency tree... Done\n" + pkg + " is already the newest version (" + version + ").\n0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded."
+			r.Delay = 180 * time.Millisecond
+			break
+		}
+		w.setPackageInstalled(pkg, true)
+		w.ensureVirtualCommandBinary(pkg)
 		r.Output = "Reading package lists... Done\nBuilding dependency tree... Done\nThe following NEW packages will be installed:\n  " + pkg + "\n0 upgraded, 1 newly installed, 0 to remove and 0 not upgraded.\nSetting up " + pkg + " (" + version + ") ..."
 		r.LoopInc = 1
 		r.Delay = 500 * time.Millisecond
 	case "remove", "purge":
 		pkg := lastNonOption(args)
-		delete(w.installedPackages, strings.ToLower(pkg))
+		w.setPackageInstalled(pkg, false)
 		w.removeVirtualCommandBinary(pkg)
 		r.Output = "Removing " + pkg + " ..."
 		r.LoopInc = 1
 	case "list":
 		rows := []string{"curl/noble-updates,now 8.5.0-2ubuntu10.6 amd64 [installed]", "openssh-server/noble-updates,now 1:9.6p1-3ubuntu13.13 amd64 [installed]", "vim/noble,now 2:9.1.0016-1ubuntu7 amd64 [installed]"}
-		if w.installedPackages["htop"] {
+		if w.packageInstalled("htop") {
 			rows = append(rows, "htop/noble,now 3.3.0-4build1 amd64 [installed]")
 		}
 		r.Output = strings.Join(rows, "\n")

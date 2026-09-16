@@ -72,6 +72,19 @@ func addFingerprint(a *model.ActorProfile, fingerprint string) bool {
 	return true
 }
 
+func actorFingerprintCountPrefix(a *model.ActorProfile, prefix string) int {
+	if a == nil {
+		return 0
+	}
+	n := 0
+	for _, fp := range a.Fingerprints {
+		if strings.HasPrefix(fp, prefix) {
+			n++
+		}
+	}
+	return n
+}
+
 func strongerClassification(a, b model.Classification) model.Classification {
 	rank := func(v model.Classification) int {
 		switch v {
@@ -196,8 +209,13 @@ func (s *Store) updateHTTPSequenceFingerprintLocked(a *model.ActorProfile, e mod
 	}
 	h := sha256.Sum256([]byte(strings.Join(seq, "\n")))
 	fp := "http:sequence:" + hex.EncodeToString(h[:8])
-	if addFingerprint(a, fp) {
-		s.actorFingerprints[fp]++
+	// Sequence hashes are useful campaign evidence but extremely high-volume
+	// scanners can generate hundreds of unique variants. Keep actor/export state
+	// bounded while retaining canonical behavioral fingerprints indefinitely.
+	if actorFingerprintCountPrefix(a, "http:sequence:") < 32 {
+		if addFingerprint(a, fp) {
+			s.actorFingerprints[fp]++
+		}
 	}
 
 	// Correlate parallel workers that run the same normalized probe program

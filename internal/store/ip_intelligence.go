@@ -14,6 +14,54 @@ type ipSweepPoint struct {
 	delta int
 }
 
+type ipTimeInterval struct {
+	start time.Time
+	end   time.Time
+}
+
+func intervalSecondsTotal(rows []ipTimeInterval) int64 {
+	var total int64
+	for _, row := range rows {
+		if row.start.IsZero() || row.end.IsZero() || !row.end.After(row.start) {
+			continue
+		}
+		total += int64(row.end.Sub(row.start) / time.Second)
+	}
+	return total
+}
+
+func intervalSecondsUnion(rows []ipTimeInterval) int64 {
+	clean := make([]ipTimeInterval, 0, len(rows))
+	for _, row := range rows {
+		if !row.start.IsZero() && !row.end.IsZero() && row.end.After(row.start) {
+			clean = append(clean, row)
+		}
+	}
+	if len(clean) == 0 {
+		return 0
+	}
+	sort.Slice(clean, func(i, j int) bool {
+		if clean[i].start.Equal(clean[j].start) {
+			return clean[i].end.Before(clean[j].end)
+		}
+		return clean[i].start.Before(clean[j].start)
+	})
+	start, end := clean[0].start, clean[0].end
+	var total time.Duration
+	for _, row := range clean[1:] {
+		if !row.start.After(end) {
+			if row.end.After(end) {
+				end = row.end
+			}
+			continue
+		}
+		total += end.Sub(start)
+		start, end = row.start, row.end
+	}
+	total += end.Sub(start)
+	return int64(total / time.Second)
+}
+
 func ipFirstNonEmpty(values ...string) string {
 	for _, value := range values {
 		if value = strings.TrimSpace(value); value != "" {
@@ -245,7 +293,7 @@ func (s *Store) IPIntelligence(ip, version string) (model.IPIntelligence, bool) 
 		SSHUniqueUsers: actor.SSHUniqueUsers, SSHPeakConcurrent: actor.SSHPeakConcurrent,
 		SSHPeakAttemptsPerMinute: actor.SSHPeakAttemptsPerMin, SSHMedianRevisitSeconds: actor.SSHMedianRevisitSeconds,
 		SSHRevisitJitterSeconds: actor.SSHRevisitJitterSeconds, PayloadSignals: actor.PayloadAttempts,
-		CanaryTouches: actor.CanaryTouches, EngagementSeconds: actor.EngagementSeconds, ActiveRequestSeconds: actor.EngagementSeconds, ObservationSpanSeconds: maxInt64(0, int64(actor.LastSeen.Sub(actor.FirstSeen)/time.Second)), Depth: actor.Depth,
+		CanaryTouches: actor.CanaryTouches, EngagementSeconds: actor.EngagementSeconds, ObservationSpanSeconds: maxInt64(0, int64(actor.LastSeen.Sub(actor.FirstSeen)/time.Second)), Depth: actor.Depth,
 	}
 
 	pathCounts := map[string]int64{}
@@ -259,6 +307,8 @@ func (s *Store) IPIntelligence(ip, version string) (model.IPIntelligence, bool) 
 	targetClients := map[string]struct{}{}
 	httpMinute := map[int64]int{}
 	sshAuthMinute := map[int64]int{}
+	httpIntervals := make([]ipTimeInterval, 0)
+	sshIntervals := make([]ipTimeInterval, 0)
 	for _, ss := range s.sessions {
 		if ss.IP != ip {
 			continue
@@ -266,6 +316,9 @@ func (s *Store) IPIntelligence(ip, version string) (model.IPIntelligence, bool) 
 		cp := *cloneSession(ss)
 		cp.RecentTimes = nil
 		out.HTTPSessions = append(out.HTTPSessions, cp)
+		if !ss.FirstSeen.IsZero() && !ss.LastSeen.IsZero() && ss.LastSeen.After(ss.FirstSeen) {
+			httpIntervals = append(httpIntervals, ipTimeInterval{start: ss.FirstSeen, end: ss.LastSeen})
+		}
 		targetName := strings.TrimSpace(ss.Target)
 		if targetName == "" {
 			targetName = strings.TrimSpace(ss.RequestHost)
@@ -316,6 +369,13 @@ func (s *Store) IPIntelligence(ip, version string) (model.IPIntelligence, bool) 
 			continue
 		}
 		out.SSHSessions = append(out.SSHSessions, cloneSSHSession(ss))
+		endForMetrics := ss.DisconnectedAt
+		if endForMetrics.IsZero() {
+			endForMetrics = ss.LastSeen
+		}
+		if !ss.FirstSeen.IsZero() && !endForMetrics.IsZero() && endForMetrics.After(ss.FirstSeen) {
+			sshIntervals = append(sshIntervals, ipTimeInterval{start: ss.FirstSeen, end: endForMetrics})
+		}
 		if u := strings.TrimSpace(ss.Username); u != "" {
 			targetUsers[u] = struct{}{}
 			userCounts[u]++
@@ -385,6 +445,17 @@ func (s *Store) IPIntelligence(ip, version string) (model.IPIntelligence, bool) 
 
 	out.Summary.HTTPUniquePaths = len(pathCounts)
 	out.Summary.HTTPUniqueTargets = len(targetCounts)
+	out.Summary.HTTPRequestSecondsTotal = intervalSecondsTotal(httpIntervals)
+	out.Summary.HTTPActiveWallSeconds = intervalSecondsUnion(httpIntervals)
+	out.Summary.SSHSessionSecondsTotal = intervalSecondsTotal(sshIntervals)
+	out.Summary.SSHActiveWallSeconds = intervalSecondsUnion(sshIntervals)
+	// Legacy field retained for API compatibility, but it now means HTTP wall-clock
+	// activity only. Pure SSH actors therefore correctly report zero here.
+	out.Summary.ActiveRequestSeconds = out.Summary.HTTPActiveWallSeconds
+	out.Summary.HTTPRetainedRequests = int64(len(out.HTTPEvents))
+	out.Summary.SSHRetainedConnections = int64(len(out.SSHSessions))
+	out.Summary.HTTPDetailRetentionComplete = actor.HTTPRequests <= out.Summary.HTTPRetainedRequests
+	out.Summary.SSHDetailRetentionComplete = actor.SSHConnections <= out.Summary.SSHRetainedConnections
 	out.Summary.HTTPRetainedUniqueTargets = len(retainedTargetCounts)
 	// Actor counters are durable/all-observed. The retained detail window can be
 	// smaller after pruning, so do not overwrite the durable semantic with a

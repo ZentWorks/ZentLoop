@@ -129,7 +129,7 @@ func storyCandidate(p, label string) (string, int) {
 		return "cisco-remote-access", 3
 	case p == "/remote/login" || strings.HasPrefix(p, "/remote/"):
 		return "fortinet-remote-access", 3
-	case p == "/web/" || p == "/webpages/login.html" || p == "/doc/index.html" || strings.Contains(label, "embedded") || strings.Contains(label, "device-web"):
+	case p == "/web/" || p == "/webpages/login.html" || p == "/doc/index.html" || strings.Contains(label, "embedded") || strings.Contains(label, "device-web") || strings.Contains(label, "appliance"):
 		return "embedded-appliance", 2
 	case isWordPressStoryPath(p) || strings.Contains(label, "wordpress"):
 		return "wordpress", 3
@@ -329,13 +329,14 @@ func storySurfaceAllowed(profile *webStoryProfile, p, label string) bool {
 	return true
 }
 
-func genericAdminChildSurface(p string) bool {
+func managementCandidateRoot(p string) string {
 	p = strings.ToLower(canonicalObservedWebPath(p))
-	switch p {
-	case "/admin/dashboard", "/admin/users", "/admin/settings", "/admin/profile", "/admin/index", "/admin/index.php":
-		return true
+	for _, root := range []string{"/admin", "/administrator", "/dashboard", "/console", "/portal", "/workspace", "/manage", "/settings"} {
+		if p == root || strings.HasPrefix(p, root+"/") {
+			return root
+		}
 	}
-	return false
+	return ""
 }
 
 func storySensitiveClass(p, label string) string {
@@ -371,7 +372,6 @@ func storySensitiveExposureAllowed(profile *webStoryProfile, p, label string) bo
 func storyArtifactAllowed(profile *webStoryProfile, p, label string, strict bool) bool {
 	p = canonicalObservedWebPath(p)
 	label = strings.ToLower(label)
-	base := path.Base(p)
 
 	if allowed, managed := sparseArtifactFamilyAllowed(profile, p, label); managed {
 		return allowed
@@ -379,13 +379,6 @@ func storyArtifactAllowed(profile *webStoryProfile, p, label string, strict bool
 
 	if strict && strings.Contains(label, "cloud-service-account") {
 		return sparseCloudCredentialAllowed(profile, p)
-	}
-
-	if strings.HasPrefix(label, "fake-env") || strings.HasPrefix(base, ".env") || strings.HasSuffix(base, ".env") {
-		if p == "/.env" || p == "/.env.example" || p == "/laravel/.env" {
-			return true
-		}
-		return (storyHash(p+"|env")^profile.Seed)%4 == 0
 	}
 
 	if strings.Contains(label, "ssh-private-key") {
@@ -437,10 +430,69 @@ func sparseCloudCredentialAllowed(profile *webStoryProfile, p string) bool {
 	return false
 }
 
+func storyDeploymentRoot(profile *webStoryProfile) string {
+	if profile == nil {
+		return "/"
+	}
+	roots := []string{"/", "/app", "/backend", "/server"}
+	return roots[int((profile.Seed^storyHash("deployment-root"))%uint32(len(roots)))]
+}
+
+func deploymentEnvAllowed(profile *webStoryProfile, p string) bool {
+	p = strings.ToLower(canonicalObservedWebPath(p))
+	root := storyDeploymentRoot(profile)
+	prefix := root
+	if prefix == "/" {
+		prefix = ""
+	}
+	return p == prefix+"/.env" || p == prefix+"/.env.example"
+}
+
+func aiToolAliasAllowed(profile *webStoryProfile, p string) (bool, bool) {
+	p = strings.ToLower(canonicalObservedWebPath(p))
+	families := [][]string{
+		{"/.cursor/settings.json", "/.cursor/mcp.json", "/.cursor/config.json"},
+		{"/.claude/mcp.json", "/.claude/.credentials.json", "/.claude/settings.json", "/.claude.json", "/claude_desktop_config.json", "/anthropic.json"},
+		{"/openai.json", "/.openai/config.json", "/.mcp.json"},
+		{"/.continue/config.json", "/.continue/mcp.json"},
+	}
+	managed := false
+	for _, family := range families {
+		if stringInStoryBudget(p, family) {
+			managed = true
+			break
+		}
+	}
+	if !managed {
+		return true, false
+	}
+	chosen := int((profile.Seed ^ storyHash("ai-tool-family")) % uint32(len(families)))
+	if !stringInStoryBudget(p, families[chosen]) {
+		return false, true
+	}
+	return storyBudgetAllows(profile, p, families[chosen], 2, "ai-tool-alias"), true
+}
+
 func sparseArtifactFamilyAllowed(profile *webStoryProfile, p, label string) (bool, bool) {
 	p = strings.ToLower(canonicalObservedWebPath(p))
 	base := strings.ToLower(path.Base(p))
 	label = strings.ToLower(label)
+
+	if strings.HasPrefix(label, "fake-env") || strings.HasPrefix(base, ".env") || strings.HasSuffix(base, ".env") {
+		return deploymentEnvAllowed(profile, p), true
+	}
+	if strings.Contains(label, "ai-tool-credentials") || strings.Contains(p, "/.cursor/") || strings.Contains(p, "/.claude") || strings.Contains(p, "openai") || strings.Contains(p, "anthropic") || p == "/.mcp.json" || strings.Contains(p, "/.continue/") {
+		if allowed, managed := aiToolAliasAllowed(profile, p); managed {
+			return allowed, true
+		}
+	}
+	if strings.Contains(label, "php-backdoor") {
+		backdoors := []string{"/zz.php", "/api.php", "/api.php/", "/queryversion.php", "/leftdao.php", "/uibvb.php", "/shell.php", "/cmd.php"}
+		if stringInStoryBudget(p, backdoors) {
+			return storyBudgetAllows(profile, p, backdoors, 2, "php-backdoor"), true
+		}
+		return (storyHash(p+"|php-backdoor")^profile.Seed)%7 == 0, true
+	}
 
 	// SQL dump aliases represent one logical backup. A target exposes one
 	// deterministic stem; its compressed counterpart may exist as the same
@@ -697,18 +749,22 @@ func (d *Deception) finalizeWebStoryResponse(r *http.Request, ss *model.Session,
 		return miss
 	}
 
-	if resp.Status >= 200 && resp.Status < 300 && resp.Label == "fake-admin" && genericAdminChildSurface(p) {
-		_, workspace := managementSurfaceSelection(ss)
-		if workspace != "/admin" {
-			miss := storyMiss(ss, "management")
-			miss.Label = "management-surface-miss"
-			miss.Delay = delay
-			return miss
+	if resp.Status >= 200 && resp.Status < 400 {
+		if root := managementCandidateRoot(p); root != "" {
+			_, workspace := managementSurfaceSelection(ss)
+			if root != workspace {
+				miss := storyMiss(ss, "management")
+				miss.Label = "management-surface-miss"
+				miss.Delay = delay
+				return miss
+			}
+			if p != workspace && !strings.HasPrefix(strings.ToLower(resp.Label), "management-surface-miss") {
+				resp.Status = http.StatusFound
+				resp.Headers = map[string]string{"Location": "/login"}
+				resp.Label = "fake-management-redirect"
+				resp.Body = []byte("<html><body>Redirecting to sign in...</body></html>")
+			}
 		}
-		resp.Status = http.StatusFound
-		resp.Headers = map[string]string{"Location": "/login"}
-		resp.Label = "fake-management-redirect"
-		resp.Body = []byte("<html><body>Redirecting to sign in...</body></html>")
 	}
 	if resp.Status >= 200 && resp.Status < 300 && !storySensitiveExposureAllowed(profile, p, resp.Label) {
 		miss := storyMiss(ss, "sensitive")

@@ -134,8 +134,76 @@ func (s *Store) HTTPBehavior(ip, currentUA string, now time.Time) HTTPBehaviorSi
 		out.RiskBoost += 8
 		out.Fingerprints = append(out.Fingerprints, "http:remote-access-panel-fingerprint-sweep")
 	}
+	if s.lowAndSlowHTTPProberLocked(ip, now) {
+		out.AutomationBoost += 55
+		out.RiskBoost += 12
+		out.Fingerprints = append(out.Fingerprints, "http:low-and-slow-prober")
+	}
 	sort.Strings(out.Fingerprints)
 	return out
+}
+
+func (s *Store) lowAndSlowHTTPProberLocked(ip string, now time.Time) bool {
+	const window = 20 * time.Minute
+	times := make([]time.Time, 0, 64)
+	paths := map[string]struct{}{}
+	known := 0
+	for i := len(s.events) - 1; i >= 0; i-- {
+		e := s.events[i]
+		if now.Sub(e.At) > window {
+			break
+		}
+		if e.IP != ip || e.SelfOrigin {
+			continue
+		}
+		times = append(times, e.At)
+		if e.Path != "" {
+			paths[strings.ToLower(e.Path)] = struct{}{}
+		}
+		if e.KnownProbe || e.ProbeName != "" {
+			known++
+		}
+		if len(times) >= 120 {
+			break
+		}
+	}
+	if len(times) < 20 || known < 12 || len(paths) < 15 {
+		return false
+	}
+	sort.Slice(times, func(i, j int) bool { return times[i].Before(times[j]) })
+	if times[len(times)-1].Sub(times[0]) < 3*time.Minute {
+		return false
+	}
+	gaps := make([]int64, 0, len(times)-1)
+	for i := 1; i < len(times); i++ {
+		gap := times[i].Sub(times[i-1]).Milliseconds()
+		if gap > 0 {
+			gaps = append(gaps, gap)
+		}
+	}
+	if len(gaps) < 15 {
+		return false
+	}
+	sort.Slice(gaps, func(i, j int) bool { return gaps[i] < gaps[j] })
+	median := gaps[len(gaps)/2]
+	if median < 3000 || median > 30000 {
+		return false
+	}
+	dev := make([]int64, len(gaps))
+	for i, gap := range gaps {
+		d := gap - median
+		if d < 0 {
+			d = -d
+		}
+		dev[i] = d
+	}
+	sort.Slice(dev, func(i, j int) bool { return dev[i] < dev[j] })
+	mad := dev[len(dev)/2]
+	tolerance := median / 4
+	if tolerance < 1000 {
+		tolerance = 1000
+	}
+	return mad <= tolerance
 }
 
 func botClaimLabel(ua string) string {

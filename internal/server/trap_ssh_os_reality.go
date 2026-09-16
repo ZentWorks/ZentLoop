@@ -578,6 +578,18 @@ func (w *virtualSSHWorld) packageInstalled(name string) bool {
 	return w.installedPackages[strings.ToLower(path.Base(name))]
 }
 
+func (w *virtualSSHWorld) setPackageInstalled(name string, installed bool) {
+	name = strings.ToLower(path.Base(name))
+	if name == "" || name == "." {
+		return
+	}
+	if installed {
+		w.installedPackages[name] = true
+	} else {
+		delete(w.installedPackages, name)
+	}
+}
+
 func virtualUserID(user string) int {
 	switch strings.TrimSpace(user) {
 	case "root":
