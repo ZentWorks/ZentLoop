@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -337,14 +338,11 @@ func (s *Store) applyActorHTTPEventLocked(e model.Event) {
 			}
 		}
 	}
-	if e.BotClaimed || botClaimLabel(e.UserAgent) != "" {
-		claim := strings.ToLower(strings.TrimSpace(e.BotProvider))
-		if claim == "" {
-			claim = botClaimLabel(e.UserAgent)
-		}
-		if claim == "" {
-			claim = strings.ToLower(strings.TrimSpace(e.BotName))
-		}
+	if uaClaim := botClaimLabel(e.UserAgent); uaClaim != "" {
+		// Bot identity is request-local. Aggregation deliberately trusts the
+		// concrete request User-Agent instead of mutable session metadata so
+		// parallel workers cannot manufacture bot-identity rotation.
+		claim := uaClaim
 		if claim != "" {
 			claims := s.httpActorBotClaims[e.IP]
 			if claims == nil {
@@ -435,6 +433,28 @@ func (s *Store) httpPHPUnitDockerExecChainLocked(e model.Event) bool {
 		}
 	}
 	return phpunit && containers && creates >= 3 && starts >= 3
+}
+
+var (
+	sshAuthorizedKeyRE = regexp.MustCompile(`(?i)\b((?:ssh-(?:rsa|ed25519|dss)|ecdsa-sha2-[a-z0-9-]+))\s+([A-Za-z0-9+/=]{40,})`)
+	sshChpasswdRE      = regexp.MustCompile(`(?i)\bchpasswd\b`)
+)
+
+func sshAuthorizedKeyFingerprint(command string) string {
+	m := sshAuthorizedKeyRE.FindStringSubmatch(command)
+	if len(m) != 3 {
+		return ""
+	}
+	normalized := strings.ToLower(strings.TrimSpace(m[1])) + " " + strings.TrimSpace(m[2])
+	sum := sha256.Sum256([]byte(normalized))
+	return "ssh:authorized-key-sha256:" + hex.EncodeToString(sum[:8])
+}
+
+func sshCredentialPersistenceFingerprint(command string) string {
+	if !sshChpasswdRE.MatchString(command) {
+		return ""
+	}
+	return "ssh:account-credential-persistence"
 }
 
 func fingerprintSSH(e model.SSHEvent) string {
@@ -704,6 +724,17 @@ func (s *Store) applyActorSSHEventLocked(e model.SSHEvent) {
 		a.Actor = model.ActorAutomated
 		if addFingerprint(a, kitFP) {
 			s.actorFingerprints[kitFP]++
+		}
+	}
+	if keyFP := sshAuthorizedKeyFingerprint(e.Command); keyFP != "" {
+		a.Actor = model.ActorAutomated
+		if addFingerprint(a, keyFP) {
+			s.actorFingerprints[keyFP]++
+		}
+	}
+	if credentialFP := sshCredentialPersistenceFingerprint(e.Command); credentialFP != "" {
+		if addFingerprint(a, credentialFP) {
+			s.actorFingerprints[credentialFP]++
 		}
 	}
 	if (e.Type == "exec" || e.Type == "command") && fp == "ssh:environment-fingerprint-probe" && strings.TrimSpace(e.Command) != "" {

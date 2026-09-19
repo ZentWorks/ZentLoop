@@ -200,16 +200,26 @@ func storyArtifactTechnologyOwner(p, label string) string {
 	switch {
 	case strings.HasPrefix(low, "/actuator/") || low == "/actuator" || base == "application.properties" || base == "application.yml" || base == "application.yaml" || base == "bootstrap.yml" || base == "bootstrap.properties" || base == "gradle.properties" || strings.Contains(low, "/web-inf/"):
 		return "java"
+	case base == "composer.json" || base == "composer.lock":
+		return "php"
+	case base == "gemfile" || base == "gemfile.lock":
+		return "rails"
 	case strings.HasPrefix(low, "/_ignition/") || strings.HasPrefix(low, "/storage/logs/laravel") || strings.HasPrefix(low, "/telescope"):
 		return "laravel"
 	case isWordPressStoryPath(low) || strings.HasPrefix(base, "wp-config.php"):
 		return "wordpress"
-	case base == "settings.py" || base == "config.py" || strings.HasSuffix(low, "/settings.py"):
+	case base == "settings.py" || base == "config.py" || strings.HasSuffix(low, "/settings.py") || base == ".pypirc":
 		return "python"
-	case base == "appsettings.json" || strings.HasPrefix(base, "appsettings.") || base == "local.settings.json" || base == "web.config":
+	case base == "appsettings.json" || strings.HasPrefix(base, "appsettings.") || base == "local.settings.json" || base == "web.config" || base == "trace.axd" || base == "elmah.axd":
 		return "asp"
 	case base == "database.yml" || strings.HasSuffix(low, "/config/database.yml"):
 		return "rails"
+	case strings.HasPrefix(low, "/_debugbar/"):
+		return "laravel"
+	case strings.HasPrefix(low, "/_profiler/") || strings.Contains(low, "/app_dev.php/_profiler"):
+		return "php"
+	case strings.HasPrefix(low, "/debug/pprof"):
+		return "generic-node"
 	case strings.Contains(label, "phpinfo") || strings.Contains(label, "php-backdoor"):
 		return "php"
 	}
@@ -564,15 +574,59 @@ func storyBudgetAllows(profile *webStoryProfile, p string, candidates []string, 
 
 func semanticArtifactPath(p string) string {
 	p = canonicalObservedWebPath(p)
+	// Scanner aliases and traversal-style spellings are identities of one
+	// virtual artifact. This is deception-only normalization; no host path is
+	// ever resolved or read from disk.
 	switch p {
 	case "/@fs/proc/self/cwd/.env", "/$(pwd)/.env", "/var/www/html/.env", "/srv/app/.env":
 		return "/.env"
-	case "/@fs/root/.aws/credentials":
+	case "/@fs/root/.aws/credentials", "/@fs/home/ubuntu/.aws/credentials", "/@fs/home/ec2-user/.aws/credentials", "/root/.aws/credentials", "/~/.aws/credentials":
 		return "/.aws/credentials"
-	case "/@fs/root/.aws/config":
+	case "/@fs/root/.aws/config", "/@fs/home/ubuntu/.aws/config", "/@fs/home/ec2-user/.aws/config", "/root/.aws/config", "/~/.aws/config":
+		return "/.aws/config"
+	}
+	if strings.HasSuffix(p, "/.aws/credentials") && (strings.HasPrefix(p, "/@fs/") || strings.HasPrefix(p, "/home/")) {
+		return "/.aws/credentials"
+	}
+	if strings.HasSuffix(p, "/.aws/config") && (strings.HasPrefix(p, "/@fs/") || strings.HasPrefix(p, "/home/")) {
 		return "/.aws/config"
 	}
 	return p
+}
+
+func storySensitiveAliasAllowed(profile *webStoryProfile, rawPath, semanticPath, label string) bool {
+	if profile == nil {
+		return true
+	}
+	rawPath = canonicalObservedWebPath(rawPath)
+	semanticPath = semanticArtifactPath(semanticPath)
+	label = strings.ToLower(label)
+
+	if strings.Contains(label, "aws-credentials") || semanticPath == "/.aws/credentials" || semanticPath == "/.aws/config" {
+		aliases := []string{
+			"/.aws/credentials", "/.aws/config", "/@fs/root/.aws/credentials", "/@fs/home/ubuntu/.aws/credentials",
+			"/@fs/home/ec2-user/.aws/credentials", "/~/.aws/credentials", "/aws/credentials", "/aws-credentials.json",
+			"/aws.json", "/config/aws.json", "/aws/s3/credentials", "/.s3cfg", "/.boto",
+		}
+		if stringInStoryBudget(rawPath, aliases) {
+			return storyBudgetAllows(profile, rawPath, aliases, 2, "aws-credential-alias")
+		}
+		return (storyHash(rawPath+"|aws-alias")^profile.Seed)%11 == 0
+	}
+
+	if strings.Contains(label, "ssh-private-key") {
+		userKeys := []string{"/.ssh/id_rsa", "/.ssh/id_ed25519", "/.ssh/id_ecdsa", "/.ssh/id_dsa", "/id_rsa", "/id_ed25519", "/id_ecdsa", "/id_dsa"}
+		serviceKeys := []string{"/server.key", "/host.key", "/ssl/server.key", "/ssl/localhost.key", "/localhost.key", "/key.pem", "/privatekey.key", "/private-key"}
+		switch {
+		case stringInStoryBudget(rawPath, userKeys):
+			return storyBudgetAllows(profile, rawPath, userKeys, 1, "ssh-user-private-key")
+		case stringInStoryBudget(rawPath, serviceKeys):
+			return storyBudgetAllows(profile, rawPath, serviceKeys, 1, "service-private-key")
+		default:
+			return (storyHash(rawPath+"|private-key")^profile.Seed)%13 == 0
+		}
+	}
+	return true
 }
 
 func storyEnvBody(resp Response, p string, profile *webStoryProfile) Response {
@@ -665,7 +719,8 @@ func (d *Deception) finalizeWebStoryResponse(r *http.Request, ss *model.Session,
 	defer d.story.mu.Unlock()
 	target := storyTarget(ss)
 	profile := d.story.profile(target, ss)
-	p := semanticArtifactPath(canonicalObservedWebPath(r.URL.Path))
+	rawPath := canonicalObservedWebPath(r.URL.Path)
+	p := semanticArtifactPath(rawPath)
 	candidate, weight := storyCandidate(p, resp.Label)
 	follow := explicitStoryFollow(r, ss)
 	provider := d.reality
@@ -765,6 +820,12 @@ func (d *Deception) finalizeWebStoryResponse(r *http.Request, ss *model.Session,
 				resp.Body = []byte("<html><body>Redirecting to sign in...</body></html>")
 			}
 		}
+	}
+	if resp.Status >= 200 && resp.Status < 300 && !storySensitiveAliasAllowed(profile, rawPath, p, resp.Label) {
+		miss := storyMiss(ss, "artifact")
+		miss.Label = "story-artifact-alias-miss"
+		miss.Delay = delay
+		return miss
 	}
 	if resp.Status >= 200 && resp.Status < 300 && !storySensitiveExposureAllowed(profile, p, resp.Label) {
 		miss := storyMiss(ss, "sensitive")

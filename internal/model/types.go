@@ -1,6 +1,10 @@
 package model
 
-import "time"
+import (
+	"encoding/json"
+	"strings"
+	"time"
+)
 
 type Classification string
 
@@ -81,6 +85,69 @@ type JourneyStep struct {
 	At    time.Time `json:"at"`
 	Path  string    `json:"path"`
 	Label string    `json:"label"`
+}
+
+func botIdentityMatchesUserAgent(ua, provider, name string) bool {
+	ua = strings.ToLower(strings.TrimSpace(ua))
+	if ua == "" {
+		return false
+	}
+	candidates := []string{strings.ToLower(strings.TrimSpace(name))}
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "openai":
+		candidates = append(candidates, "oai-searchbot", "gptbot", "chatgpt-user", "oai-adsbot")
+	case "perplexity":
+		candidates = append(candidates, "perplexitybot", "perplexity-user")
+	case "google":
+		candidates = append(candidates, "googlebot", "googleother", "googleinspectiontool", "adsbot-google")
+	case "apple":
+		candidates = append(candidates, "applebot")
+	case "duckduckgo":
+		candidates = append(candidates, "duckduckbot", "duckassistbot")
+	case "xai":
+		candidates = append(candidates, "grokbot")
+	case "commoncrawl":
+		candidates = append(candidates, "ccbot")
+	case "bytedance":
+		candidates = append(candidates, "bytespider")
+	case "baidu":
+		candidates = append(candidates, "baiduspider")
+	}
+	for _, candidate := range candidates {
+		candidate = strings.ToLower(strings.TrimSpace(candidate))
+		if candidate != "" && strings.Contains(ua, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func sanitizeBotIdentity(ua string, provider, name string, claimed, verified bool) (string, string, bool, bool) {
+	if !claimed && !verified && provider == "" && name == "" {
+		return "", "", false, false
+	}
+	if !botIdentityMatchesUserAgent(ua, provider, name) {
+		return "", "", false, false
+	}
+	return provider, name, claimed, verified
+}
+
+func (s Session) MarshalJSON() ([]byte, error) {
+	type sessionAlias Session
+	out := sessionAlias(s)
+	out.BotProvider, out.BotName, out.BotClaimed, out.BotVerified = sanitizeBotIdentity(
+		out.UserAgent, out.BotProvider, out.BotName, out.BotClaimed, out.BotVerified,
+	)
+	return json.Marshal(out)
+}
+
+func (e Event) MarshalJSON() ([]byte, error) {
+	type eventAlias Event
+	out := eventAlias(e)
+	out.BotProvider, out.BotName, out.BotClaimed, out.BotVerified = sanitizeBotIdentity(
+		out.UserAgent, out.BotProvider, out.BotName, out.BotClaimed, out.BotVerified,
+	)
+	return json.Marshal(out)
 }
 
 type SessionDetail struct {

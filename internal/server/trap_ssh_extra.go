@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"path"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -14,6 +15,52 @@ import (
 
 	"zentloop/internal/lures"
 )
+
+var (
+	virtualChpasswdRE      = regexp.MustCompile(`(?i)([a-z_][a-z0-9._-]{0,31}):([^'"|[:space:]]{1,128}).{0,80}\bchpasswd\b`)
+	virtualAuthorizedKeyRE = regexp.MustCompile(`(?i)((?:ssh-(?:rsa|ed25519|dss)|ecdsa-sha2-[a-z0-9-]+)\s+[A-Za-z0-9+/=]{40,}(?:\s+[^\r\n"'<>|&;]+)?)`)
+)
+
+func (w *virtualSSHWorld) applyCompoundCredentialState(raw string) (virtualSSHResult, bool) {
+	if m := virtualChpasswdRE.FindStringSubmatch(raw); len(m) == 3 {
+		user := safeVirtualName(m[1])
+		if !w.virtualUserExists(user) {
+			r := virtualBaseResult("chpasswd", "credentials", 6, 96, "credential-persistence", "account credential modification")
+			r.Output, r.Status = "chpasswd: (user "+user+") pam_chauthtok() failed, error:", 1
+			return r, true
+		}
+		if w.shared != nil {
+			w.shared.mu.Lock()
+			defer w.shared.mu.Unlock()
+		}
+		w.updateVirtualShadowPassword(user, m[2])
+		return virtualBaseResult("chpasswd", "credentials", 7, 100, "credential-persistence", "account credential persistence"), true
+	}
+
+	low := strings.ToLower(raw)
+	if strings.Contains(low, "authorized_keys") {
+		if m := virtualAuthorizedKeyRE.FindStringSubmatch(raw); len(m) == 2 {
+			home := w.homeDir()
+			sshDir := path.Join(home, ".ssh")
+			keyPath := path.Join(sshDir, "authorized_keys")
+			if w.shared != nil {
+				w.shared.mu.Lock()
+				defer w.shared.mu.Unlock()
+			}
+			w.dirs[sshDir] = true
+			existing := w.files[keyPath]
+			key := strings.TrimSpace(m[1]) + "\n"
+			if !strings.Contains(existing, strings.TrimSpace(m[1])) {
+				existing += key
+			}
+			_ = w.setVirtualFile(keyPath, existing)
+			w.fileModes[sshDir] = 0700
+			w.fileModes[keyPath] = 0600
+			return virtualBaseResult("ssh-key", "persistence", 7, 100, "credential-persistence", "SSH authorized key persistence"), true
+		}
+	}
+	return virtualSSHResult{}, false
+}
 
 func virtualBaseResult(cmd, family string, depth, risk int, persona, message string) virtualSSHResult {
 	return virtualSSHResult{CommandName: cmd, Family: family, Depth: depth, Risk: risk, Persona: persona, Message: message}
@@ -49,6 +96,9 @@ func (w *virtualSSHWorld) setVirtualUser(user string) {
 }
 
 func (w *virtualSSHWorld) executeExtraCommand(cmd string, args []string, raw, input string) (virtualSSHResult, bool) {
+	if r, ok := w.applyCompoundCredentialState(raw); ok {
+		return r, true
+	}
 	if r, ok := w.deepRealityCommand(cmd, args); ok {
 		return r, true
 	}
