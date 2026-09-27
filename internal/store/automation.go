@@ -277,6 +277,10 @@ func (s *Store) ApplyHTTPActorFingerprint(ip string, fps []string) {
 		if addFingerprint(a, fp) {
 			s.actorFingerprints[fp]++
 		}
+		fp = strings.TrimSpace(fp)
+		if fp != "" && !strings.HasPrefix(fp, "http:sequence:") {
+			bumpActorBehavior(a, "fingerprint:"+canonicalCampaignFingerprint(fp))
+		}
 	}
 }
 

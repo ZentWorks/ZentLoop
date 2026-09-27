@@ -14,52 +14,12 @@ type ipSweepPoint struct {
 	delta int
 }
 
-type ipTimeInterval struct {
-	start time.Time
-	end   time.Time
-}
-
-func intervalSecondsTotal(rows []ipTimeInterval) int64 {
-	var total int64
-	for _, row := range rows {
-		if row.start.IsZero() || row.end.IsZero() || !row.end.After(row.start) {
-			continue
-		}
-		total += int64(row.end.Sub(row.start) / time.Second)
-	}
-	return total
-}
-
-func intervalSecondsUnion(rows []ipTimeInterval) int64 {
-	clean := make([]ipTimeInterval, 0, len(rows))
-	for _, row := range rows {
-		if !row.start.IsZero() && !row.end.IsZero() && row.end.After(row.start) {
-			clean = append(clean, row)
-		}
-	}
-	if len(clean) == 0 {
+func positiveDurationUnits(ns int64, unit time.Duration) int64 {
+	if ns <= 0 || unit <= 0 {
 		return 0
 	}
-	sort.Slice(clean, func(i, j int) bool {
-		if clean[i].start.Equal(clean[j].start) {
-			return clean[i].end.Before(clean[j].end)
-		}
-		return clean[i].start.Before(clean[j].start)
-	})
-	start, end := clean[0].start, clean[0].end
-	var total time.Duration
-	for _, row := range clean[1:] {
-		if !row.start.After(end) {
-			if row.end.After(end) {
-				end = row.end
-			}
-			continue
-		}
-		total += end.Sub(start)
-		start, end = row.start, row.end
-	}
-	total += end.Sub(start)
-	return int64(total / time.Second)
+	u := int64(unit)
+	return (ns + u - 1) / u
 }
 
 func ipFirstNonEmpty(values ...string) string {
@@ -105,17 +65,6 @@ func setIntersectionSize(a, b map[string]struct{}) int {
 	return n
 }
 
-func stringSet(values []string) map[string]struct{} {
-	out := make(map[string]struct{}, len(values))
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value != "" {
-			out[value] = struct{}{}
-		}
-	}
-	return out
-}
-
 func sharedFingerprintPrefix(a, b map[string]struct{}, prefix string) int {
 	n := 0
 	for value := range a {
@@ -129,11 +78,91 @@ func sharedFingerprintPrefix(a, b map[string]struct{}, prefix string) int {
 	return n
 }
 
+func canonicalCampaignFingerprint(fp string) string {
+	fp = strings.TrimSpace(fp)
+	if fp == "http:interactive-browser" {
+		return "http:browser-like-client"
+	}
+	return fp
+}
+
+func campaignFingerprintWeight(fp string) int {
+	fp = canonicalCampaignFingerprint(fp)
+	switch {
+	case strings.HasPrefix(fp, "ssh:persistence-kit:"), strings.HasPrefix(fp, "ssh:authorized-key-sha256:"), strings.HasPrefix(fp, "ssh:payload-sha256:"):
+		return 18
+	case strings.HasPrefix(fp, "ssh:recon-playbook:"):
+		return 14
+	case fp == "http:phpunit-docker-exec-chain":
+		return 16
+	case fp == "http:periodic-auth-validator", fp == "http:graphql-introspection", fp == "http:wordpress-webshell-scanner":
+		return 8
+	case fp == "http:bot-identity-rotation", fp == "http:spoofed-crawler-rotation", fp == "http:ssrf-prober", fp == "http:dev-file-reader":
+		return 6
+	case fp == "http:cloud-credential-hunter", fp == "http:php-backdoor-hunter", fp == "http:user-agent-rotation", fp == "http:parallel-target-worker-pool":
+		return 5
+	case fp == "http:config-hunter", fp == "http:parallel-prober", fp == "http:low-and-slow-prober":
+		return 3
+	case fp == "http:burst-automation", fp == "http:high-rate-automation", fp == "http:browser-like-client":
+		return 1
+	case strings.HasPrefix(fp, "http:sequence:"):
+		return 0
+	default:
+		return 2
+	}
+}
+
+func canonicalFingerprintSet(values []string) map[string]struct{} {
+	out := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = canonicalCampaignFingerprint(value)
+		if value != "" {
+			out[value] = struct{}{}
+		}
+	}
+	return out
+}
+
+func sharedCanonicalBehavior(a, b map[string]struct{}) (count, weight int) {
+	if len(a) > len(b) {
+		a, b = b, a
+	}
+	for fp := range a {
+		if _, ok := b[fp]; !ok || strings.HasPrefix(fp, "http:sequence:") {
+			continue
+		}
+		w := campaignFingerprintWeight(fp)
+		if w <= 0 {
+			continue
+		}
+		count++
+		weight += w
+	}
+	return count, weight
+}
+
+func behaviorSummarySet(rows []model.ActorBehaviorStat) map[string]struct{} {
+	out := make(map[string]struct{}, len(rows))
+	for _, row := range rows {
+		if row.Count <= 0 {
+			continue
+		}
+		name := strings.TrimSpace(strings.ToLower(row.Name))
+		// Fingerprint rows are already scored independently; keeping them out of
+		// the summary-overlap signal prevents the same evidence being counted twice.
+		if name != "" && !strings.HasPrefix(name, "fingerprint:") {
+			out[name] = struct{}{}
+		}
+	}
+	return out
+}
+
 func (s *Store) campaignPeersLocked(ip string, target *model.ActorProfile, targetUsers, targetClients map[string]struct{}) []model.IPCampaignPeer {
 	if target == nil {
 		return nil
 	}
-	targetFP := stringSet(target.Fingerprints)
+	targetFP := canonicalFingerprintSet(target.Fingerprints)
+	targetBehavior := behaviorSummarySet(target.BehaviorSummary)
 	rows := make([]model.IPCampaignPeer, 0, 8)
 
 	// Build SSH evidence once for this intelligence request. The previous form
@@ -183,16 +212,35 @@ func (s *Store) campaignPeersLocked(ip string, target *model.ActorProfile, targe
 			score += 7
 			contextReasons = append(contextReasons, "nearby activity window")
 		}
-		peerFP := stringSet(peer.Fingerprints)
+		peerFP := canonicalFingerprintSet(peer.Fingerprints)
 		sharedFP := setIntersectionSize(targetFP, peerFP)
 		if sharedFP >= 2 {
-			bonus := sharedFP * 10
-			if bonus > 30 {
-				bonus = 30
+			bonus := sharedFP * 6
+			if bonus > 24 {
+				bonus = 24
 			}
 			score += bonus
 			strongSignals++
 			strongReasons = append(strongReasons, "multiple shared behavior fingerprints")
+		}
+		canonicalCount, canonicalWeight := sharedCanonicalBehavior(targetFP, peerFP)
+		if canonicalCount >= 5 && canonicalWeight >= 24 {
+			bonus := 18 + canonicalWeight/2
+			if bonus > 50 {
+				bonus = 50
+			}
+			score += bonus
+			strongSignals += 2
+			strongReasons = append(strongReasons, fmt.Sprintf("shared canonical behavior profile (%d signals)", canonicalCount))
+		}
+		peerBehavior := behaviorSummarySet(peer.BehaviorSummary)
+		if shared := setIntersectionSize(targetBehavior, peerBehavior); shared >= 6 {
+			denom := len(targetBehavior) + len(peerBehavior) - shared
+			if denom > 0 && shared*100/denom >= 60 {
+				score += 24
+				strongSignals++
+				strongReasons = append(strongReasons, "similar bounded behavior summary")
+			}
 		}
 		if sharedFingerprintPrefix(targetFP, peerFP, "http:sequence:") > 0 {
 			score += 45
@@ -215,6 +263,11 @@ func (s *Store) campaignPeersLocked(ip string, target *model.ActorProfile, targe
 			score += 45
 			strongSignals += 2
 			strongReasons = append(strongReasons, "identical SSH persistence kit")
+		}
+		if sharedFingerprintPrefix(targetFP, peerFP, "ssh:recon-playbook:") > 0 {
+			score += 38
+			strongSignals += 2
+			strongReasons = append(strongReasons, "matching SSH reconnaissance playbook")
 		}
 		if target.SSHMedianRevisitSeconds > 0 && peer.SSHMedianRevisitSeconds > 0 {
 			diff := target.SSHMedianRevisitSeconds - peer.SSHMedianRevisitSeconds
@@ -293,7 +346,7 @@ func (s *Store) IPIntelligence(ip, version string) (model.IPIntelligence, bool) 
 		SSHUniqueUsers: actor.SSHUniqueUsers, SSHPeakConcurrent: actor.SSHPeakConcurrent,
 		SSHPeakAttemptsPerMinute: actor.SSHPeakAttemptsPerMin, SSHMedianRevisitSeconds: actor.SSHMedianRevisitSeconds,
 		SSHRevisitJitterSeconds: actor.SSHRevisitJitterSeconds, PayloadSignals: actor.PayloadAttempts,
-		CanaryTouches: actor.CanaryTouches, EngagementSeconds: actor.EngagementSeconds, ObservationSpanSeconds: maxInt64(0, int64(actor.LastSeen.Sub(actor.FirstSeen)/time.Second)), Depth: actor.Depth,
+		CanaryTouches: actor.CanaryTouches, EngagementSeconds: actor.EngagementSeconds, Depth: actor.Depth,
 	}
 
 	pathCounts := map[string]int64{}
@@ -307,8 +360,6 @@ func (s *Store) IPIntelligence(ip, version string) (model.IPIntelligence, bool) 
 	targetClients := map[string]struct{}{}
 	httpMinute := map[int64]int{}
 	sshAuthMinute := map[int64]int{}
-	httpIntervals := make([]ipTimeInterval, 0)
-	sshIntervals := make([]ipTimeInterval, 0)
 	for _, ss := range s.sessions {
 		if ss.IP != ip {
 			continue
@@ -316,9 +367,6 @@ func (s *Store) IPIntelligence(ip, version string) (model.IPIntelligence, bool) 
 		cp := *cloneSession(ss)
 		cp.RecentTimes = nil
 		out.HTTPSessions = append(out.HTTPSessions, cp)
-		if !ss.FirstSeen.IsZero() && !ss.LastSeen.IsZero() && ss.LastSeen.After(ss.FirstSeen) {
-			httpIntervals = append(httpIntervals, ipTimeInterval{start: ss.FirstSeen, end: ss.LastSeen})
-		}
 		targetName := strings.TrimSpace(ss.Target)
 		if targetName == "" {
 			targetName = strings.TrimSpace(ss.RequestHost)
@@ -369,13 +417,6 @@ func (s *Store) IPIntelligence(ip, version string) (model.IPIntelligence, bool) 
 			continue
 		}
 		out.SSHSessions = append(out.SSHSessions, cloneSSHSession(ss))
-		endForMetrics := ss.DisconnectedAt
-		if endForMetrics.IsZero() {
-			endForMetrics = ss.LastSeen
-		}
-		if !ss.FirstSeen.IsZero() && !endForMetrics.IsZero() && endForMetrics.After(ss.FirstSeen) {
-			sshIntervals = append(sshIntervals, ipTimeInterval{start: ss.FirstSeen, end: endForMetrics})
-		}
 		if u := strings.TrimSpace(ss.Username); u != "" {
 			targetUsers[u] = struct{}{}
 			userCounts[u]++
@@ -445,10 +486,41 @@ func (s *Store) IPIntelligence(ip, version string) (model.IPIntelligence, bool) 
 
 	out.Summary.HTTPUniquePaths = len(pathCounts)
 	out.Summary.HTTPUniqueTargets = len(targetCounts)
-	out.Summary.HTTPRequestSecondsTotal = intervalSecondsTotal(httpIntervals)
-	out.Summary.HTTPActiveWallSeconds = intervalSecondsUnion(httpIntervals)
-	out.Summary.SSHSessionSecondsTotal = intervalSecondsTotal(sshIntervals)
-	out.Summary.SSHActiveWallSeconds = intervalSecondsUnion(sshIntervals)
+
+	observationNS := actor.LastSeen.Sub(actor.FirstSeen).Nanoseconds()
+	if actor.FirstSeen.IsZero() || actor.LastSeen.IsZero() || observationNS < 0 {
+		observationNS = 0
+	}
+	httpTotalNS := maxInt64(0, actor.HTTPActivityTotalNS)
+	httpWallNS := maxInt64(0, actor.HTTPActiveWallNS)
+	sshTotalNS := maxInt64(0, actor.SSHActivityTotalNS)
+	sshWallNS := maxInt64(0, actor.SSHActiveWallNS)
+	// Mathematical invariants are enforced before presentation rounding. This
+	// also protects old/replayed state from ever exporting impossible metrics.
+	if httpWallNS > httpTotalNS {
+		httpWallNS = httpTotalNS
+	}
+	if sshWallNS > sshTotalNS {
+		sshWallNS = sshTotalNS
+	}
+	if observationNS > 0 {
+		if httpWallNS > observationNS {
+			httpWallNS = observationNS
+		}
+		if sshWallNS > observationNS {
+			sshWallNS = observationNS
+		}
+	}
+	out.Summary.ObservationSpanMilliseconds = positiveDurationUnits(observationNS, time.Millisecond)
+	out.Summary.ObservationSpanSeconds = positiveDurationUnits(observationNS, time.Second)
+	out.Summary.HTTPRequestMillisecondsTotal = positiveDurationUnits(httpTotalNS, time.Millisecond)
+	out.Summary.HTTPRequestSecondsTotal = positiveDurationUnits(httpTotalNS, time.Second)
+	out.Summary.HTTPActiveWallMilliseconds = positiveDurationUnits(httpWallNS, time.Millisecond)
+	out.Summary.HTTPActiveWallSeconds = positiveDurationUnits(httpWallNS, time.Second)
+	out.Summary.SSHSessionMillisecondsTotal = positiveDurationUnits(sshTotalNS, time.Millisecond)
+	out.Summary.SSHSessionSecondsTotal = positiveDurationUnits(sshTotalNS, time.Second)
+	out.Summary.SSHActiveWallMilliseconds = positiveDurationUnits(sshWallNS, time.Millisecond)
+	out.Summary.SSHActiveWallSeconds = positiveDurationUnits(sshWallNS, time.Second)
 	// Legacy field retained for API compatibility, but it now means HTTP wall-clock
 	// activity only. Pure SSH actors therefore correctly report zero here.
 	out.Summary.ActiveRequestSeconds = out.Summary.HTTPActiveWallSeconds

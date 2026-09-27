@@ -384,32 +384,47 @@ type ActorActivity struct {
 	Fingerprint string    `json:"fingerprint,omitempty"`
 }
 
+type ActorBehaviorStat struct {
+	Name  string `json:"name"`
+	Count int64  `json:"count"`
+}
+
 type ActorProfile struct {
-	ID                      string         `json:"id"`
-	IP                      string         `json:"ip"`
-	Country                 string         `json:"country,omitempty"`
-	FirstSeen               time.Time      `json:"first_seen"`
-	LastSeen                time.Time      `json:"last_seen"`
-	HTTPRequests            int64          `json:"http_requests"`
-	SelfOriginHTTPRequests  int64          `json:"self_origin_http_requests,omitempty"`
-	SSHConnections          int64          `json:"ssh_connections"`
-	SSHCommands             int64          `json:"ssh_commands"`
-	Protocols               []string       `json:"protocols"`
-	RiskScore               int            `json:"risk_score"`
-	Depth                   int            `json:"depth"`
-	Classification          Classification `json:"classification"`
-	Actor                   ActorType      `json:"actor"`
-	EngagementSeconds       int64          `json:"engagement_seconds"`
-	CanaryTouches           int64          `json:"canary_touches"`
-	PayloadAttempts         int64          `json:"payload_attempts"`
-	Fingerprints            []string       `json:"fingerprints,omitempty"`
-	SSHMedianRevisitSeconds int64          `json:"ssh_median_revisit_seconds,omitempty"`
-	SSHRevisitJitterSeconds int64          `json:"ssh_revisit_jitter_seconds,omitempty"`
-	SSHAuthAccepted         int64          `json:"ssh_auth_accepted,omitempty"`
-	SSHAuthRejected         int64          `json:"ssh_auth_rejected,omitempty"`
-	SSHUniqueUsers          int            `json:"ssh_unique_users,omitempty"`
-	SSHPeakConcurrent       int            `json:"ssh_peak_concurrent,omitempty"`
-	SSHPeakAttemptsPerMin   int            `json:"ssh_peak_attempts_per_minute,omitempty"`
+	ID                      string              `json:"id"`
+	IP                      string              `json:"ip"`
+	Country                 string              `json:"country,omitempty"`
+	FirstSeen               time.Time           `json:"first_seen"`
+	LastSeen                time.Time           `json:"last_seen"`
+	HTTPRequests            int64               `json:"http_requests"`
+	SelfOriginHTTPRequests  int64               `json:"self_origin_http_requests,omitempty"`
+	SSHConnections          int64               `json:"ssh_connections"`
+	SSHCommands             int64               `json:"ssh_commands"`
+	Protocols               []string            `json:"protocols"`
+	RiskScore               int                 `json:"risk_score"`
+	Depth                   int                 `json:"depth"`
+	Classification          Classification      `json:"classification"`
+	Actor                   ActorType           `json:"actor"`
+	EngagementSeconds       int64               `json:"engagement_seconds"`
+	CanaryTouches           int64               `json:"canary_touches"`
+	PayloadAttempts         int64               `json:"payload_attempts"`
+	Fingerprints            []string            `json:"fingerprints,omitempty"`
+	BehaviorSummary         []ActorBehaviorStat `json:"behavior_summary,omitempty"`
+	SSHMedianRevisitSeconds int64               `json:"ssh_median_revisit_seconds,omitempty"`
+	SSHRevisitJitterSeconds int64               `json:"ssh_revisit_jitter_seconds,omitempty"`
+	SSHAuthAccepted         int64               `json:"ssh_auth_accepted,omitempty"`
+	SSHAuthRejected         int64               `json:"ssh_auth_rejected,omitempty"`
+	SSHUniqueUsers          int                 `json:"ssh_unique_users,omitempty"`
+	SSHPeakConcurrent       int                 `json:"ssh_peak_concurrent,omitempty"`
+	SSHPeakAttemptsPerMin   int                 `json:"ssh_peak_attempts_per_minute,omitempty"`
+
+	// Internal high-resolution activity accumulators. They are rebuilt from the
+	// durable event logs and intentionally never serialized as actor state.
+	HTTPActivityTotalNS int64     `json:"-"`
+	HTTPActiveWallNS    int64     `json:"-"`
+	SSHActivityTotalNS  int64     `json:"-"`
+	SSHActiveWallNS     int64     `json:"-"`
+	HTTPWallEnd         time.Time `json:"-"`
+	SSHWallEnd          time.Time `json:"-"`
 }
 
 type ActorDetail struct {
@@ -482,44 +497,49 @@ type IPCampaignPeer struct {
 }
 
 type IPIntelligenceSummary struct {
-	FirstSeen                   time.Time `json:"first_seen"`
-	LastSeen                    time.Time `json:"last_seen"`
-	RiskScore                   int       `json:"risk_score"`
-	Classification              string    `json:"classification"`
-	Actor                       string    `json:"actor"`
-	HTTPRequests                int64     `json:"http_requests"`
-	SelfOriginHTTPRequests      int64     `json:"self_origin_http_requests,omitempty"`
-	SelfOriginOnly              bool      `json:"self_origin_only,omitempty"`
-	HTTPUniquePaths             int       `json:"http_unique_paths"`
-	HTTPUniqueTargets           int       `json:"http_unique_targets"`
-	HTTPRetainedUniqueTargets   int       `json:"http_retained_unique_targets,omitempty"`
-	HTTPPeakRequestsPerMinute   int       `json:"http_peak_requests_per_minute"`
-	SSHConnections              int64     `json:"ssh_connections"`
-	SSHAuthAccepted             int64     `json:"ssh_auth_accepted"`
-	SSHAuthRejected             int64     `json:"ssh_auth_rejected"`
-	SSHUniqueUsers              int       `json:"ssh_unique_users"`
-	SSHRetainedUniqueUsers      int       `json:"ssh_retained_unique_users,omitempty"`
-	SSHUniqueClients            int       `json:"ssh_unique_clients"`
-	SSHCommands                 int64     `json:"ssh_commands"`
-	SSHPeakConcurrent           int       `json:"ssh_peak_concurrent"`
-	SSHPeakAttemptsPerMinute    int       `json:"ssh_peak_attempts_per_minute"`
-	SSHMedianRevisitSeconds     int64     `json:"ssh_median_revisit_seconds"`
-	SSHRevisitJitterSeconds     int64     `json:"ssh_revisit_jitter_seconds"`
-	PayloadSignals              int64     `json:"payload_signals"`
-	CanaryTouches               int64     `json:"canary_touches"`
-	EngagementSeconds           int64     `json:"engagement_seconds"`
-	ObservationSpanSeconds      int64     `json:"observation_span_seconds"`
-	ActiveRequestSeconds        int64     `json:"active_request_seconds"`
-	HTTPRequestSecondsTotal     int64     `json:"http_request_seconds_total"`
-	HTTPActiveWallSeconds       int64     `json:"http_active_wall_seconds"`
-	SSHSessionSecondsTotal      int64     `json:"ssh_session_seconds_total"`
-	SSHActiveWallSeconds        int64     `json:"ssh_active_wall_seconds"`
-	HTTPRetainedRequests        int64     `json:"http_retained_requests"`
-	SSHRetainedConnections      int64     `json:"ssh_retained_connections"`
-	HTTPDetailRetentionComplete bool      `json:"http_detail_retention_complete"`
-	SSHDetailRetentionComplete  bool      `json:"ssh_detail_retention_complete"`
-	Depth                       int       `json:"depth"`
-	Reasons                     []string  `json:"reasons"`
+	FirstSeen                    time.Time `json:"first_seen"`
+	LastSeen                     time.Time `json:"last_seen"`
+	RiskScore                    int       `json:"risk_score"`
+	Classification               string    `json:"classification"`
+	Actor                        string    `json:"actor"`
+	HTTPRequests                 int64     `json:"http_requests"`
+	SelfOriginHTTPRequests       int64     `json:"self_origin_http_requests,omitempty"`
+	SelfOriginOnly               bool      `json:"self_origin_only,omitempty"`
+	HTTPUniquePaths              int       `json:"http_unique_paths"`
+	HTTPUniqueTargets            int       `json:"http_unique_targets"`
+	HTTPRetainedUniqueTargets    int       `json:"http_retained_unique_targets,omitempty"`
+	HTTPPeakRequestsPerMinute    int       `json:"http_peak_requests_per_minute"`
+	SSHConnections               int64     `json:"ssh_connections"`
+	SSHAuthAccepted              int64     `json:"ssh_auth_accepted"`
+	SSHAuthRejected              int64     `json:"ssh_auth_rejected"`
+	SSHUniqueUsers               int       `json:"ssh_unique_users"`
+	SSHRetainedUniqueUsers       int       `json:"ssh_retained_unique_users,omitempty"`
+	SSHUniqueClients             int       `json:"ssh_unique_clients"`
+	SSHCommands                  int64     `json:"ssh_commands"`
+	SSHPeakConcurrent            int       `json:"ssh_peak_concurrent"`
+	SSHPeakAttemptsPerMinute     int       `json:"ssh_peak_attempts_per_minute"`
+	SSHMedianRevisitSeconds      int64     `json:"ssh_median_revisit_seconds"`
+	SSHRevisitJitterSeconds      int64     `json:"ssh_revisit_jitter_seconds"`
+	PayloadSignals               int64     `json:"payload_signals"`
+	CanaryTouches                int64     `json:"canary_touches"`
+	EngagementSeconds            int64     `json:"engagement_seconds"`
+	ObservationSpanSeconds       int64     `json:"observation_span_seconds"`
+	ObservationSpanMilliseconds  int64     `json:"observation_span_ms"`
+	ActiveRequestSeconds         int64     `json:"active_request_seconds"`
+	HTTPRequestSecondsTotal      int64     `json:"http_request_seconds_total"`
+	HTTPRequestMillisecondsTotal int64     `json:"http_request_ms_total"`
+	HTTPActiveWallSeconds        int64     `json:"http_active_wall_seconds"`
+	HTTPActiveWallMilliseconds   int64     `json:"http_active_wall_ms"`
+	SSHSessionSecondsTotal       int64     `json:"ssh_session_seconds_total"`
+	SSHSessionMillisecondsTotal  int64     `json:"ssh_session_ms_total"`
+	SSHActiveWallSeconds         int64     `json:"ssh_active_wall_seconds"`
+	SSHActiveWallMilliseconds    int64     `json:"ssh_active_wall_ms"`
+	HTTPRetainedRequests         int64     `json:"http_retained_requests"`
+	SSHRetainedConnections       int64     `json:"ssh_retained_connections"`
+	HTTPDetailRetentionComplete  bool      `json:"http_detail_retention_complete"`
+	SSHDetailRetentionComplete   bool      `json:"ssh_detail_retention_complete"`
+	Depth                        int       `json:"depth"`
+	Reasons                      []string  `json:"reasons"`
 }
 
 type IPObservation struct {

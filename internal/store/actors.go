@@ -73,6 +73,39 @@ func addFingerprint(a *model.ActorProfile, fingerprint string) bool {
 	return true
 }
 
+func bumpActorBehavior(a *model.ActorProfile, name string) {
+	if a == nil {
+		return
+	}
+	name = strings.TrimSpace(strings.ToLower(name))
+	if name == "" {
+		return
+	}
+	for i := range a.BehaviorSummary {
+		if a.BehaviorSummary[i].Name == name {
+			a.BehaviorSummary[i].Count++
+			sort.SliceStable(a.BehaviorSummary, func(i, j int) bool {
+				if a.BehaviorSummary[i].Count == a.BehaviorSummary[j].Count {
+					return a.BehaviorSummary[i].Name < a.BehaviorSummary[j].Name
+				}
+				return a.BehaviorSummary[i].Count > a.BehaviorSummary[j].Count
+			})
+			return
+		}
+	}
+	a.BehaviorSummary = append(a.BehaviorSummary, model.ActorBehaviorStat{Name: name, Count: 1})
+	sort.SliceStable(a.BehaviorSummary, func(i, j int) bool {
+		if a.BehaviorSummary[i].Count == a.BehaviorSummary[j].Count {
+			return a.BehaviorSummary[i].Name < a.BehaviorSummary[j].Name
+		}
+		return a.BehaviorSummary[i].Count > a.BehaviorSummary[j].Count
+	})
+	const maxActorBehaviorSummary = 24
+	if len(a.BehaviorSummary) > maxActorBehaviorSummary {
+		a.BehaviorSummary = a.BehaviorSummary[:maxActorBehaviorSummary]
+	}
+}
+
 func actorFingerprintCountPrefix(a *model.ActorProfile, prefix string) int {
 	if a == nil {
 		return 0
@@ -117,18 +150,49 @@ func strongerActor(a, b model.ActorType) model.ActorType {
 	return model.ActorUnknown
 }
 
-func (s *Store) addActorEngagementLocked(a *model.ActorProfile, protocol, sessionID string, at time.Time) {
-	if sessionID == "" || at.IsZero() {
+func addActorWallSegment(a *model.ActorProfile, protocol string, start, end time.Time) {
+	if a == nil || start.IsZero() || end.IsZero() || !end.After(start) {
 		return
 	}
-	key := a.ID + "|" + protocol + "|" + sessionID
+	d := end.Sub(start)
+	switch protocol {
+	case "http":
+		a.HTTPActivityTotalNS += d.Nanoseconds()
+		if a.HTTPWallEnd.IsZero() || !start.Before(a.HTTPWallEnd) {
+			a.HTTPActiveWallNS += d.Nanoseconds()
+		} else if end.After(a.HTTPWallEnd) {
+			a.HTTPActiveWallNS += end.Sub(a.HTTPWallEnd).Nanoseconds()
+		}
+		if end.After(a.HTTPWallEnd) {
+			a.HTTPWallEnd = end
+		}
+	case "ssh":
+		a.SSHActivityTotalNS += d.Nanoseconds()
+		if a.SSHWallEnd.IsZero() || !start.Before(a.SSHWallEnd) {
+			a.SSHActiveWallNS += d.Nanoseconds()
+		} else if end.After(a.SSHWallEnd) {
+			a.SSHActiveWallNS += end.Sub(a.SSHWallEnd).Nanoseconds()
+		}
+		if end.After(a.SSHWallEnd) {
+			a.SSHWallEnd = end
+		}
+	}
+}
+
+func (s *Store) addActorEngagementLocked(a *model.ActorProfile, protocol, activityID string, at time.Time) {
+	if activityID == "" || at.IsZero() {
+		return
+	}
+	key := a.ID + "|" + protocol + "|" + activityID
 	if last, ok := s.actorSessionLast[key]; ok && at.After(last) {
 		d := at.Sub(last)
-		// Do not count long idle gaps as attacker engagement. Five minutes is
-		// intentionally generous for somebody reading output or editing a command.
+		// Long gaps are idle time, not attacker engagement. HTTP callers pass a
+		// visit-scoped activity id, so returning to a durable session days later
+		// cannot turn the idle period into active wall time.
 		if d <= 5*time.Minute {
 			s.actorEngagementMS[a.ID] += d.Milliseconds()
 			a.EngagementSeconds = s.actorEngagementMS[a.ID] / 1000
+			addActorWallSegment(a, protocol, last, at)
 		}
 	}
 	if last, ok := s.actorSessionLast[key]; !ok || at.After(last) {
@@ -273,7 +337,7 @@ func fingerprintHTTP(e model.Event) string {
 		return "http:high-rate-automation"
 	}
 	if e.Actor == model.ActorHuman {
-		return "http:interactive-browser"
+		return "http:browser-like-client"
 	}
 	return ""
 }
@@ -297,10 +361,23 @@ func (s *Store) applyActorHTTPEventLocked(e model.Event) {
 	}
 	a.Classification = strongerClassification(a.Classification, e.Classification)
 	a.Actor = strongerActor(a.Actor, e.Actor)
-	s.addActorEngagementLocked(a, "http", e.SessionID, e.At)
+	activityID := e.SessionID
+	if !e.SessionVisitStarted.IsZero() {
+		activityID += "|visit:" + e.SessionVisitStarted.UTC().Format(time.RFC3339Nano)
+	}
+	s.addActorEngagementLocked(a, "http", activityID, e.At)
+	if category := strings.TrimSpace(e.Category); category != "" && category != "request" {
+		bumpActorBehavior(a, "http-category:"+category)
+	}
+	if product := strings.TrimSpace(e.ProbeProduct); product != "" {
+		bumpActorBehavior(a, "http-product:"+product)
+	}
 	fp := fingerprintHTTP(e)
 	if addFingerprint(a, fp) {
 		s.actorFingerprints[fp]++
+	}
+	if fp != "" && !strings.HasPrefix(fp, "http:sequence:") {
+		bumpActorBehavior(a, "fingerprint:"+fp)
 	}
 	s.updateHTTPSequenceFingerprintLocked(a, e)
 	if s.httpPHPUnitDockerExecChainLocked(e) {
@@ -569,6 +646,71 @@ func (s *Store) sshPersistenceKitFingerprintLocked(e model.SSHEvent) string {
 	return "ssh:persistence-kit:" + payload + ":" + unit
 }
 
+func sshReconTopic(commandName, family string) string {
+	name := strings.ToLower(strings.TrimSpace(commandName))
+	switch name {
+	case "hostname", "uname", "uptime", "lscpu", "nproc", "free", "vmstat":
+		return "system"
+	case "ps", "top", "w", "who":
+		return "process"
+	case "netstat", "ss", "ip", "ifconfig", "route", "arp", "ping":
+		return "network"
+	case "whoami", "id", "last", "lastlog", "groups":
+		return "identity"
+	case "pwd", "ls", "find", "mount", "df", "du":
+		return "filesystem"
+	case "systemctl", "service", "rc-service":
+		return "services"
+	case "env", "printenv", "set":
+		return "environment"
+	case "history":
+		return "history"
+	case "ssh":
+		return "ssh-client"
+	case "dpkg", "rpm", "apt", "apt-get", "yum", "dnf", "apk":
+		return "packages"
+	case "dd", "fio":
+		return "storage"
+	}
+	family = strings.ToLower(strings.TrimSpace(family))
+	if family == "recon" || family == "filesystem" || family == "network" {
+		return family
+	}
+	return ""
+}
+
+func (s *Store) sshReconPlaybookFingerprintLocked(e model.SSHEvent) string {
+	if e.SessionID == "" || (e.Type != "disconnect" && e.Type != "limit" && e.Type != "handshake_error") {
+		return ""
+	}
+	topics := map[string]struct{}{}
+	commands := map[string]struct{}{}
+	commandCount := 0
+	for i := len(s.sshEvents) - 1; i >= 0; i-- {
+		row := s.sshEvents[i]
+		if row.SessionID != e.SessionID || (row.Type != "exec" && row.Type != "command") {
+			continue
+		}
+		commandCount++
+		if name := strings.ToLower(strings.TrimSpace(row.CommandName)); name != "" {
+			commands[name] = struct{}{}
+		}
+		if topic := sshReconTopic(row.CommandName, row.CommandFamily); topic != "" {
+			topics[topic] = struct{}{}
+		}
+	}
+	if commandCount < 15 || len(commands) < 8 || len(topics) < 6 {
+		return ""
+	}
+	parts := make([]string, 0, len(topics))
+	for topic := range topics {
+		parts = append(parts, topic)
+	}
+	sort.Strings(parts)
+	sum := sha256.Sum256([]byte(strings.Join(parts, "|")))
+	return "ssh:recon-playbook:" + hex.EncodeToString(sum[:8])
+}
+
 func (s *Store) applyActorSSHEventLocked(e model.SSHEvent) {
 	if strings.TrimSpace(e.IP) == "" {
 		return
@@ -678,6 +820,9 @@ func (s *Store) applyActorSSHEventLocked(e model.SSHEvent) {
 
 	if e.Type == "command" || e.Type == "exec" {
 		a.SSHCommands++
+		if family := strings.TrimSpace(e.CommandFamily); family != "" && family != "other" {
+			bumpActorBehavior(a, "ssh-family:"+family)
+		}
 		if e.Type == "exec" {
 			if ss := s.sshSessions[e.SessionID]; ss != nil && !ss.ShellOpened && ss.ExecRequests >= 3 && ss.LastSeen.Sub(ss.FirstSeen) >= 0 && ss.LastSeen.Sub(ss.FirstSeen) <= 2*time.Second {
 				a.Actor = model.ActorAutomated
@@ -693,6 +838,13 @@ func (s *Store) applyActorSSHEventLocked(e model.SSHEvent) {
 			}
 		}
 	}
+	if playbookFP := s.sshReconPlaybookFingerprintLocked(e); playbookFP != "" {
+		a.Actor = model.ActorAutomated
+		if addFingerprint(a, playbookFP) {
+			s.actorFingerprints[playbookFP]++
+		}
+		bumpActorBehavior(a, "fingerprint:"+playbookFP)
+	}
 	if e.RiskScore > a.RiskScore {
 		a.RiskScore = e.RiskScore
 	}
@@ -705,6 +857,9 @@ func (s *Store) applyActorSSHEventLocked(e model.SSHEvent) {
 	fp := fingerprintSSH(e)
 	if addFingerprint(a, fp) {
 		s.actorFingerprints[fp]++
+	}
+	if fp != "" {
+		bumpActorBehavior(a, "fingerprint:"+fp)
 	}
 	for _, sideFP := range e.SecondaryFingerprints {
 		sideFP = strings.TrimSpace(sideFP)
@@ -783,6 +938,7 @@ func cloneActor(a *model.ActorProfile) model.ActorProfile {
 	out := *a
 	out.Protocols = append([]string(nil), a.Protocols...)
 	out.Fingerprints = append([]string(nil), a.Fingerprints...)
+	out.BehaviorSummary = append([]model.ActorBehaviorStat(nil), a.BehaviorSummary...)
 	return out
 }
 
